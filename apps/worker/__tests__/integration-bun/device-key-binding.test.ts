@@ -203,6 +203,45 @@ describe('device registration is bound to one user (#2496)', () => {
     expect(claim.userPubkey).toBe(REG_USER_A)
   })
 
+  it('refuses claiming another user\'s identity key before that user has any device', async () => {
+    await reset()
+    // REG_USER_A exists as a user row (invite / admin creation) and has
+    // registered nothing yet. B naming A's identity key as its own is refused.
+    let refused: unknown = null
+    try {
+      await identity.registerDevice(REG_USER_B, { platform: 'desktop', ed25519Pubkey: REG_USER_A })
+    } catch (e) {
+      refused = e
+    }
+    expect((refused as ServiceError | null)?.status).toBe(409)
+    // A's own genesis is then not locked out.
+    await identity.registerDevice(REG_USER_A, { platform: 'desktop', ed25519Pubkey: REG_USER_A, x25519Pubkey: REG_X25519 })
+  })
+
+  it('binds a registration to the user\'s sigchain once it has one', async () => {
+    const c = fixture.positives.find(p => p.name === 'device_kem')!
+    await appendAll(c)
+    const user = c.chains[0][0].signerPubkey
+    const genesis = JSON.parse(c.chains[0][0].payloadJson) as { devicePubkey: string; deviceEncryptionPubkey: string }
+    // The chain's own device and key: accepted.
+    await identity.registerDevice(user, { platform: 'desktop', ed25519Pubkey: genesis.devicePubkey, x25519Pubkey: genesis.deviceEncryptionPubkey })
+    // A device the chain does not authorise, or another X25519 key for its device: refused.
+    for (const reg of [
+      { ed25519Pubkey: 'd4'.repeat(32), x25519Pubkey: 'e5'.repeat(32) },
+      { ed25519Pubkey: genesis.devicePubkey, x25519Pubkey: 'e5'.repeat(32) },
+      { x25519Pubkey: 'e5'.repeat(32) },
+    ]) {
+      let refused: unknown = null
+      try {
+        await identity.registerDevice(user, { platform: 'desktop', ...reg })
+      } catch (e) {
+        refused = e
+      }
+      expect((refused as ServiceError | null)?.status).toBe(409)
+    }
+    await db.delete(deviceKeyClaims).where(inArray(deviceKeyClaims.key, ['d4'.repeat(32), 'e5'.repeat(32)]))
+  })
+
   it('refuses registering a key another user\'s sigchain names', async () => {
     const c = fixture.positives.find(p => p.name === 'device_kem')!
     await appendAll(c)

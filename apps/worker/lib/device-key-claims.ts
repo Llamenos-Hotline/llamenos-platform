@@ -8,9 +8,9 @@
  * holds refuses the write. No native FFI here, so identity.ts can import it
  * statically.
  */
-import { inArray } from 'drizzle-orm'
+import { asc, eq, inArray } from 'drizzle-orm'
 import type { Database } from '../db'
-import { deviceKeyClaims } from '../db/schema'
+import { deviceKeyClaims, sigchainLinks, users } from '../db/schema'
 
 type Tx = Parameters<Database['transaction']>[0] extends (tx: infer T, ...rest: never[]) => unknown ? T : never
 
@@ -58,6 +58,11 @@ export function deviceKeysNamedBy(link: { signerPubkey?: string; payload: unknow
  * claimed by ANOTHER user throws `DeviceKeyReusedError` and the caller's
  * transaction rolls back. Re-claiming a key the same user already holds is a
  * no-op. Claims are permanent (see `deviceKeyClaims`).
+ *
+ * Another user's identity key (`users.pubkey`) is refused too, even before that
+ * user's first device has claimed it: a user row exists from invite or admin
+ * creation on, so a member who has seen it could otherwise claim it first and
+ * lock its owner out of their own genesis.
  */
 export async function claimDeviceKeys(
   tx: Tx,
@@ -66,6 +71,11 @@ export async function claimDeviceKeys(
 ): Promise<void> {
   if (keys.length === 0) return
   const unique = [...new Map(keys.map(k => [k.key.toLowerCase(), { key: k.key.toLowerCase(), kind: k.kind }])).values()]
+  const identities = await tx
+    .select({ pubkey: users.pubkey })
+    .from(users)
+    .where(inArray(users.pubkey, unique.map(k => k.key)))
+  if (identities.some(u => u.pubkey !== userPubkey)) throw new DeviceKeyReusedError()
   await tx
     .insert(deviceKeyClaims)
     .values(unique.map(k => ({ key: k.key, userPubkey, kind: k.kind })))
@@ -75,4 +85,47 @@ export async function claimDeviceKeys(
     .from(deviceKeyClaims)
     .where(inArray(deviceKeyClaims.key, unique.map(k => k.key)))
   if (held.some(h => h.userPubkey !== userPubkey)) throw new DeviceKeyReusedError()
+}
+
+/**
+ * The devices a user's sigchain currently authorises, as Ed25519 key → the
+ * X25519 key the chain names for it (genesis / device_add
+ * `deviceEncryptionPubkey`), or `null` for a user with no chain yet. Mirrors the
+ * device-set walk of packages/crypto `verify_sigchain` (device_remove removes by
+ * key). Used to bind a device registration to the chain (#2496): once a user
+ * has a chain, a registration may name only a device the chain authorises, with
+ * the X25519 key the chain gives it.
+ */
+export async function chainDeviceEncryptionKeys(
+  tx: Tx,
+  userPubkey: string,
+): Promise<Map<string, string | undefined> | null> {
+  const rows = await tx
+    .select({ linkType: sigchainLinks.linkType, payload: sigchainLinks.payload })
+    .from(sigchainLinks)
+    .where(eq(sigchainLinks.userPubkey, userPubkey))
+    .orderBy(asc(sigchainLinks.seqNo))
+  if (rows.length === 0) return null
+  const devices = new Map<string, string | undefined>()
+  for (const row of rows) {
+    const p = (row.payload ?? {}) as { devicePubkey?: unknown; deviceEncryptionPubkey?: unknown }
+    const device = typeof p.devicePubkey === 'string' ? p.devicePubkey.toLowerCase() : undefined
+    const x25519 = typeof p.deviceEncryptionPubkey === 'string' ? p.deviceEncryptionPubkey.toLowerCase() : undefined
+    if (!device) continue
+    if (row.linkType === 'genesis' || row.linkType === 'device_add' || row.linkType === 'recovery-device-add') {
+      devices.set(device, x25519)
+    } else if (row.linkType === 'device_remove') {
+      devices.delete(device)
+    }
+  }
+  return devices
+}
+
+/** A registration names a device or key its user's sigchain does not authorise. */
+export class DeviceNotInChainError extends Error {
+  readonly status = 409 as const
+  constructor(detail: string) {
+    super(`device registration does not match the user's sigchain (#2496): ${detail}`)
+    this.name = 'DeviceNotInChainError'
+  }
 }

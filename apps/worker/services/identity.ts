@@ -40,7 +40,7 @@ import type {
   DeviceRecord,
 } from '../types'
 import { ServiceError } from './service-error'
-import { claimDeviceKeys, DeviceKeyReusedError } from '../lib/device-key-claims'
+import { chainDeviceEncryptionKeys, claimDeviceKeys, DeviceKeyReusedError, DeviceNotInChainError } from '../lib/device-key-claims'
 import type { SampleIdentity } from '../lib/sample-identities'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
@@ -1598,6 +1598,26 @@ export class IdentityService {
       // holds (in their sigchain or their own device row) is refused, never
       // overwritten or silently accepted — otherwise a member could register
       // another user's X25519 key and match envelopes sealed to its owner.
+      // Once the user has a sigchain, a registration may name only a device the
+      // chain authorises, with the X25519 key the chain gives that device: the
+      // chain's genesis / device_add is the signed statement of which keys are
+      // this user's. A user with no chain yet is bound by uniqueness alone.
+      const chainDevices = await chainDeviceEncryptionKeys(tx, pubkey)
+      if (chainDevices && data.ed25519Pubkey) {
+        const device = data.ed25519Pubkey.toLowerCase()
+        if (!chainDevices.has(device)) {
+          throw new ServiceError(409, new DeviceNotInChainError('the device is not authorised by it').message)
+        }
+        const chainX25519 = chainDevices.get(device)
+        if (data.x25519Pubkey && chainX25519 && data.x25519Pubkey.toLowerCase() !== chainX25519) {
+          throw new ServiceError(409, new DeviceNotInChainError('the X25519 key is not the one it names for this device').message)
+        }
+      } else if (chainDevices && data.x25519Pubkey) {
+        const x25519 = data.x25519Pubkey.toLowerCase()
+        if (![...chainDevices.values()].includes(x25519)) {
+          throw new ServiceError(409, new DeviceNotInChainError('the X25519 key is not one it names').message)
+        }
+      }
       try {
         await claimDeviceKeys(tx, pubkey, [
           ...(data.ed25519Pubkey ? [{ key: data.ed25519Pubkey, kind: 'signing' as const }] : []),
