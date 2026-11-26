@@ -596,14 +596,56 @@ export function reviewNotRequestedAdvice(input: {
       ? `review not requested — this PR's author cannot be asked to review it, so request a review from ` +
         `\`${ask}\` to run the non-author review`
       : `review not requested — request a review from \`${ask}\` to run the non-author review`,
-    // Only claimed when the list was actually READ and that login was absent.
-    // `undefined` means the read failed, which cannot rule out the no-op
-    // above — so say nothing rather than promise an event will fire.
-    ...(alreadyRequested === undefined
-      ? [`(could not read this PR's requested reviewers, so whether that request will emit an event is unknown — ` +
-         'check `issues/<n>/events` after making it)']
-      : [`\`${ask}\` is not currently requested on this PR, so that request will emit an event and start the ` +
-         `review (branch \`${branch}\`).`]),
+    requestEmitsEventNote(ask, branch, alreadyRequested),
+  ]
+}
+
+/**
+ * Only claimed when the requested-reviewer list was actually READ and the
+ * login was absent from it. `undefined` means the read failed, which cannot
+ * rule out the no-op `reviewNotRequestedAdvice` describes — so say nothing
+ * rather than promise an event will fire.
+ */
+function requestEmitsEventNote(ask: string, branch: string, alreadyRequested: readonly string[] | undefined): string {
+  return alreadyRequested === undefined
+    ? "(could not read this PR's requested reviewers, so whether that request will emit an event is unknown — " +
+      'check `issues/<n>/events` after making it)'
+    : `\`${ask}\` is not currently requested on this PR, so that request will emit an event and start the ` +
+      `review (branch \`${branch}\`).`
+}
+
+/**
+ * The workflow a review request STARTS (#3058). Not `fleet-review.yml`: that
+ * file's `pull_request` runs are the head's carriers, and `review_requested`
+ * reaches it only through `workflow_call` from this one (#2815), so a reader
+ * who looks for the run in `fleet-review.yml`'s own list finds none and
+ * concludes the request was inert — #3058 did exactly that, on #3051, whose
+ * request at 10:11:05Z started a run of this workflow at 10:11:07Z.
+ */
+export const REVIEW_RERUN_WORKFLOW = 'fleet-review-re-evaluate.yml'
+
+/**
+ * What to DO when this head has no verdict of its own (`unreviewed`,
+ * `tree-changed`, `carried`): the remedy is a review request, and the advice
+ * must be one that can run. Where the login is ALREADY requested, a second
+ * request emits no event (#1471), so it is the same dead end
+ * `reviewNotRequestedAdvice` already refuses to send a reader into — and
+ * these three outcomes used to print "request a review" unconditionally.
+ */
+export function reviewRerequestAdvice(input: {
+  pr: string
+  branch: string
+  ask: string
+  isAuthorStandIn: boolean
+  alreadyRequested: readonly string[] | undefined
+}): string[] {
+  const { branch, ask, alreadyRequested } = input
+  if (alreadyRequested?.some((l) => loginOf(l) === loginOf(ask)) === true) return reviewNotRequestedAdvice(input)
+  return [
+    `request a review from \`${ask}\` and this check goes green on the verdict it earns`,
+    requestEmitsEventNote(ask, branch, alreadyRequested),
+    `that review runs as \`Fleet Review Re-evaluate\` (${REVIEW_RERUN_WORKFLOW}), not as a fleet-review.yml ` +
+      'run — look for it there — and it re-runs this check on the verdict it earns',
   ]
 }
 
