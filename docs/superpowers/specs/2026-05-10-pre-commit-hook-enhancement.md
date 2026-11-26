@@ -51,7 +51,8 @@ All commands run in parallel (lefthook `parallel: true`).
 | `migration-drift` | `apps/worker/db/schema/*.ts` staged | `bun scripts/check-migration-drift.ts` |
 | `block-env-files` | every commit | blocks `.env` files in `deploy/docker/` |
 | `ipc-allowlist-check` | `apps/desktop/src/**/*.rs` or `src/client/lib/platform.ts` staged | `bun run check:ipc-allowlist` — ensures IPC allowlist is up to date |
-| `i18n-validate` | `packages/i18n/locales/*.json` or `src/client/**/*.tsx` staged | `bun run i18n:validate:all` — ensures all locale files are complete and all string refs are valid |
+| `i18n-validate-{ios,android,desktop}` | locales, `deferred.json` or `packages/i18n/tools/*.ts` staged, or that platform's sources (`apps/ios/Sources/**/*.swift`, `apps/android/app/src/main/java/**/*.kt`, `src/client/**/*.{ts,tsx}`) | `bun run i18n:validate:<platform>` — ensures all locale files are complete and that platform's string refs are valid. *Amended by #1901: the original single `i18n-validate` fired only on locales and `.tsx`, so no Swift or Kotlin edit ever ran it.* |
+| `i18n-codegen-freshness` | locales or `packages/i18n/tools/*.ts` staged | `bun run packages/i18n/tools/i18n-codegen.ts --check` — byte-compares every i18n output on disk with what codegen produces, writing nothing. *Amended by #1901: the outputs are gitignored, so the original `i18n:codegen && git diff --exit-code` could never fail.* |
 | `test-specs-validate` | `packages/test-specs/features/**/*.feature` or `tests/steps/**/*.ts` staged | `bun run test-specs:validate` — ensures BDD step definitions match feature coverage requirements |
 | `lint` | `src/**/*.ts` or `apps/worker/**/*.ts` staged | `bun run lint` — runs ESLint on staged source files |
 

@@ -10,6 +10,12 @@
  *   bun run i18n:validate             # Check coverage only (no file output)
  *   bun run i18n:validate --verbose   # Show missing/unrecorded/stale keys
  *   bun run i18n:codegen --sync-deferral  # Rewrite deferred.json from the catalogue
+ *   bun run i18n:codegen --check      # Write nothing; fail if any output on disk
+ *                                     # differs from what codegen would write
+ *
+ * --check exists because every output is gitignored: `git diff` cannot tell a
+ * fresh Localizable.strings from a stale or hand-edited one (#1901). It compares
+ * bytes, and also reports owned files no locale produces (orphans).
  *
  * Coverage is a three-state gate (see tools/deferral.ts): every key x locale
  * pair is missing (error), deferred (verbatim English AND listed in
@@ -19,7 +25,7 @@
  */
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { join, resolve, dirname } from 'path'
+import { join, resolve, dirname, relative } from 'path'
 import { fileURLToPath } from 'url'
 import {
   DEFERRED_RECORD_PATH,
@@ -32,6 +38,7 @@ import {
   type DeferralRecord,
 } from './deferral'
 import { readSameAsEn } from './untranslated'
+import { compareOutputs, type OutputRoot } from './output-check'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -43,6 +50,19 @@ const GENERATED_DIR = resolve(__dirname, '../generated')
 const IOS_RESOURCES_DIR = resolve(__dirname, '../../../apps/ios/Resources/Localizable')
 const ANDROID_RESOURCES_DIR = resolve(__dirname, '../../../apps/android/app/src/main/res')
 const ANDROID_I18N_DIR = resolve(__dirname, '../../../apps/android/app/src/main/java/org/llamenos/i18n')
+const REPO_ROOT = resolve(__dirname, '../../..')
+
+// Every file codegen owns, for --check's orphan detection. Android res/values*/
+// also holds tracked, hand-written resources -- only strings.xml is ours.
+const LPROJ_STRINGS = /^[^/]+\.lproj\/Localizable\.strings$/
+const VALUES_STRINGS = /^values[^/]*\/strings\.xml$/
+const OUTPUT_ROOTS: OutputRoot[] = [
+  { dir: IOS_RESOURCES_DIR, owns: rel => LPROJ_STRINGS.test(rel) },
+  { dir: ANDROID_RESOURCES_DIR, owns: rel => VALUES_STRINGS.test(rel) },
+  { dir: ANDROID_I18N_DIR, owns: rel => rel === 'I18n.kt' },
+  { dir: join(GENERATED_DIR, 'ios'), owns: rel => LPROJ_STRINGS.test(rel) },
+  { dir: join(GENERATED_DIR, 'android'), owns: rel => VALUES_STRINGS.test(rel) },
+]
 
 // Locale code mapping for platform-specific formats
 const IOS_LOCALE_MAP: Record<string, string> = {
@@ -281,6 +301,14 @@ function main() {
   const validate = process.argv.includes('--validate')
   const verbose = process.argv.includes('--verbose')
   const syncDeferral = process.argv.includes('--sync-deferral')
+  const check = process.argv.includes('--check')
+  if (check && (validate || syncDeferral)) {
+    console.error('--check cannot be combined with --validate or --sync-deferral')
+    process.exit(1)
+  }
+  // Absolute path -> content of everything codegen produces. Written (or, under
+  // --check, compared) only once every locale has passed its guards.
+  const outputs = new Map<string, string>()
 
   // Read English as reference
   const enData = JSON.parse(readFileSync(join(LOCALES_DIR, 'en.json'), 'utf-8'))
@@ -420,29 +448,16 @@ function main() {
 
     if (validate || placeholderOffenders.length > 0) continue
 
-    // Generate iOS
     const iosLocale = IOS_LOCALE_MAP[locale] || locale
     const iosContent = generateIOS(keys, enKeys)
-    // Write to generated dir (for CI validation)
-    const iosGenDir = join(GENERATED_DIR, 'ios', `${iosLocale}.lproj`)
-    mkdirSync(iosGenDir, { recursive: true })
-    writeFileSync(join(iosGenDir, 'Localizable.strings'), iosContent)
-    // Write directly to iOS app resources (no manual copy needed)
-    const iosAppDir = join(IOS_RESOURCES_DIR, `${iosLocale}.lproj`)
-    mkdirSync(iosAppDir, { recursive: true })
-    writeFileSync(join(iosAppDir, 'Localizable.strings'), iosContent)
+    // packages/i18n/generated (CI validation) and the iOS app resources directly
+    outputs.set(join(GENERATED_DIR, 'ios', `${iosLocale}.lproj`, 'Localizable.strings'), iosContent)
+    outputs.set(join(IOS_RESOURCES_DIR, `${iosLocale}.lproj`, 'Localizable.strings'), iosContent)
 
-    // Generate Android
-    const androidLocale = ANDROID_LOCALE_MAP[locale] || locale
+    const androidValues = locale === 'en' ? 'values' : `values-${ANDROID_LOCALE_MAP[locale] || locale}`
     const androidContent = generateAndroid(keys, enKeys)
-    // Write to generated dir (for CI validation)
-    const androidGenDir = join(GENERATED_DIR, 'android', locale === 'en' ? 'values' : `values-${androidLocale}`)
-    mkdirSync(androidGenDir, { recursive: true })
-    writeFileSync(join(androidGenDir, 'strings.xml'), androidContent)
-    // Write directly to Android app resources (no manual copy needed)
-    const androidAppDir = join(ANDROID_RESOURCES_DIR, locale === 'en' ? 'values' : `values-${androidLocale}`)
-    mkdirSync(androidAppDir, { recursive: true })
-    writeFileSync(join(androidAppDir, 'strings.xml'), androidContent)
+    outputs.set(join(GENERATED_DIR, 'android', androidValues, 'strings.xml'), androidContent)
+    outputs.set(join(ANDROID_RESOURCES_DIR, androidValues, 'strings.xml'), androidContent)
   }
 
   if (rawSpecifierErrors > 0) {
@@ -486,12 +501,30 @@ function main() {
     process.exit(1)
   }
 
-  if (!validate) {
-    // Generate Kotlin constants object
-    mkdirSync(ANDROID_I18N_DIR, { recursive: true })
-    writeFileSync(join(ANDROID_I18N_DIR, 'I18n.kt'), generateKotlinConstants(enKeys))
-    console.log(`Generated strings for ${localeFiles.length} locales (iOS + Android) + Kotlin I18n constants`)
+  if (validate) return
+
+  outputs.set(join(ANDROID_I18N_DIR, 'I18n.kt'), generateKotlinConstants(enKeys))
+
+  if (check) {
+    const problems = compareOutputs(outputs, OUTPUT_ROOTS)
+    if (problems.length > 0) {
+      console.error(`\ni18n codegen output is not what packages/i18n/locales produces (${problems.length} file(s)):`)
+      for (const p of problems) console.error(`  ${p.kind.padEnd(7)} ${relative(REPO_ROOT, p.path)}`)
+      console.error(
+        'missing/stale: run `bun run i18n:codegen`. orphan: no locale produces it -- delete it. ' +
+        'These files are gitignored, so git cannot show this drift; the apps load them as they are.'
+      )
+      process.exit(1)
+    }
+    console.log(`i18n codegen output is fresh: ${outputs.size} files match packages/i18n/locales`)
+    return
   }
+
+  for (const [path, content] of outputs) {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, content)
+  }
+  console.log(`Generated strings for ${localeFiles.length} locales (iOS + Android) + Kotlin I18n constants`)
 }
 
 main()
