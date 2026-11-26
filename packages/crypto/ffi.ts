@@ -197,7 +197,7 @@ const lib = dlopen(LIB_PATH, {
   },
 })
 
-class CryptoError extends Error {
+export class CryptoError extends Error {
   /**
    * The crate's closed rejection code (`CryptoError::code` in Rust —
    * `invalid_format`, `decryption_failed`, `invalid_id`, …) when the failure
@@ -211,8 +211,6 @@ class CryptoError extends Error {
     this.reason = m ? m[1] : null
   }
 }
-
-export { CryptoError }
 
 function getLastError(): string {
   const buf = new Uint8Array(512)

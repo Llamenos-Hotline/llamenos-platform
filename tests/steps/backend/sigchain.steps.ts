@@ -85,6 +85,9 @@ function payloadFor(linkType: SigchainLinkType, device: TestDevice): Record<stri
     }
     case 'key_rotate':
       return { type: 'key_rotate' }
+    case 'device_kem':
+      // The device publishes its own X-Wing key; its signing key is the user's identity key.
+      return deviceKemPayload(device, device.signingPubkeyHex)
   }
 }
 

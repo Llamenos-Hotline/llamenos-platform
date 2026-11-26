@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { getTableName, type Table } from 'drizzle-orm'
 import { IdentityService } from '../../services/identity'
 import { ServiceError } from '../../services/service-error'
 
@@ -980,6 +981,28 @@ describe('IdentityService — Reset', () => {
     return { db: { transaction }, transaction, deletes: () => txDelete }
   }
 
+  /**
+   * Every identity table the destructive reset wipes, children first. Includes
+   * `device_key_claims` (#2496): claims are permanent in real data (no FK to users),
+   * so only this wipe — after which no user that named them exists — may clear them.
+   */
+  const RESET_TABLES = [
+    'devices',
+    'webauthn_credentials',
+    'webauthn_challenges',
+    'sessions',
+    'auth_nonces',
+    'provision_rooms',
+    'invite_codes',
+    'users',
+    'device_key_claims',
+  ]
+
+  function clearedTables(txDelete: ReturnType<typeof vi.fn> | undefined): string[] {
+    expect(txDelete, 'reset must delete inside its transaction').toBeDefined()
+    return (txDelete?.mock.calls ?? []).map(([table]) => getTableName(table as Table))
+  }
+
   it('refuses on ENVIRONMENT=production even with a valid secret', async () => {
     const { db, transaction } = mockDb()
     const svc = new IdentityService(db as never)
@@ -1010,9 +1033,7 @@ describe('IdentityService — Reset', () => {
     await svc.reset(STAGING, SECRET)
 
     expect(transaction).toHaveBeenCalled()
-    // 8 tables must be cleared: devices, webauthnCredentials, webauthnChallenges,
-    // sessions, authNonces, provisionRooms, inviteCodes, users
-    expect(deletes()!).toHaveBeenCalledTimes(8)
+    expect(clearedTables(deletes())).toEqual(RESET_TABLES)
   })
 
   it('refuses on ENVIRONMENT=staging when DEV_ROUTES_ENABLED is not set', async () => {
@@ -1030,6 +1051,6 @@ describe('IdentityService — Reset', () => {
     await svc.reset({ ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }, SECRET)
 
     expect(transaction).toHaveBeenCalled()
-    expect(deletes()!).toHaveBeenCalledTimes(8)
+    expect(clearedTables(deletes())).toEqual(RESET_TABLES)
   })
 })
