@@ -20,9 +20,7 @@ import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { fetchServerEventKeys, openRelayEvent } from '../../helpers/relay-crypto'
 import type { RelayEventKey } from '@protocol/schemas/auth'
 import {
-  ADMIN_SEED,
   addHubMemberViaApi,
-  apiGet,
   createHubViaApi,
   createVolunteerViaApi,
   uniqueName,

@@ -153,10 +153,16 @@ export const fileKeyEnvelopeSchema = z.object({
   ct: hpkeKeyWrapCtSchema,
 })
 
+/**
+ * An AES-256-GCM content ciphertext as the crate packs it: lowercase hex of
+ * `nonce(12) ‖ ct ‖ tag(16)`, so at least 28 bytes (spec D2).
+ */
+const sealedMetadataHexSchema = hexBytesMin(28).max(4096)
+
 /** Encrypted metadata entry — used for file uploads */
 export const encryptedMetadataEntrySchema = z.object({
   pubkey: z.string().min(1),
-  encryptedContent: hexBytesMin(28).max(4096),
+  encryptedContent: sealedMetadataHexSchema,
   enc: hpkeEncSchema,
   ct: hpkeKeyWrapCtSchema,
 })

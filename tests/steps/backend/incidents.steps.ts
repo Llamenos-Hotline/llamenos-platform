@@ -17,10 +17,8 @@ import { Given, When, Then, After, getState, setState } from './fixtures'
 import { RelayCapture, type CapturedEvent } from '../../helpers/relay-capture'
 import { fetchServerEventKeys, openRelayEvent } from '../../helpers/relay-crypto'
 import type { RelayEventKey } from '@protocol/schemas/auth'
-import { hexToBytes } from '@shared/encoding'
 import { KIND_HUB_INCIDENT } from '@shared/event-kinds'
 import {
-  ADMIN_SEED,
   addHubMemberViaApi,
   apiGet,
   createHubViaApi,

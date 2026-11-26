@@ -149,11 +149,7 @@ function requireHubKey(hubId: unknown): Uint8Array {
   return key
 }
 
-// ── Server event key(s) mock state (epoch-scoped relay event decryption) ──
-// Matches Rust `hub-event` (hub-key-encrypted) vs `hub-event-epoch` (relay
-// epoch-keyed) label split — see packages/crypto/src/labels.rs.
-const LABEL_HUB_EVENT = 'llamenos:hub-event'
-const LABEL_HUB_EVENT_EPOCH = 'llamenos:hub-event-epoch:v1'
+// ── Relay event keys held in mock CryptoState (per hub and epoch, #2999) ──
 const LABEL_BACKUP = 'llamenos:backup'
 const LABEL_BACKUP_HKDF_INFO = 'llamenos:backup:v1'
 const LABEL_DEVICE_ENCRYPTION_SEED = 'llamenos:device-encryption-seed:v1'
