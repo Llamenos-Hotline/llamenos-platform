@@ -234,7 +234,7 @@ class M1CapabilityProbe {
         stateFile.writeText("$hub\n$marker\n")
         writeNoteFromNotesTab(marker)
         val listed = pollFor(20_000) { !has("note-text-input") && hasText(marker) }
-        probe("notes", "own call: saved and listed=$listed tags=${visibleTags()}")
+        probe("notes", "own call: saved and listed=$listed tags=${visibleTags()}" + if (listed) "" else " texts=${screenTexts()}")
         check(listed) { fail("notes", "the note written on the volunteer's call never appeared in the Notes list") }
 
         // Read back within the session: leave, return.
