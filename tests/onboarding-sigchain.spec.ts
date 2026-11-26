@@ -114,13 +114,16 @@ test.describe('onboarding provisions sigchain genesis + PUK (#1050)', () => {
 
     // ── PUK envelope: present for the onboarding device, scoped to the user ──
     // Addressed by the sigchain device id (the id the envelope's HPKE AAD binds).
-    const puk = await apiGet<{ generation?: number; deviceId?: string; envelope?: { v: number } }>(
+    const puk = await apiGet<{ generation?: number; deviceId?: string; envelope?: Record<string, unknown> }>(
       request, `/puk/envelopes/${encodeURIComponent(identity.deviceId)}`, volunteerSeed,
     )
     expect(puk.status, `no PUK envelope for the onboarding device: ${JSON.stringify(puk.data)}`).toBe(200)
     expect(puk.data?.generation).toBe(1)
     expect(puk.data?.deviceId).toBe(identity.deviceId)
-    expect(puk.data?.envelope?.v).toBe(3)
+    // The v2 envelope (D1, D2): `{enc, ct}` only, lowercase hex, a 48-byte key-wrap ct.
+    expect(Object.keys(puk.data?.envelope ?? {}).sort()).toEqual(['ct', 'enc'])
+    expect(puk.data?.envelope?.enc).toMatch(/^[0-9a-f]{64}$/)
+    expect(puk.data?.envelope?.ct).toMatch(/^[0-9a-f]{96}$/)
 
     // The envelope is keyed to the volunteer's identity — the admin's own
     // envelope lookup for the same deviceId must find nothing.
