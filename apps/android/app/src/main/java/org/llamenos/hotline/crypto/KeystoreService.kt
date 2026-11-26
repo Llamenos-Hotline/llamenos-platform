@@ -123,7 +123,7 @@ class KeystoreService @Inject constructor(
     fun clearCache() {
         val protectedKeys = setOf(
             KEY_ENCRYPTED_KEYS, KEY_HUB_URL, KEY_DEVICE_ID,
-            KEY_SIGNING_PUBKEY, KEY_ENCRYPTION_PUBKEY, KEY_BIOMETRIC_ENABLED,
+            KEY_SIGNING_PUBKEY, KEY_ENCRYPTION_PUBKEY, KEY_BIOMETRIC_ENABLED, KEY_SIGCHAIN_HEAD,
         )
         val editor = prefs.edit()
         prefs.all.keys.filter { it !in protectedKeys }.forEach { key ->
@@ -393,6 +393,12 @@ class KeystoreService @Inject constructor(
         const val KEY_SIGNING_PUBKEY = "signing-pubkey"
         const val KEY_ENCRYPTION_PUBKEY = "encryption-pubkey"
         const val KEY_BIOMETRIC_ENABLED = "biometric-enabled"
+        /**
+         * `user:seq:hash` of the last user-sigchain head this device verified.
+         * A chain the server later serves that does not extend it (empty, shorter,
+         * or another hash at that seq) is refused, never re-initialised (#2496).
+         */
+        const val KEY_SIGCHAIN_HEAD = "sigchain-head"
 
         // PIN lockout keys
         const val KEY_FAILED_ATTEMPTS = "failed_attempts"

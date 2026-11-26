@@ -857,6 +857,31 @@ export async function unlockStoredKeys(pin: string): Promise<DeviceKeyState | nu
   return unlockWithPin(data, pin)
 }
 
+const SIGCHAIN_HEAD_KEY = 'llamenos-verified-sigchain-head'
+
+/** The user-sigchain head this device last verified. */
+export interface VerifiedSigchainHead {
+  userPubkey: string
+  seq: number
+  hash: string
+}
+
+/**
+ * The last user-sigchain head this device verified (#2496), kept in the secure
+ * store with the device keys. A chain the server later serves that does not
+ * extend it — empty, shorter, or another hash at that seq — is a rollback or a
+ * fork, and is refused rather than re-initialised.
+ */
+export async function getVerifiedSigchainHead(): Promise<VerifiedSigchainHead | null> {
+  const store = await getSecureStore()
+  return (await store.get<VerifiedSigchainHead>(SIGCHAIN_HEAD_KEY)) ?? null
+}
+
+export async function setVerifiedSigchainHead(head: VerifiedSigchainHead): Promise<void> {
+  const store = await getSecureStore()
+  await store.set(SIGCHAIN_HEAD_KEY, head)
+}
+
 /** Check if encrypted device keys exist in store. */
 export async function hasStoredKey(): Promise<boolean> {
   const store = await getSecureStore()
@@ -868,6 +893,7 @@ export async function hasStoredKey(): Promise<boolean> {
 export async function clearStoredKey(): Promise<void> {
   const store = await getSecureStore()
   await store.delete(STORE_KEY)
+  await store.delete(SIGCHAIN_HEAD_KEY)
   await lockCrypto()
 }
 

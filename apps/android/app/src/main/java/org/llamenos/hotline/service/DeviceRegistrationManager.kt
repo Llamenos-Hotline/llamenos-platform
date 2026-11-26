@@ -17,6 +17,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.hotline.crypto.KeyValueStore
+import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.di.ApplicationScope
 import org.llamenos.hotline.model.RegisterDeviceRequest
 import org.llamenos.protocol.AppendSigchainLinkBody
@@ -54,6 +56,7 @@ import javax.inject.Singleton
 class DeviceRegistrationManager @Inject constructor(
     private val apiService: ApiService,
     private val cryptoService: CryptoService,
+    private val keyValueStore: KeyValueStore,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
 
@@ -124,11 +127,23 @@ class DeviceRegistrationManager @Inject constructor(
         if (publishedKemKey == kem) return@withLock Result.success(Unit)
         try {
             var links = apiService.getSigchain(user).links
-            if (links.isEmpty()) links = initialiseIdentity(user)
+            val known = verifiedHead(user)
+            if (known != null) {
+                // Never take a server's word that the chain shrank: a chain that
+                // does not extend the head this device verified is a rollback or a
+                // fork, and re-initialising it would sign a second genesis.
+                val at = links.getOrNull(known.first - 1)
+                if (at == null || at.hash != known.second) {
+                    throw IllegalStateException("The server's sigchain does not extend the head this device verified")
+                }
+            } else if (links.isEmpty()) {
+                links = initialiseIdentity(user)
+            }
             var verified = cryptoService.verifySigchain(cryptoLinksJson(links))
-            if (!verified.activeDevicePubkeys.contains(user)) {
+            if (verified.userPubkey != user || !verified.activeDevicePubkeys.contains(user)) {
                 throw IllegalStateException("Verified sigchain does not authorise this device")
             }
+            recordHead(user, verified)
             if (verified.deviceKemKeys.none { it.devicePubkey == user && it.kemPubkey == kem }) {
                 val payload = Json.parseToJsonElement(cryptoService.deviceKemPayload(user)).jsonObject
                 appendSigned(user, SigchainLinkType.DeviceKem, payload, links.last())
@@ -137,6 +152,7 @@ class DeviceRegistrationManager @Inject constructor(
                 if (verified.deviceKemKeys.none { it.devicePubkey == user && it.kemPubkey == kem }) {
                     throw IllegalStateException("Verified sigchain does not name this device's X-Wing key")
                 }
+                recordHead(user, verified)
             }
             publishedKemKey = kem
             Result.success(Unit)
@@ -144,6 +160,17 @@ class DeviceRegistrationManager @Inject constructor(
             Log.e(TAG, "Publishing the device X-Wing key (device_kem) failed: ${e.message}", e)
             Result.failure(e)
         }
+    }
+
+    /** The (seq, hash) of [user]'s chain head this device last verified, if any. */
+    private fun verifiedHead(user: String): Pair<Int, String>? {
+        val parts = keyValueStore.retrieve(KeystoreService.KEY_SIGCHAIN_HEAD)?.split(':') ?: return null
+        if (parts.size != 3 || parts[0] != user) return null
+        return parts[1].toIntOrNull()?.let { it to parts[2] }
+    }
+
+    private fun recordHead(user: String, verified: org.llamenos.core.SigchainVerifiedState) {
+        keyValueStore.store(KeystoreService.KEY_SIGCHAIN_HEAD, "$user:${verified.headSeq}:${verified.headHash}")
     }
 
     /** Genesis + PUK generation 1 + puk_epoch, in the order PROTOCOL.md §2.11 fixes. */

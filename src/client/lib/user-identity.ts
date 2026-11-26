@@ -40,6 +40,8 @@ import { appendSigchainLink, distributePukEnvelopes, getSigchain } from './api/i
 import {
   deviceKemPayloadFromState,
   getDevicePubkeys,
+  getVerifiedSigchainHead,
+  setVerifiedSigchainHead,
   pukCreateFromState,
   sigchainCreateLinkFromState,
   sigchainVerify,
@@ -160,10 +162,12 @@ export async function ensureDeviceKem(userPubkey: string): Promise<SigchainVerif
   if (!device.kemPubkeyHex) throw new Error('This device has no X-Wing key; unlock it again to create one')
 
   let { links } = await getSigchain(userPubkey)
+  await assertExtendsVerifiedHead(userPubkey, links)
   let verified = await sigchainVerify(links.map(toCryptoSigchainLink))
-  if (!verified.activeDevicePubkeys.includes(device.signingPubkeyHex)) {
+  if (verified.userPubkey !== userPubkey || !verified.activeDevicePubkeys.includes(device.signingPubkeyHex)) {
     throw new Error('Verified sigchain does not authorise this device')
   }
+  await recordVerifiedHead(verified)
   const published = verified.deviceKemKeys.find(k => k.devicePubkey === device.signingPubkeyHex)
   if (published?.kemPubkey === device.kemPubkeyHex) return verified
 
@@ -175,7 +179,26 @@ export async function ensureDeviceKem(userPubkey: string): Promise<SigchainVerif
   if (verified.deviceKemKeys.find(k => k.devicePubkey === device.signingPubkeyHex)?.kemPubkey !== device.kemPubkeyHex) {
     throw new Error('Verified sigchain does not name this device\'s X-Wing key')
   }
+  await recordVerifiedHead(verified)
   return verified
+}
+
+/**
+ * Refuse a served chain that does not extend the head this device last
+ * verified for `userPubkey`: an empty, shorter or forked chain is a rollback,
+ * and re-initialising it would sign a second genesis (#2496).
+ */
+async function assertExtendsVerifiedHead(userPubkey: string, links: SigchainLinkRecord[]): Promise<void> {
+  const known = await getVerifiedSigchainHead()
+  if (!known || known.userPubkey !== userPubkey) return
+  const at = links[known.seq - 1]
+  if (!at || at.hash !== known.hash) {
+    throw new Error('The server\'s sigchain does not extend the head this device verified')
+  }
+}
+
+async function recordVerifiedHead(verified: SigchainVerifiedState): Promise<void> {
+  await setVerifiedSigchainHead({ userPubkey: verified.userPubkey, seq: verified.headSeq, hash: verified.headHash })
 }
 
 /**
@@ -187,6 +210,7 @@ export async function ensureDeviceKem(userPubkey: string): Promise<SigchainVerif
  */
 export async function ensureDeviceIdentity(userPubkey: string): Promise<SigchainVerifiedState> {
   const { links } = await getSigchain(userPubkey)
+  await assertExtendsVerifiedHead(userPubkey, links)
   if (links.length === 0) return initializeUserIdentity(userPubkey)
   return ensureDeviceKem(userPubkey)
 }
