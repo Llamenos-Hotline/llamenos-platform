@@ -971,8 +971,8 @@ describe('hubs routes', () => {
     it('returns envelope for current user', async () => {
       const getHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({
         envelopes: [
-          { pubkey: 'a'.repeat(64), enc: 'd'.repeat(64), ct: 'wrapped' },
-          { pubkey: 'c'.repeat(64), enc: 'e'.repeat(64), ct: 'wrapped2' },
+          { pubkey: 'a'.repeat(64), enc: 'd'.repeat(64), ct: '4fc2e8125d1748b1ceef478a5ebdb45cf24be173bfa25a327b1fce4014aaf21fec9d2d74bc53e1e29077639485d206c3' },
+          { pubkey: 'c'.repeat(64), enc: 'e'.repeat(64), ct: 'bde8c382d115a2c76889e6b6dbdcd2fa3f0b5580010184591dff1be3ed805ae6f6e35d6aa8d94837ec71aa8ca4dbca42' },
         ],
       })
       const { app } = createTestApp({
@@ -989,7 +989,7 @@ describe('hubs routes', () => {
 
     it('returns 404 when no envelope for user', async () => {
       const getHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({
-        envelopes: [{ pubkey: 'c'.repeat(64), enc: 'd'.repeat(64), ct: 'wrapped' }],
+        envelopes: [{ pubkey: 'c'.repeat(64), enc: 'd'.repeat(64), ct: '4fc2e8125d1748b1ceef478a5ebdb45cf24be173bfa25a327b1fce4014aaf21fec9d2d74bc53e1e29077639485d206c3' }],
       })
       const { app } = createTestApp({
         permissions: ['hubs:read'],
@@ -1047,7 +1047,7 @@ describe('hubs routes', () => {
 
   describe('PUT /hubs/:hubId/key', () => {
     const body = {
-      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
+      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'c9115fd8baec05aeda78dca68af31eb6b6cea922aaf9306780e3b5ffc2df75dfb64ff23c4f283359f3450c4d0d03b6dc' }],
       expectedGeneration: 0,
     }
     const put = (app: Hono<AppEnv>) => app.request('/hubs/hub-1/key', {
@@ -1150,7 +1150,7 @@ describe('hubs routes', () => {
   describe('POST /hubs/:hubId/key/rotate', () => {
     const body = {
       expectedGeneration: 3,
-      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
+      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'c9115fd8baec05aeda78dca68af31eb6b6cea922aaf9306780e3b5ffc2df75dfb64ff23c4f283359f3450c4d0d03b6dc' }],
       rotation: { proof: 'ab'.repeat(40), check: 'cd'.repeat(40) },
       resealed: {
         tags: [],

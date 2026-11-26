@@ -117,40 +117,36 @@ class EnvelopeAadInteropTest {
         val volunteer = fixture.readers.first { it.name == "volunteer" }
         unlockedAs(volunteer)
         val wire = message.readerEnvelopes.first { it.pubkey == volunteer.x25519PubkeyHex }
-        val envelope = org.llamenos.core.HpkeEnvelope(
-            v = HpkeEnvelope.CURRENT_VERSION.toUByte(),
-            labelId = org.llamenos.core.mobileLabelToId(CryptoLabels.LABEL_MESSAGE),
-            enc = org.llamenos.core.mobileHexToBase64url(wire.enc),
-            ct = org.llamenos.core.mobileHexToBase64url(wire.ct),
-        )
+        val envelope = org.llamenos.core.HpkeEnvelope(enc = wire.enc, ct = wire.ct)
 
-        expectFailure("key wrap opened under the canonical key-wrap AAD") {
-            org.llamenos.core.mobileHpkeOpenKey(
+        // The note shape carries the canonical AAD pair; the message shape none.
+        expectFailure("key wrap opened as the canonical (note) shape") {
+            org.llamenos.core.mobileShapeOpen(
+                shape = org.llamenos.core.Shape.NOTE_KEY,
+                aadFields = emptyList(),
                 envelope = envelope,
-                expectedLabel = CryptoLabels.LABEL_MESSAGE,
-                aadHex = org.llamenos.core.mobileKeyWrapAadHex(CryptoLabels.LABEL_MESSAGE),
             )
         }
-        val keyHex = org.llamenos.core.mobileHpkeOpenKey(
+        val keyHex = org.llamenos.core.mobileShapeOpen(
+            shape = org.llamenos.core.Shape.MESSAGE_KEY,
+            aadFields = emptyList(),
             envelope = envelope,
-            expectedLabel = CryptoLabels.LABEL_MESSAGE,
-            aadHex = fixture.aadHex.keyWrap,
         )
-        expectFailure("content opened under the canonical content AAD") {
-            org.llamenos.core.mobileSymmetricDecrypt(
+        expectFailure("content opened as the canonical (note) shape") {
+            org.llamenos.core.mobileContentOpen(
+                shape = org.llamenos.core.Shape.NOTE_KEY,
                 ciphertextHex = message.encryptedContent,
                 keyHex = keyHex,
-                aadHex = org.llamenos.core.mobileContentAadHex(CryptoLabels.LABEL_MESSAGE),
             )
         }
         assertEquals(
             message.plaintext,
             String(
                 hexToBytes(
-                    org.llamenos.core.mobileSymmetricDecrypt(
+                    org.llamenos.core.mobileContentOpen(
+                        shape = org.llamenos.core.Shape.MESSAGE_KEY,
                         ciphertextHex = message.encryptedContent,
                         keyHex = keyHex,
-                        aadHex = fixture.aadHex.content,
                     ),
                 ),
                 Charsets.UTF_8,
@@ -160,9 +156,9 @@ class EnvelopeAadInteropTest {
 
     /**
      * The writer half: a message this app seals opens under the desktop's
-     * reader recipe (`platform.ts` `decryptMessage`: `hpkeOpenKeyFromState`
-     * with `''`, then `aesGcmDecrypt` with `''`) — reproduced here with the
-     * primitives and the fixture's empty AADs, not with [CryptoService.decryptMessage],
+     * reader recipe (`platform.ts` `decryptMessage`: the message-key shape for the
+     * key wrap, then its content layer) — reproduced here with the shape
+     * primitives, not with [CryptoService.decryptMessage],
      * so the reader is not the writer's own counterpart.
      */
     @Test
@@ -179,20 +175,15 @@ class EnvelopeAadInteropTest {
 
         unlockedAs(admin)
         val wire = sealed.envelopes.first { it.pubkey == admin.x25519PubkeyHex }
-        val keyHex = org.llamenos.core.mobileHpkeOpenKey(
-            envelope = org.llamenos.core.HpkeEnvelope(
-                v = HpkeEnvelope.CURRENT_VERSION.toUByte(),
-                labelId = org.llamenos.core.mobileLabelToId(CryptoLabels.LABEL_MESSAGE),
-                enc = org.llamenos.core.mobileHexToBase64url(wire.enc),
-                ct = org.llamenos.core.mobileHexToBase64url(wire.ct),
-            ),
-            expectedLabel = CryptoLabels.LABEL_MESSAGE,
-            aadHex = fixture.aadHex.keyWrap,
+        val keyHex = org.llamenos.core.mobileShapeOpen(
+            shape = org.llamenos.core.Shape.MESSAGE_KEY,
+            aadFields = emptyList(),
+            envelope = org.llamenos.core.HpkeEnvelope(enc = wire.enc, ct = wire.ct),
         )
-        val opened = org.llamenos.core.mobileSymmetricDecrypt(
+        val opened = org.llamenos.core.mobileContentOpen(
+            shape = org.llamenos.core.Shape.MESSAGE_KEY,
             ciphertextHex = sealed.ciphertextHex,
             keyHex = keyHex,
-            aadHex = fixture.aadHex.content,
         )
         assertEquals(plaintext, String(hexToBytes(opened), Charsets.UTF_8))
     }

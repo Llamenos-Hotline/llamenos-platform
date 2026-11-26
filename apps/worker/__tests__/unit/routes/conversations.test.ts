@@ -486,7 +486,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
         }),
       })
       expect(res.status).toBe(201)
@@ -505,7 +505,7 @@ describe('conversations route', () => {
     describe.each(['sms', 'whatsapp', 'signal', 'rcs'])('external channel %s without plaintextForSending (#2500)', (channelType) => {
       const sealedOnly = {
         encryptedContent: 'encrypted123',
-        readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+        readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
       }
 
       function setup() {
@@ -615,7 +615,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'c'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'c'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
           plaintextForSending: 'Hello',
         }),
       })
@@ -657,7 +657,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
         }),
       })
       expect(res.status).toBe(201)
@@ -679,7 +679,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
         }),
       })
       expect(res.status).toBe(403)
@@ -703,7 +703,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
         }),
       })
 
@@ -733,7 +733,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
           plaintextForSending: 'Hello',
         }),
       })
@@ -766,7 +766,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
           plaintextForSending: 'Hello',
         }),
       })
@@ -800,7 +800,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
           plaintextForSending: 'Hello',
         }),
       })
@@ -837,7 +837,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
           plaintextForSending: 'Hello',
         }),
       })
@@ -874,7 +874,7 @@ describe('conversations route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
-          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: '0518fddb73609f104cb170a60e462ee7a018b631a0f552e4a2e3a70730f645e7c3e25145e03eb95aedbe9375452a6894' }],
           plaintextForSending: 'Hello',
           externalId: '1700000000000',
         }),

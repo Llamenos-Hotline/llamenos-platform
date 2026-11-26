@@ -36,7 +36,6 @@ import { sampleIdentities, type SampleIdentity } from '../lib/sample-identities'
 import type { DevSurfacesEnv } from '../lib/dev-surfaces'
 import { encryptContactIdentifier } from '../lib/crypto'
 import { messagingContactHash } from '../lib/messaging-contact-hash'
-import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import type { Hub } from '@shared/types'
 import type { MessagingChannelType } from '@protocol/schemas/settings'
 import { DEFAULT_HUB_TIMEZONE } from '@protocol/schemas/common'
@@ -160,7 +159,7 @@ export async function seedSampleDataset(
     const meta = sealForReaders(
       JSON.stringify({ answeredBy: answerer?.pubkey ?? null, callerNumber: call.callerNumber }),
       answerer ? [cast.admin, answerer] : [cast.admin],
-      LABEL_CALL_META,
+      'call-meta-key',
     )
     await services.calls.recordHistoricalCall(hubId, {
       callId,
@@ -182,7 +181,7 @@ export async function seedSampleDataset(
 
     if (answerer && call.answeredBy && call.note) {
       const noteAt = new Date(startedAt.getTime() + (call.durationSeconds + 90) * 1000)
-      const sealed = sealForReaders(JSON.stringify({ text: call.note }), [answerer, cast.admin], LABEL_NOTE_KEY)
+      const sealed = sealForReaders(JSON.stringify({ text: call.note }), [answerer, cast.admin], 'note-key')
       const [authorEnvelope, adminEnvelope] = sealed.envelopes
       const note = await services.records.createNote({
         hubId,
@@ -206,7 +205,7 @@ export async function seedSampleDataset(
     const sealed = sealForReaders(
       JSON.stringify({ displayName: contact.displayName, contactType: contact.contactType, tags: contact.tags }),
       contactReaders,
-      LABEL_MESSAGE,
+      'message-key',
     )
     const row = await services.contacts.create({
       hubId,
@@ -316,7 +315,7 @@ export async function seedSampleDataset(
     )
     summary.conversations++
     for (const message of sample.messages) {
-      const sealed = sealForReaders(message.text, [cast.admin, assignee], LABEL_MESSAGE)
+      const sealed = sealForReaders(message.text, [cast.admin, assignee], 'message-key')
       await services.conversations.addMessage({
         conversationId: conversation.id,
         direction: message.direction,

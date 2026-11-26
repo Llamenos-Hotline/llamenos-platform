@@ -13,9 +13,15 @@ if (!import.meta.env.PLAYWRIGHT_TEST) {
 }
 
 import { Store } from './tauri-store'
-import { base64urlDecode, base64urlEncode, hpkeSealMock, hpkeOpenMock, labelToId, type MockHpkeEnvelope } from './hpke-mock'
+import {
+  openServerEventMock,
+  shapeContentAadHexMock,
+  shapeOpenMock,
+  shapeSealMock,
+  type MockHpkeEnvelope,
+} from './hpke-mock'
+import type { Shape } from '@shared/crypto-shapes'
 import { MOCK_PIN_LOCKOUT_STORAGE_KEY } from './pin-lockout'
-import { keyWrapAad } from '@shared/envelope-aad'
 import {
   createInitialPukMock,
   createSigchainLinkMock,
@@ -36,16 +42,7 @@ import { utf8ToBytes, bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import {
   HKDF_CONTEXT_DRAFTS,
   HKDF_SALT,
-  LABEL_CALL_META,
-  LABEL_FILE_KEY,
-  LABEL_FILE_METADATA,
-  LABEL_HUB_KEY_WRAP,
-  LABEL_MESSAGE,
-  LABEL_NOTE_KEY,
   LABEL_OFFLINE_QUEUE,
-  LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
-  LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
-  LABEL_RECOVERY_GROUP_SHARE_WRAP,
   LABEL_RECOVERY_SHARE_CONTRIBUTE,
   LABEL_WS_CHALLENGE,
 } from '@shared/crypto-labels'
@@ -95,27 +92,26 @@ let mockSecrets: MockDeviceSecrets | null = null
 let mockDeviceState: MockDeviceKeyState | null = null
 let mockEncryptedKeys: unknown = null
 
-// ── HPKE-open label allow-lists ──────────────────────────────────────
-// Mirror of OPEN_ALLOWED_LABELS / OPEN_KEY_ALLOWED_LABELS in
-// apps/desktop/src/crypto.rs. The generic unwrap commands must refuse every other
-// label (hub key, PUK seed, recovery shares, provisioning): a mock that opened
-// them would let the suite pass against a permissive surface the real app
-// no longer has.
-const OPEN_ALLOWED_LABELS: readonly string[] = [
-  LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
-  LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
-]
-const OPEN_KEY_ALLOWED_LABELS: readonly string[] = [
-  LABEL_NOTE_KEY,
-  LABEL_MESSAGE,
-  LABEL_CALL_META,
-  LABEL_FILE_KEY,
-  LABEL_FILE_METADATA,
+// ── Webview-openable shapes ──────────────────────────────────────────
+// Mirror of WEBVIEW_OPENABLE_SHAPES in apps/desktop/src/crypto.rs. The webview
+// open command must refuse every other shape (hub key, PUK seed, recovery shares,
+// audit keys): a mock that opened them would let the suite pass against a
+// permissive surface the real app does not have.
+const WEBVIEW_OPENABLE_SHAPES: readonly Shape[] = [
+  'note-key',
+  'message-key',
+  'call-meta-key',
+  'file-key',
+  'file-metadata-key',
+  'contact-profile-key',
+  'contact-id-key',
+  'platform-role-name',
+  'platform-role-description',
 ]
 
-function requireAllowedLabel(command: string, label: string, allowed: readonly string[]): void {
-  if (!allowed.includes(label)) {
-    throw new Error(`${command}: label '${label}' is not openable from the webview`)
+function requireWebviewOpenable(shape: Shape): void {
+  if (!WEBVIEW_OPENABLE_SHAPES.includes(shape)) {
+    throw new Error(`shape_open_from_state: ${shape} is not openable from the webview`)
   }
 }
 
@@ -161,7 +157,7 @@ const LABEL_HUB_EVENT_EPOCH = 'llamenos:hub-event-epoch:v1'
 const LABEL_BACKUP = 'llamenos:backup'
 const LABEL_BACKUP_HKDF_INFO = 'llamenos:backup:v1'
 const LABEL_DEVICE_ENCRYPTION_SEED = 'llamenos:device-encryption-seed:v1'
-let mockServerEventKeys: Array<[number, Uint8Array]> = []
+let mockServerEventKeys: Array<{ hubId: string; epoch: number; key: Uint8Array }> = []
 
 // ── PUK seed mock state ─────────────────────────────────────────────
 let mockPukSeed: Uint8Array | null = null
@@ -809,47 +805,34 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
   },
 
-  // --- HPKE envelope encryption ---
+  // --- HPKE envelopes, by shape (spec D1) ---
+  // The webview names a shape; ./hpke-mock maps it to the crate's label and AAD
+  // (a copy pinned against the crate's v2 vectors). Nothing here is evidence of
+  // the real implementation — see hpke-mock.ts.
 
-  hpke_seal: async (a) => {
-    const plaintext = hexToBytes(a.plaintextHex as string)
-    const recipientPubkeyHex = a.recipientPubkeyHex as string
-    const label = a.label as string
-    const aad = hexToBytes(a.aadHex as string)
-    return await hpkeSealMock(plaintext, recipientPubkeyHex, label, aad)
+  shape_seal: async (a) => {
+    return await shapeSealMock(
+      a.shape as Shape,
+      a.recipientPubkeyHex as string,
+      (a.aadFields as string[]) ?? [],
+      hexToBytes(a.plaintextHex as string),
+    )
   },
 
-  hpke_open_from_state: async (a) => {
+  shape_open_from_state: async (a) => {
     const secrets = requireSecrets()
-    const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
-    const expectedLabel = a.expectedLabel as string
-    requireAllowedLabel('hpke_open_from_state', expectedLabel, OPEN_ALLOWED_LABELS)
-    const aad = hexToBytes(a.aadHex as string)
-    const secretHex = bytesToHex(secrets.encryptionSeed)
-    const plaintext = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
+    const shape = a.shape as Shape
+    requireWebviewOpenable(shape)
+    const plaintext = await shapeOpenMock(
+      shape,
+      bytesToHex(secrets.encryptionSeed),
+      (a.aadFields as string[]) ?? [],
+      a.envelope as MockHpkeEnvelope,
+    )
     return bytesToHex(plaintext)
   },
 
-  hpke_seal_key: async (a) => {
-    const keyBytes = hexToBytes(a.keyHex as string)
-    if (keyBytes.length !== 32) throw new Error('Key must be 32 bytes')
-    const recipientPubkeyHex = a.recipientPubkeyHex as string
-    const label = a.label as string
-    const aad = hexToBytes(a.aadHex as string)
-    return await hpkeSealMock(keyBytes, recipientPubkeyHex, label, aad)
-  },
-
-  hpke_open_key_from_state: async (a) => {
-    const secrets = requireSecrets()
-    const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
-    const expectedLabel = a.expectedLabel as string
-    requireAllowedLabel('hpke_open_key_from_state', expectedLabel, OPEN_KEY_ALLOWED_LABELS)
-    const aad = hexToBytes(a.aadHex as string)
-    const secretHex = bytesToHex(secrets.encryptionSeed)
-    const plaintext = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
-    if (plaintext.length !== 32) throw new Error('Unwrapped key must be 32 bytes')
-    return bytesToHex(plaintext)
-  },
+  shape_content_aad: (a) => shapeContentAadHexMock(a.shape as Shape),
 
   // --- Case records + case comments (#2499) ---
   // Mirrors apps/desktop/src/crypto.rs seal_case_from_state / open_case_from_state,
@@ -892,11 +875,12 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   puk_unwrap_seed_from_state: async (a) => {
     const secrets = requireSecrets()
     const envelope = a.envelope as MockHpkeEnvelope
-    const seed = await hpkeOpenMock(
-      envelope,
+    // The puk-seed shape binds this device's own id, as in crypto.rs.
+    const seed = await shapeOpenMock(
+      'puk-seed',
       bytesToHex(secrets.encryptionSeed),
-      a.expectedLabel as string,
-      hexToBytes(a.aadHex as string),
+      [requireDeviceState().deviceId],
+      envelope,
     )
     if (seed.length !== 32) throw new Error('PUK seed must be 32 bytes')
     // Store PUK seed in mock state — never return it to JS
@@ -1117,11 +1101,11 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     // Share plaintext: x (1 byte) || y.
     const shareEnvelopes = await Promise.all(
       splitResult.shares.map((share, idx) =>
-        hpkeSealMock(
-          new Uint8Array([share.x, ...hexToBytes(share.y)]),
+        shapeSealMock(
+          'recovery-group-share',
           holderEncryptionPubkeys[idx],
-          LABEL_RECOVERY_GROUP_SHARE_WRAP,
-          new Uint8Array(0),
+          [],
+          new Uint8Array([share.x, ...hexToBytes(share.y)]),
         ),
       ),
     )
@@ -1144,11 +1128,11 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const { signingPubkeyHex } = requireDeviceState()
     const challengeHex = a.challengeHex as string
     if (!/^[0-9a-f]{64}$/.test(challengeHex)) throw new Error('Liveness challenge must be 32 bytes')
-    const share = await hpkeOpenMock(
-      a.envelope as { v: number; labelId: number; enc: string; ct: string },
+    const share = await shapeOpenMock(
+      'recovery-group-share',
       bytesToHex(secrets.encryptionSeed),
-      LABEL_RECOVERY_GROUP_SHARE_WRAP,
-      new Uint8Array(0),
+      [],
+      a.envelope as MockHpkeEnvelope,
     )
     if (share.length === 0) throw new Error('Decrypted share is empty')
     return signLivenessProof({ x: share[0], y: share.slice(1) }, a.hubId as string, signingPubkeyHex, challengeHex)
@@ -1161,7 +1145,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   recovery_share_contribute_from_state: async (a) => {
     const secrets = requireSecrets()
     const { signingPubkeyHex } = requireDeviceState()
-    const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
+    const envelope = a.envelope as MockHpkeEnvelope
 
     const requestedId = a.sessionId as string
     if (!/^[A-Za-z0-9-]{1,64}$/.test(requestedId)) throw new Error('Invalid recovery session id')
@@ -1183,12 +1167,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
     const sessionId = session.sessionId
 
-    const share = await hpkeOpenMock(
-      envelope,
-      bytesToHex(secrets.encryptionSeed),
-      LABEL_RECOVERY_GROUP_SHARE_WRAP,
-      new Uint8Array(0),
-    )
+    const share = await shapeOpenMock('recovery-group-share', bytesToHex(secrets.encryptionSeed), [], envelope)
     if (share.length === 0) throw new Error('Decrypted share is empty')
     // Same check as crypto.rs: the share is `x || y`, committed with the crate's
     // domain-separated commitment (not a bare hash of the whole share).
@@ -1196,11 +1175,11 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       throw new Error(RECOVERY_SHARE_COMMITMENT_MISMATCH)
     }
 
-    const sealed = await hpkeSealMock(
-      share,
+    const sealed = await shapeSealMock(
+      'recovery-share-contribution',
       session.newDevicePubkey,
-      LABEL_RECOVERY_SHARE_CONTRIBUTE,
-      utf8ToBytes(`${sessionId}:${signingPubkeyHex}`),
+      [sessionId, signingPubkeyHex],
+      share,
     )
     const encryptedShare = JSON.stringify(sealed)
     const signature = bytesToHex(
@@ -1215,9 +1194,10 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   // H16: Reconstruct recovery group key from HPKE-encrypted share envelopes
   recovery_group_reconstruct_from_shares: async (a) => {
     const envelopes = JSON.parse(a.envelopesJson as string) as Array<{
-      envelope: { v: number; labelId: number; enc: string; ct: string }
+      envelope: MockHpkeEnvelope
+      contributorPubkey: string
     }>
-    const label = a.label as string
+    const sessionId = a.sessionId as string
 
     if (envelopes.length < 2) throw new Error('Need at least 2 share envelopes')
 
@@ -1227,7 +1207,12 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     // Decrypt each envelope to get share bytes
     const shareObjs: Array<{ x: number; y: string }> = []
     for (const env of envelopes) {
-      const plaintext = await hpkeOpenMock(env.envelope, secretHex, label, new Uint8Array(0))
+      const plaintext = await shapeOpenMock(
+        'recovery-share-contribution',
+        secretHex,
+        [sessionId, env.contributorPubkey],
+        env.envelope,
+      )
       const x = plaintext[0]
       const yHex = bytesToHex(plaintext.slice(1))
       shareObjs.push({ x, y: yHex })
@@ -1247,13 +1232,10 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     if (!mockRecoveryGroupKey) {
       throw new Error('No recovery group key loaded. Reconstruct from shares first.')
     }
-    const ciphertextHex = a.ciphertextHex as string
-    const label = a.label as string
-
-    const envelope = JSON.parse(ciphertextHex) as { v: number; labelId: number; enc: string; ct: string }
+    const envelope = JSON.parse(a.ciphertextHex as string) as MockHpkeEnvelope
     const secretHex = bytesToHex(mockRecoveryGroupKey)
 
-    const plaintext = await hpkeOpenMock(envelope, secretHex, label, new Uint8Array(0))
+    const plaintext = await shapeOpenMock('recovery-puk-seed', secretHex, [], envelope)
 
     // Zeroize after use
     mockRecoveryGroupKey = null
@@ -1430,21 +1412,15 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
   // --- Hub key management (key stays in mock state, never enters JS) ---
 
-  // Mirrors CryptoState::load_hub_key_wrap / wrap_hub_key_hex, which go through
-  // the crate's encryption::hpke_unwrap_key / hpke_wrap_key: the wrap is the
-  // wire form (hex enc/ct), the label is LABEL_HUB_KEY_WRAP and the AAD
-  // key_wrap_aad(label) — fixed here as there, never taken from the caller.
+  // Mirrors CryptoState::load_hub_key_wrap / wrap_hub_key_hex: the wrap is the
+  // wire form (hex enc/ct) of the hub-key shape — fixed here as there, never
+  // taken from the caller.
   hpke_unwrap_and_set_hub_key: async (a) => {
     const hubId = a.hubId
     if (typeof hubId !== 'string' || !hubId.trim()) throw new Error('Hub id required')
     const secrets = requireSecrets()
-    const envelope: MockHpkeEnvelope = {
-      v: 3,
-      labelId: labelToId(LABEL_HUB_KEY_WRAP),
-      enc: base64urlEncode(hexToBytes(a.enc as string)),
-      ct: base64urlEncode(hexToBytes(a.ct as string)),
-    }
-    const key = await hpkeOpenMock(envelope, bytesToHex(secrets.encryptionSeed), LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
+    const envelope: MockHpkeEnvelope = { enc: a.enc as string, ct: a.ct as string }
+    const key = await shapeOpenMock('hub-key', bytesToHex(secrets.encryptionSeed), [], envelope)
     if (key.length !== 32) throw new Error('Hub key must be 32 bytes')
     mockHubKeys.set(hubId.trim(), key)
   },
@@ -1469,8 +1445,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
   wrap_hub_key_for_member: async (a) => {
     const key = requireHubKey(a.hubId)
-    const env = await hpkeSealMock(key, a.recipientPubkeyHex as string, LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
-    return { enc: bytesToHex(base64urlDecode(env.enc)), ct: bytesToHex(base64urlDecode(env.ct)) }
+    return await shapeSealMock('hub-key', a.recipientPubkeyHex as string, [], key)
   },
 
   encrypt_hub_field: (a) => {
@@ -1523,57 +1498,23 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     return new TextDecoder().decode(plaintext)
   },
 
-  // --- Hub event decryption (hub-key-encrypted broadcasts) ---
-  // Mirrors apps/desktop/src/crypto.rs decrypt_hub_event: AES-256-GCM with
-  // the hub key from CryptoState, AAD = LABEL_HUB_EVENT (not validated
-  // against LABEL_REGISTRY — this is a fixed AAD, not a wrappable label).
-
-  decrypt_hub_event: (a) => {
-    const hubKey = requireHubKey(a.hubId)
-    const ciphertextHex = a.ciphertextHex as string
-    const data = hexToBytes(ciphertextHex)
-    if (data.length < 28) throw new Error('Ciphertext too short (need at least 12-byte nonce + 16-byte tag)')
-    const nonce = data.slice(0, 12)
-    const ciphertext = data.slice(12)
-    const aad = utf8ToBytes(LABEL_HUB_EVENT)
-    const cipher = gcm(hubKey, nonce, aad)
-    const plaintext = cipher.decrypt(ciphertext)
-    return new TextDecoder().decode(plaintext)
-  },
-
-  // --- Server (relay) event keys — epoch-scoped, decoupled from the hub key ---
-  // Mirrors apps/desktop/src/crypto.rs set_server_event_keys / decrypt_server_event.
+  // --- Relay events: per-(hub, epoch) keys (spec D9, #2999) ---
+  // Mirrors apps/desktop/src/crypto.rs set_server_event_keys / open_server_event.
 
   set_server_event_keys: (a) => {
-    const keys = a.keys as Array<[number, string]>
-    mockServerEventKeys = keys.map(([epoch, hexKey]) => {
-      const keyBytes = hexToBytes(hexKey)
-      if (keyBytes.length !== 32) throw new Error(`Event key must be 32 bytes, got ${keyBytes.length}`)
-      return [epoch, keyBytes] as [number, Uint8Array]
+    const keys = a.keys as Array<{ hubId: string; epoch: number; keyHex: string }>
+    mockServerEventKeys = keys.map(k => {
+      if (!/^[0-9a-f]{64}$/.test(k.keyHex)) throw new Error('invalid_format: event key must be 32 bytes of lowercase hex')
+      return { hubId: k.hubId, epoch: k.epoch, key: hexToBytes(k.keyHex) }
     })
   },
 
-  decrypt_server_event: (a) => {
-    const ciphertextHex = a.ciphertextHex as string
+  open_server_event: (a) => {
+    const hubId = a.hubId as string
     const epoch = a.epoch as number
-    const entry = mockServerEventKeys.find(([e]) => e === epoch)
-    if (!entry) throw new Error(`No server event key for epoch ${epoch}`)
-    const key = entry[1]
-    const data = hexToBytes(ciphertextHex)
-    if (data.length < 28) throw new Error('Ciphertext too short (need at least 12-byte nonce + 16-byte tag)')
-    const nonce = data.slice(0, 12)
-    const ciphertext = data.slice(12)
-    const aad = utf8ToBytes(`${LABEL_HUB_EVENT_EPOCH}:${epoch}`)
-    const cipher = gcm(key, nonce, aad)
-    const padded = cipher.decrypt(ciphertext)
-    // Strip the server's bucket padding — `[4-byte LE length][JSON][random]`,
-    // exactly as `open_server_event` in crypto.rs does. Decoding the padded
-    // buffer whole (as both sides once did) yields a string no JSON parser
-    // accepts, so every relay event was dropped (#2046).
-    if (padded.length < 4) throw new Error('Server event padding is malformed: buffer too short')
-    const actualLen = new DataView(padded.buffer, padded.byteOffset).getUint32(0, true)
-    if (actualLen + 4 > padded.length) throw new Error('Server event padding is malformed: length exceeds buffer')
-    return new TextDecoder('utf-8', { fatal: true }).decode(padded.subarray(4, 4 + actualLen))
+    const entry = mockServerEventKeys.find(k => k.hubId === hubId && k.epoch === epoch)
+    if (!entry) throw new Error('no_event_key: No event key held for this hub and epoch')
+    return openServerEventMock(entry.key, hubId, a.kind as number, epoch, a.payloadHex as string)
   },
 
   // --- Backend address (#738) — mirrors apps/desktop/src/api_config.rs ---

@@ -13,7 +13,7 @@ import {
   recoveryShareContribute,
   recoveryShareLivenessProof,
   getDevicePubkeys,
-  type HpkeEnvelope,
+  type KeyEnvelope,
 } from '@/lib/platform'
 import {
   SectionBody,
@@ -111,7 +111,7 @@ export function RecoveryRequestsSection({
       // recovering user's new device and signs the result: the plaintext share never
       // reaches the webview. Rust reads the recipient key from the server's session
       // record itself — it is not an argument.
-      const envelope = JSON.parse(myShareEnvelope) as HpkeEnvelope
+      const envelope = JSON.parse(myShareEnvelope) as KeyEnvelope
       let contribution
       try {
         contribution = await recoveryShareContribute(
@@ -157,7 +157,7 @@ export function RecoveryRequestsSection({
     try {
       const { challenge } = await requestLivenessChallenge(hubId)
       const proof = await recoveryShareLivenessProof(
-        JSON.parse(myShareEnvelope) as HpkeEnvelope,
+        JSON.parse(myShareEnvelope) as KeyEnvelope,
         hubId,
         challenge,
       )

@@ -1,41 +1,18 @@
 /**
- * The one definition of an envelope's additional authenticated data (AAD).
+ * TEST-SIDE ONLY: the format-1 envelope AAD bytes, for the JS mirrors and the
+ * format-1 fixture generators that cannot load the crate.
  *
- * Two AAD conventions coexist, adjudicated on main (#1393):
+ * Production hosts never build an envelope AAD. Every client and the server name
+ * a SHAPE (`@shared/crypto-shapes`) and `packages/crypto/src/shape.rs` supplies
+ * the label and AAD (spec D1). `packages/crypto/tests/envelope_aad_cross_platform.rs`
+ * fails if any production source imports this module.
  *
- *   Canonical (notes, files, contact identifiers):
+ * The bytes (format 1):
+ *   canonical shapes (notes, files, contacts, hub key, firehose):
  *     content  (AES-256-GCM) : aad = UTF-8(label)
  *     key wrap (HPKE)        : aad = UTF-8(`${label}:key-wrap`)
- *     with the label additionally bound as the HPKE `info` (the Albrecht
- *     defense, enforced at open by `packages/crypto/src/hpke_envelope.rs`).
- *     Rust `encrypt_note` / `hpke_wrap_key` and the mobile FFI exports bind
- *     exactly this — a call site passing empty AAD beside one of those labels
- *     is the #1517-family defect.
- *
- *   Stored records (conversation messages, call metadata): NO AAD on either
- *     layer, label as HPKE `info` only. Client-sealed and server-sealed
- *     messages share a conversation with no format marker, so a reader cannot
- *     tell which AAD to supply — the reader's only viable AAD is empty. This
- *     is implemented canonically in `apps/worker/lib/crypto.ts` (`NO_AAD`),
- *     Rust `open_record_for_reader`, and the mobile `mobile_decrypt_message`.
- *
- * Which convention a given ciphertext carries is decided by its WRITER, never
- * by its label. LABEL_MESSAGE and LABEL_CALL_META appear on both sides of the
- * line: `apps/worker/lib/crypto.ts` writes them as stored records, while
- * `apps/worker/lib/sample-crypto.ts` writes the same labels canonically. (The
- * Rust interop vectors used to as well; they now seal stored records, #1927.)
- * So a reader must be told which convention to use — a
- * reader that infers one from the label is the #1393-family defect, and
- * assuming `keyWrapAad` unconditionally is what made every BDD reader of a
- * server-sealed message fail with `OpenError`.
- *
- * Before this module the canonical rule was written out by hand on each side,
- * and the two hands disagreed: the server derived both AADs while the desktop
- * passed empty for both, so every message the server wrote was undecryptable
- * by every desktop client (#1456, `[Encrypted]`). Two implementations of a
- * wire format is the defect. There is now one, and every party imports it.
- * Anything that needs a canonical AAD must call these functions — never
- * re-spell `${label}:key-wrap` at a call site.
+ *   stored records (messages, call metadata): no AAD on either layer.
+ * The label is bound as HPKE `info` in both.
  */
 import { utf8ToBytes, bytesToHex } from './encoding'
 

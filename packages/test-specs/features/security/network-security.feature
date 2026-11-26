@@ -242,15 +242,15 @@ Feature: Network Security
     Then the hash should depend on HMAC_SECRET, not a public constant
 
   @backend
-  Scenario: serverEventKeyHex is not in public config
+  Scenario: relay-event keys are not in public config
     When the unauthenticated /api/config endpoint is queried
-    Then the response should not contain serverEventKeyHex
+    Then the response should not contain any relay-event key
 
   @backend
-  Scenario: serverEventKeyHex is available after authentication
+  Scenario: relay-event keys are per hub and available after authentication
     Given an authenticated user
     When they query /api/auth/me
-    Then the response should contain serverEventKeyHex
+    Then the response should contain the current and previous epoch key of each of their hubs
 
   # Renamed in #1604: this used to read "DEMO_MODE=false prevents DO reset in production",
   # whose Given did nothing (DEMO_MODE was process env, unsettable from a scenario) and

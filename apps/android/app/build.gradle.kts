@@ -187,8 +187,8 @@ val copyTestVectors by tasks.registering(Copy::class) {
 // Conformance vectors: bytes the server's own writers produced, read by the instrumented
 // interop tests through Android's production readers. `stored-record-vectors.json` is
 // encryptMessageForStorage / encryptCallRecordForStorage output (#1927/#1928, read by
-// EnvelopeAadInteropTest); `server-event-vectors.json` is ws-events.ts encryptEventContent
-// output (#2117, read by ServerEventInteropTest); `case-record-vectors.json` is case records
+// EnvelopeAadInteropTest); `v2/server-event.json` and `v2/hpke-wrap.json` are the crate's
+// seeded v2 vectors (#2999, D1, D2, read by ServerEventInteropTest); `case-record-vectors.json` is case records
 // and comments as CasesService persisted them (#2499, read by CaseRecordVectorTest). Served
 // as a generated androidTest asset
 // (a build directory, never the source tree) through the Variant API.
@@ -212,8 +212,10 @@ val copyCryptoVectors by tasks.registering(CopyCryptoVectors::class) {
     val fixtures = "${rootProject.projectDir}/../../packages/crypto/tests/fixtures"
     vectors.from(
         file("$fixtures/stored-record-vectors.json"),
-        file("$fixtures/server-event-vectors.json"),
         file("$fixtures/case-record-vectors.json"),
+        // The crate-generated v2 vectors (spec D15), read by ServerEventInteropTest.
+        file("$fixtures/v2/server-event.json"),
+        file("$fixtures/v2/hpke-wrap.json"),
     )
 }
 

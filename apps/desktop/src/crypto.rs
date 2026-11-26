@@ -17,14 +17,12 @@ use std::sync::{Mutex, MutexGuard};
 use llamenos_core::{
     auth, backup, case_record, device_keys, encryption,
     encryption::RecipientKeyEnvelope,
+    events::{EventKeyring, ServerEventKey},
     hpke_envelope,
-    labels::{
-        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_FILE_KEY, LABEL_FILE_METADATA,
-        LABEL_HUB_KEY_WRAP, LABEL_MESSAGE, LABEL_NOTE_KEY, LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
-        LABEL_PLATFORM_ROLE_NAME_ENCRYPT, LABEL_RECOVERY_GROUP_SHARE_WRAP,
-        LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE,
-    },
-    puk, recovery_liveness, sas, shamir, sigchain,
+    labels::{LABEL_DEVICE_ENCRYPTION_SEED, LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE},
+    puk, recovery_liveness, sas, shamir, shape,
+    shape::Shape,
+    sigchain,
 };
 use tauri::Manager;
 
@@ -36,6 +34,12 @@ use rand::Rng;
 
 fn err_str(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// A crate error as `"{code}: {message}"`, so the webview (and a negative
+/// vector) can branch on the closed rejection code (spec §6.1).
+fn crypto_err(e: llamenos_core::CryptoError) -> String {
+    format!("{}: {e}", e.code())
 }
 
 // ── Random sources: randomness is the value's ONLY initialisation ────
@@ -80,47 +84,45 @@ fn lock_mutex<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, String> {
         .map_err(|_| "Internal error: state lock poisoned".to_string())
 }
 
-// ── Label allow-lists for the generic HPKE-open commands ─────────────
+// ── Shape allow-list for the webview HPKE-open command ────────────────
 //
-// `hpke_open_from_state` and `hpke_open_key_from_state` unwrap with the device
-// X25519 key and hand the plaintext to the webview. Left label-generic they are
-// an unwrap oracle: webview JS could open the hub-key envelope
-// (`LABEL_HUB_KEY_WRAP`) or the PUK seed envelope (`LABEL_PUK_WRAP_TO_DEVICE`)
-// and walk away with a long-lived secret that otherwise never leaves Rust, and
-// that keeps working after the session ends. So the label is checked HERE, in
-// Rust, against the closed set of labels whose plaintext the webview legitimately
-// needs. Everything else — hub key, PUK seed, recovery shares, provisioning —
-// has a dedicated Rust-only command and is refused by these two.
+// `shape_open_from_state` unwraps with the device X25519 key and hands the
+// plaintext to the webview. Left open to every shape it would be an unwrap
+// oracle: webview JS could open the hub-key envelope or the PUK seed envelope
+// and walk away with a long-lived secret that otherwise never leaves Rust. So
+// the shape is checked HERE, in Rust, against the closed set whose plaintext the
+// webview legitimately needs. Everything else — hub key, PUK seed, recovery
+// shares, provisioning, audit keys — has a dedicated Rust-only command and is
+// refused.
+//
+// The webview names a shape (a closed enum), never a label or an AAD: the crate
+// maps the shape to both (spec D1, `llamenos_core::shape`).
 
-/// Labels whose plaintext is human-readable text the UI renders.
-/// Both are platform-role fields sealed by an admin to their own device: the
-/// plaintext is the role's own name/description, which the admin already sees.
-const OPEN_ALLOWED_LABELS: &[&str] = &[
-    LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
-    LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
+/// Shapes whose plaintext the webview may receive:
+/// - a PER-ITEM content key (one note, message, call record, file's content or
+///   metadata, or contact tier), which the webview needs to run the AES-GCM
+///   content layer over bytes it already holds — it unlocks exactly one record
+///   (#3003 for files);
+/// - a platform role's own name or description, sealed by an admin to their own
+///   device, which the UI renders.
+const WEBVIEW_OPENABLE_SHAPES: &[Shape] = &[
+    Shape::NoteKey,
+    Shape::MessageKey,
+    Shape::CallMetaKey,
+    Shape::FileKey,
+    Shape::FileMetadataKey,
+    Shape::ContactProfileKey,
+    Shape::ContactIdKey,
+    Shape::PlatformRoleName,
+    Shape::PlatformRoleDescription,
 ];
 
-/// Labels whose 32-byte plaintext is a PER-ITEM content key (one note, one
-/// message, one call record, one file's content or one file's metadata) that the
-/// webview needs to run the AES-GCM content layer. Each key unlocks exactly one
-/// record, and the caller already holds that record's ciphertext — it is not a
-/// long-lived secret. The file labels are here because the desktop opens a
-/// file's bytes in the webview (WebCrypto, raw bytes) the way it opens a note:
-/// without them no file could be opened on desktop at all (#3003).
-const OPEN_KEY_ALLOWED_LABELS: &[&str] = &[
-    LABEL_NOTE_KEY,
-    LABEL_MESSAGE,
-    LABEL_CALL_META,
-    LABEL_FILE_KEY,
-    LABEL_FILE_METADATA,
-];
-
-fn require_allowed_label(command: &str, label: &str, allowed: &[&str]) -> Result<(), String> {
-    if allowed.contains(&label) {
+fn require_webview_openable(shape: Shape) -> Result<(), String> {
+    if WEBVIEW_OPENABLE_SHAPES.contains(&shape) {
         Ok(())
     } else {
         Err(format!(
-            "{command}: label '{label}' is not openable from the webview"
+            "shape_open_from_state: {shape:?} is not openable from the webview"
         ))
     }
 }
@@ -147,9 +149,9 @@ pub struct CryptoState {
     /// open. iOS and Android key theirs by hub id for the same reason.
     /// Stored in Rust to prevent webview JS from accessing them (H2 hardening).
     hub_keys: Mutex<HashMap<String, zeroize::Zeroizing<[u8; 32]>>>,
-    /// Server event key(s) — epoch-scoped symmetric keys for relay event decryption.
-    /// Current + previous epoch for rolling window (H5 hardening).
-    server_event_keys: Mutex<Vec<(u64, Vec<u8>)>>,
+    /// Relay-event keys, per `(hub, epoch)` (spec D9, #2999) — the keys
+    /// `GET /api/auth/me` hands out for this user's hubs. Opened only in Rust.
+    event_keys: Mutex<EventKeyring>,
     /// Recovery group key — reconstructed from Shamir shares, held temporarily for decryption.
     /// Zeroized after use (set to None after recovery_group_decrypt).
     recovery_group_key: Mutex<Option<Vec<u8>>>,
@@ -169,7 +171,7 @@ impl CryptoState {
             pin_failed_attempts: Mutex::new(0),
             pin_lockout_until: Mutex::new(0),
             hub_keys: Mutex::new(HashMap::new()),
-            server_event_keys: Mutex::new(Vec::new()),
+            event_keys: Mutex::new(EventKeyring::default()),
             recovery_group_key: Mutex::new(None),
             provisioning_ephemeral: Mutex::new(None),
             puk_seed: Mutex::new(None),
@@ -187,10 +189,7 @@ impl CryptoState {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        self.server_event_keys
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        *self.event_keys.lock().unwrap_or_else(|e| e.into_inner()) = EventKeyring::default();
         *self
             .recovery_group_key
             .lock()
@@ -219,17 +218,31 @@ impl CryptoState {
             .ok_or_else(|| "Device key is locked. Enter PIN to unlock.".into())
     }
 
-    fn encryption_secret_hex(&self) -> Result<String, String> {
-        self.with_secrets(|s| Ok(hex::encode(s.encryption_seed)))
+    /// Open an envelope of `shape` with this device's X25519 secret (any shape —
+    /// Rust-internal; the webview reaches this only through
+    /// [`Self::shape_open_for_webview`]).
+    fn shape_open(
+        &self,
+        shape: Shape,
+        aad_fields: &[String],
+        envelope: &hpke_envelope::HpkeEnvelope,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+        self.with_secrets(|s| {
+            shape::open_from(&s.encryption_seed, shape, aad_fields, envelope).map_err(crypto_err)
+        })
     }
 
     /// Open a wire-form (hex) wrap of `hub_id`'s key with this device's X25519
     /// secret and hold the key. See `hpke_unwrap_and_set_hub_key`.
-    fn load_hub_key_wrap(&self, hub_id: &str, wrap: encryption::KeyEnvelope) -> Result<(), String> {
+    fn load_hub_key_wrap(
+        &self,
+        hub_id: &str,
+        wrap: hpke_envelope::HpkeEnvelope,
+    ) -> Result<(), String> {
         let slot = hub_slot(hub_id)?;
-        let secret_hex = self.encryption_secret_hex()?;
-        let key =
-            encryption::hpke_unwrap_key(&wrap, &secret_hex, LABEL_HUB_KEY_WRAP).map_err(err_str)?;
+        let key = self.with_secrets(|s| {
+            shape::open_key_from(&s.encryption_seed, Shape::HubKey, &[], &wrap).map_err(err_str)
+        })?;
         lock_mutex(&self.hub_keys)?.insert(slot, key);
         Ok(())
     }
@@ -239,46 +252,37 @@ impl CryptoState {
         &self,
         hub_id: &str,
         recipient_pubkey_hex: &str,
-    ) -> Result<encryption::KeyEnvelope, String> {
+    ) -> Result<hpke_envelope::HpkeEnvelope, String> {
         let key = hub_key_array(self, hub_id)?;
-        encryption::hpke_wrap_key(&key, recipient_pubkey_hex, LABEL_HUB_KEY_WRAP).map_err(err_str)
+        shape::seal_to(recipient_pubkey_hex, Shape::HubKey, &[], &*key).map_err(err_str)
     }
 
-    /// HPKE-open a sealed 32-byte key with the device X25519 secret — the inner
-    /// half of `hpke_open_key_from_state`, callable without a Tauri runtime so
-    /// the conformance tests open envelopes through the exact production call.
-    fn hpke_open_key_hex(
+    /// Open an envelope of a webview-openable `shape` and return the plaintext as
+    /// hex — the inner half of `shape_open_from_state`, callable without a Tauri
+    /// runtime so the conformance tests open vectors through the exact production
+    /// call.
+    fn shape_open_for_webview(
         &self,
+        shape: Shape,
+        aad_fields: &[String],
         envelope: &hpke_envelope::HpkeEnvelope,
-        expected_label: &str,
-        aad_hex: &str,
     ) -> Result<String, String> {
-        require_allowed_label(
-            "hpke_open_key_from_state",
-            expected_label,
-            OPEN_KEY_ALLOWED_LABELS,
-        )?;
-        let aad = hex::decode(aad_hex).map_err(err_str)?;
-        let secret_hex = self.encryption_secret_hex()?;
-        let key = hpke_envelope::hpke_open_key(envelope, &secret_hex, expected_label, &aad)
-            .map_err(err_str)?;
-        Ok(hex::encode(key))
+        require_webview_openable(shape)?;
+        Ok(hex::encode(&*self.shape_open(shape, aad_fields, envelope)?))
     }
 
-    /// HPKE-open an envelope with the device X25519 secret — the inner half of
-    /// `hpke_open_from_state`, callable without a Tauri runtime.
-    fn hpke_open_hex(
+    /// Open a relay frame with the event key held for its hub and epoch — the
+    /// inner half of `open_server_event`.
+    fn open_server_event_json(
         &self,
-        envelope: &hpke_envelope::HpkeEnvelope,
-        expected_label: &str,
-        aad_hex: &str,
+        hub_id: &str,
+        kind: u32,
+        epoch: u64,
+        payload_hex: &str,
     ) -> Result<String, String> {
-        require_allowed_label("hpke_open_from_state", expected_label, OPEN_ALLOWED_LABELS)?;
-        let aad = hex::decode(aad_hex).map_err(err_str)?;
-        let secret_hex = self.encryption_secret_hex()?;
-        let plaintext = hpke_envelope::hpke_open(envelope, &secret_hex, expected_label, &aad)
-            .map_err(err_str)?;
-        Ok(hex::encode(plaintext))
+        lock_mutex(&self.event_keys)?
+            .open(hub_id, kind, epoch, payload_hex)
+            .map_err(crypto_err)
     }
 
     /// Seal device-local data (a draft, the offline write queue) under a key
@@ -376,10 +380,7 @@ impl CryptoState {
     ) -> Result<serde_json::Value, String> {
         session.ensure_contributable()?;
         let ds = self.get_device_state()?;
-        let secret_hex = self.encryption_secret_hex()?;
-        let share =
-            hpke_envelope::hpke_open(envelope, &secret_hex, LABEL_RECOVERY_GROUP_SHARE_WRAP, &[])
-                .map_err(err_str)?;
+        let share = self.shape_open(Shape::RecoveryGroupShare, &[], envelope)?;
         let Some((&x, y)) = share.split_first() else {
             return Err("Decrypted share is empty".into());
         };
@@ -388,12 +389,11 @@ impl CryptoState {
         }
 
         let session_id = &session.session_id;
-        let aad = format!("{session_id}:{}", ds.signing_pubkey_hex);
-        let sealed = hpke_envelope::hpke_seal(
-            &share,
+        let sealed = shape::seal_to(
             &session.new_device_pubkey,
-            LABEL_RECOVERY_SHARE_CONTRIBUTE,
-            aad.as_bytes(),
+            Shape::RecoveryShareContribution,
+            &[session_id.clone(), ds.signing_pubkey_hex.clone()],
+            &share,
         )
         .map_err(err_str)?;
         let encrypted_share = serde_json::to_string(&sealed).map_err(err_str)?;
@@ -425,10 +425,7 @@ impl CryptoState {
             .try_into()
             .map_err(|_| "Liveness challenge must be 32 bytes".to_string())?;
         let ds = self.get_device_state()?;
-        let secret_hex = self.encryption_secret_hex()?;
-        let plaintext =
-            hpke_envelope::hpke_open(envelope, &secret_hex, LABEL_RECOVERY_GROUP_SHARE_WRAP, &[])
-                .map_err(err_str)?;
+        let plaintext = self.shape_open(Shape::RecoveryGroupShare, &[], envelope)?;
         let Some((&x, y)) = plaintext.split_first() else {
             return Err("Decrypted share is empty".into());
         };
@@ -632,65 +629,45 @@ pub fn ed25519_verify(
     device_keys::verify_signature(&message, &signature, &pubkey_hex).map_err(err_str)
 }
 
-// ── HPKE envelope encryption ───────────────────────────────────────
+// ── HPKE envelopes, by shape (spec D1) ──────────────────────────────
 
-/// HPKE seal: encrypt plaintext for a recipient's X25519 pubkey (stateless).
+/// Seal `plaintext_hex` as `shape` to a recipient's X25519 pubkey (stateless).
+/// The crate maps the shape to its label and AAD; the webview names neither.
+/// `aad_fields` are the per-record values the shape binds (most bind none).
 #[tauri::command]
-pub fn hpke_seal(
+pub fn shape_seal(
+    shape: Shape,
+    recipient_pubkey_hex: String,
+    aad_fields: Vec<String>,
     plaintext_hex: String,
-    recipient_pubkey_hex: String,
-    label: String,
-    aad_hex: String,
-) -> Result<serde_json::Value, String> {
-    let plaintext = hex::decode(&plaintext_hex).map_err(err_str)?;
-    let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let envelope = hpke_envelope::hpke_seal(&plaintext, &recipient_pubkey_hex, &label, &aad)
-        .map_err(err_str)?;
-    serde_json::to_value(&envelope).map_err(err_str)
+) -> Result<hpke_envelope::HpkeEnvelope, String> {
+    let plaintext = zeroize::Zeroizing::new(
+        hpke_envelope::decode_hex_min("plaintext", &plaintext_hex, 0).map_err(err_str)?,
+    );
+    shape::seal_to(&recipient_pubkey_hex, shape, &aad_fields, &plaintext).map_err(err_str)
 }
 
-/// HPKE open: decrypt an envelope using the device's X25519 key from CryptoState.
-/// Only the labels in [`OPEN_ALLOWED_LABELS`] are openable.
+/// Open an envelope of `shape` with the device's X25519 key from CryptoState.
+/// Only the shapes in [`WEBVIEW_OPENABLE_SHAPES`] are openable; the plaintext is
+/// returned as hex.
 #[tauri::command]
-pub fn hpke_open_from_state(
+pub fn shape_open_from_state(
     state: tauri::State<'_, CryptoState>,
+    shape: Shape,
+    aad_fields: Vec<String>,
     envelope: hpke_envelope::HpkeEnvelope,
-    expected_label: String,
-    aad_hex: String,
 ) -> Result<String, String> {
-    state.hpke_open_hex(&envelope, &expected_label, &aad_hex)
+    state.shape_open_for_webview(shape, &aad_fields, &envelope)
 }
 
-/// HPKE seal a 32-byte key for a recipient (convenience wrapper).
+/// The content-layer AAD of `shape`, hex. The webview runs AES-GCM over item
+/// bytes with WebCrypto (files are too large to round-trip through IPC as hex,
+/// #3003) and takes the AAD from here — it never builds one.
 #[tauri::command]
-pub fn hpke_seal_key(
-    key_hex: String,
-    recipient_pubkey_hex: String,
-    label: String,
-    aad_hex: String,
-) -> Result<serde_json::Value, String> {
-    let key_bytes = hex::decode(&key_hex).map_err(err_str)?;
-    if key_bytes.len() != 32 {
-        return Err("Key must be 32 bytes".into());
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&key_bytes);
-    let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let envelope =
-        hpke_envelope::hpke_seal_key(&key, &recipient_pubkey_hex, &label, &aad).map_err(err_str)?;
-    serde_json::to_value(&envelope).map_err(err_str)
-}
-
-/// HPKE open a 32-byte key from an envelope using CryptoState.
-/// Only the labels in [`OPEN_KEY_ALLOWED_LABELS`] are openable.
-#[tauri::command]
-pub fn hpke_open_key_from_state(
-    state: tauri::State<'_, CryptoState>,
-    envelope: hpke_envelope::HpkeEnvelope,
-    expected_label: String,
-    aad_hex: String,
-) -> Result<String, String> {
-    state.hpke_open_key_hex(&envelope, &expected_label, &aad_hex)
+pub fn shape_content_aad(shape: Shape) -> Result<String, String> {
+    shape::content_aad_of(shape)
+        .map(hex::encode)
+        .map_err(err_str)
 }
 
 // ── Case records + case comments, sealed per purpose (#2499) ────────
@@ -782,16 +759,19 @@ pub fn puk_rotate_from_state(
 pub fn puk_unwrap_seed_from_state(
     state: tauri::State<'_, CryptoState>,
     envelope: hpke_envelope::HpkeEnvelope,
-    expected_label: String,
-    aad_hex: String,
 ) -> Result<(), String> {
-    let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let secret_hex = state.encryption_secret_hex()?;
-    let seed = hpke_envelope::hpke_open_key(&envelope, &secret_hex, &expected_label, &aad)
-        .map_err(err_str)?;
-
-    // Store PUK seed in CryptoState — never return it to JS.
-    // hpke_open_key returns Zeroizing<[u8; 32]>; dereference to copy the inner array.
+    // The PUK seed shape binds this device's own id — the crate, not the
+    // webview, decides the AAD.
+    let ds = state.get_device_state()?;
+    let seed = state.with_secrets(|s| {
+        shape::open_key_from(
+            &s.encryption_seed,
+            Shape::PukSeed,
+            std::slice::from_ref(&ds.device_id),
+            &envelope,
+        )
+        .map_err(err_str)
+    })?;
     *lock_mutex(&state.puk_seed)? = Some(*seed);
     Ok(())
 }
@@ -921,10 +901,9 @@ fn hub_slot(hub_id: &str) -> Result<String, String> {
 /// Open this device's wrap of `hub_id`'s key and store the key in CryptoState.
 ///
 /// Takes the wrap exactly as the server stores it (`enc`/`ct`, hex — the one
-/// wire encoding, PROTOCOL.md §2.7). The label (`LABEL_HUB_KEY_WRAP`), the
-/// envelope's registry `labelId` and the key-wrap AAD are all fixed by the
-/// crate's `encryption::hpke_unwrap_key` — the same function the mobile loader
-/// uses — so no client chooses them. The hub key NEVER enters JavaScript.
+/// wire encoding, spec D2). The label and the key-wrap AAD are the crate's
+/// `Shape::HubKey` — the same shape the mobile loader opens — so no client
+/// chooses them. The hub key NEVER enters JavaScript.
 #[tauri::command]
 pub fn hpke_unwrap_and_set_hub_key(
     state: tauri::State<'_, CryptoState>,
@@ -932,7 +911,7 @@ pub fn hpke_unwrap_and_set_hub_key(
     enc: String,
     ct: String,
 ) -> Result<(), String> {
-    state.load_hub_key_wrap(&hub_id, encryption::KeyEnvelope { enc, ct })
+    state.load_hub_key_wrap(&hub_id, hpke_envelope::HpkeEnvelope { enc, ct })
 }
 
 /// Generate a random 32-byte key for `hub_id` and store it in CryptoState,
@@ -967,37 +946,41 @@ pub fn forget_hub_key(state: tauri::State<'_, CryptoState>, hub_id: String) -> R
 
 /// Wrap `hub_id`'s key, stored in CryptoState, for one member device's X25519
 /// key. Returns the wire form `{ enc, ct }` (hex). Label and AAD are the crate's
-/// (`encryption::hpke_wrap_key` under `LABEL_HUB_KEY_WRAP`), never the caller's.
+/// (`Shape::HubKey`), never the caller's.
 /// The key NEVER enters JavaScript.
 #[tauri::command]
 pub fn wrap_hub_key_for_member(
     state: tauri::State<'_, CryptoState>,
     hub_id: String,
     recipient_pubkey_hex: String,
-) -> Result<encryption::KeyEnvelope, String> {
+) -> Result<hpke_envelope::HpkeEnvelope, String> {
     state.wrap_hub_key_hex(&hub_id, &recipient_pubkey_hex)
 }
 
-/// Store server event keys (current + previous epoch) in CryptoState.
-/// Called from JS after receiving keys from /api/auth/me.
+/// Replace the relay-event keys held in CryptoState with the server's list —
+/// one per (hub, epoch), for the hubs this user belongs to (`GET /api/auth/me`,
+/// #2999). The keys never come back out to the webview.
 #[tauri::command]
 pub fn set_server_event_keys(
     state: tauri::State<'_, CryptoState>,
-    keys: Vec<(u64, String)>,
+    keys: Vec<ServerEventKey>,
 ) -> Result<(), String> {
-    let mut decoded = Vec::with_capacity(keys.len());
-    for (epoch, hex_key) in keys {
-        let key_bytes = hex::decode(&hex_key).map_err(err_str)?;
-        if key_bytes.len() != 32 {
-            return Err(format!(
-                "Event key must be 32 bytes, got {}",
-                key_bytes.len()
-            ));
-        }
-        decoded.push((epoch, key_bytes));
-    }
-    *lock_mutex(&state.server_event_keys)? = decoded;
+    *lock_mutex(&state.event_keys)? = EventKeyring::from_keys(&keys).map_err(err_str)?;
     Ok(())
+}
+
+/// Open one relay frame with the key held for its hub and epoch (spec D9). The
+/// frame's hub, kind and epoch are bound in its AAD; a frame of a hub this user
+/// holds no key for is `no_event_key`.
+#[tauri::command]
+pub fn open_server_event(
+    state: tauri::State<'_, CryptoState>,
+    hub_id: String,
+    kind: u32,
+    epoch: u64,
+    payload_hex: String,
+) -> Result<String, String> {
+    state.open_server_event_json(&hub_id, kind, epoch, &payload_hex)
 }
 
 /// `hub_id`'s key held in `CryptoState`, as the fixed-size key the crate's
@@ -1010,20 +993,6 @@ fn hub_key_array(
     let guard = lock_mutex(&state.hub_keys)?;
     let key = guard.get(&slot).ok_or("Hub key not loaded")?;
     Ok(zeroize::Zeroizing::new(**key))
-}
-
-/// Decrypt hub event content using `hub_id`'s key stored in CryptoState.
-/// Input: hex-encoded nonce(12) + ciphertext (AES-256-GCM), AAD `LABEL_HUB_EVENT`.
-/// The cipher, AAD and framing live in `llamenos_core::encryption::decrypt_hub_event`.
-/// Returns the decrypted plaintext string.
-#[tauri::command]
-pub fn decrypt_hub_event(
-    state: tauri::State<'_, CryptoState>,
-    hub_id: String,
-    ciphertext_hex: String,
-) -> Result<String, String> {
-    let key = hub_key_array(&state, &hub_id)?;
-    encryption::decrypt_hub_event(&ciphertext_hex, &key).map_err(err_str)
 }
 
 /// Encrypt a plaintext string with `hub_id`'s key, binding `label` as AAD.
@@ -1200,13 +1169,8 @@ pub fn recovery_group_create(
         // Share plaintext: x (1 byte) || y.
         let mut plaintext = zeroize::Zeroizing::new(vec![share.x]);
         plaintext.extend_from_slice(&share.y);
-        let sealed = hpke_envelope::hpke_seal(
-            &plaintext,
-            holder_pubkey,
-            LABEL_RECOVERY_GROUP_SHARE_WRAP,
-            &[],
-        )
-        .map_err(err_str)?;
+        let sealed = shape::seal_to(holder_pubkey, Shape::RecoveryGroupShare, &[], &plaintext)
+            .map_err(err_str)?;
         share_envelopes.push(serde_json::to_value(sealed).map_err(err_str)?);
     }
 
@@ -1318,6 +1282,9 @@ pub fn recovery_share_liveness_proof_from_state(
 #[serde(rename_all = "camelCase")]
 pub struct EncryptedShareEnvelope {
     pub envelope: hpke_envelope::HpkeEnvelope,
+    /// The contributing holder's signing pubkey — bound in the contribution's
+    /// AAD together with the session id (`Shape::RecoveryShareContribution`).
+    pub contributor_pubkey: String,
 }
 
 /// Decrypt HPKE-encrypted share envelopes using device X25519 key, combine via Shamir,
@@ -1327,7 +1294,7 @@ pub struct EncryptedShareEnvelope {
 pub fn recovery_group_reconstruct_from_shares(
     state: tauri::State<'_, CryptoState>,
     envelopes_json: String,
-    label: String,
+    session_id: String,
 ) -> Result<serde_json::Value, String> {
     let envelopes: Vec<EncryptedShareEnvelope> =
         serde_json::from_str(&envelopes_json).map_err(err_str)?;
@@ -1336,15 +1303,16 @@ pub fn recovery_group_reconstruct_from_shares(
         return Err("Need at least 2 share envelopes".into());
     }
 
-    let secret_hex = state.encryption_secret_hex()?;
-
-    // Decrypt each HPKE envelope to get share bytes, then parse x (first byte) and y (rest)
+    // Open each contribution as the shape it was sealed as: bound to this
+    // session and to the holder that contributed it. Then parse x (first byte)
+    // and y (rest).
     let mut shares: Vec<shamir::Share> = Vec::with_capacity(envelopes.len());
     for env in &envelopes {
-        let aad = vec![]; // empty AAD
-        let plaintext = zeroize::Zeroizing::new(
-            hpke_envelope::hpke_open(&env.envelope, &secret_hex, &label, &aad).map_err(err_str)?,
-        );
+        let plaintext = state.shape_open(
+            Shape::RecoveryShareContribution,
+            &[session_id.clone(), env.contributor_pubkey.clone()],
+            &env.envelope,
+        )?;
 
         let Some((&x, y)) = plaintext.split_first() else {
             return Err("Decrypted share is empty".into());
@@ -1371,7 +1339,6 @@ pub fn recovery_group_reconstruct_from_shares(
 pub fn recovery_group_decrypt(
     state: tauri::State<'_, CryptoState>,
     ciphertext_hex: String,
-    label: String,
 ) -> Result<String, String> {
     // Take the key out of state (zeroizes the stored copy)
     let key_bytes = lock_mutex(&state.recovery_group_key)?
@@ -1380,19 +1347,18 @@ pub fn recovery_group_decrypt(
             "No recovery group key loaded. Reconstruct from shares first.".to_string()
         })?;
 
-    // Use the recovery group private key as X25519 secret to HPKE-open the ciphertext
-    let secret_hex = hex::encode(&key_bytes);
+    let secret = zeroize::Zeroizing::new(
+        <[u8; 32]>::try_from(key_bytes.as_slice())
+            .map_err(|_| "Recovery group key must be 32 bytes".to_string())?,
+    );
+    drop(key_bytes);
 
-    // Parse the ciphertext as an HPKE envelope
+    // The payload is the PUK seed sealed to the recovery group's public key.
     let envelope: hpke_envelope::HpkeEnvelope =
         serde_json::from_str(&ciphertext_hex).map_err(err_str)?;
-
-    let aad = vec![];
     let plaintext =
-        hpke_envelope::hpke_open(&envelope, &secret_hex, &label, &aad).map_err(err_str)?;
-
-    // key_bytes is dropped here (Vec<u8> deallocated)
-    Ok(hex::encode(plaintext))
+        shape::open_from(&secret, Shape::RecoveryPukSeed, &[], &envelope).map_err(crypto_err)?;
+    Ok(hex::encode(&*plaintext))
 }
 
 // ── C06: Missing IPC commands ──────────────────────────────────────────
@@ -1743,136 +1709,149 @@ fn encrypt_secrets_with_pin(
     })
 }
 
-/// Decrypt a server-published relay event using the epoch-keyed server event key.
-/// Input: hex-encoded nonce(12) + ciphertext + epoch number.
-/// AAD: `"{LABEL_HUB_EVENT_EPOCH}:{epoch}"` for domain separation (epoch-keyed events
-/// use LABEL_HUB_EVENT_EPOCH, not LABEL_HUB_EVENT which is for hub-key-encrypted events).
-/// Returns the event's JSON, with the server's bucket padding stripped.
-#[tauri::command]
-pub fn decrypt_server_event(
-    state: tauri::State<'_, CryptoState>,
-    ciphertext_hex: String,
-    epoch: u64,
-) -> Result<String, String> {
-    let keys = lock_mutex(&state.server_event_keys)?;
-    open_server_event(&keys, &ciphertext_hex, epoch)
-}
-
-/// The body of [`decrypt_server_event`], free of Tauri state so it can be tested.
-///
-/// The server pads every event to a power-of-2 bucket before sealing it
-/// (`apps/worker/lib/hub-event-crypto.ts` `padToBucket`, the same format as
-/// [`llamenos_core::padding::pad_to_bucket`]):
-/// `[4-byte LE length][JSON][random padding]`. The plaintext must be unpadded
-/// before it is UTF-8 decoded. Returning the padded buffer instead failed every
-/// event — the random tail is not UTF-8, and when it happened to be, the length
-/// prefix still made the JSON unparseable — and the relay client drops an
-/// undecodable event without a trace, so no desktop handler ever ran (#2046).
-/// Mobile's `mobile_decrypt_server_event_with_epoch` already unpads.
-fn open_server_event(
-    keys: &[(u64, Vec<u8>)],
-    ciphertext_hex: &str,
-    epoch: u64,
-) -> Result<String, String> {
-    let key = keys
-        .iter()
-        .find(|(e, _)| *e == epoch)
-        .map(|(_, k)| k)
-        .ok_or_else(|| format!("No server event key for epoch {epoch}"))?;
-
-    let key: &[u8; 32] = key
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid server event key: must be 32 bytes".to_string())?;
-    encryption::decrypt_server_event(ciphertext_hex, key, epoch).map_err(err_str)
-}
-
+/// The v2 vectors (`packages/crypto/tests/fixtures/v2/`, spec D15), opened
+/// through the desktop's production readers — the same `CryptoState` methods the
+/// `#[tauri::command]`s delegate to. Never through the webview's JS mock (#2104).
 #[cfg(test)]
-mod server_event_tests {
+mod v2_vector_tests {
     use super::*;
-    use aes_gcm::aead::Payload;
-    use aes_gcm::{AeadCore, aead::OsRng};
-    use llamenos_core::labels::LABEL_HUB_EVENT_EPOCH;
 
-    const EPOCH: u64 = 20748;
-
-    /// A fresh random server-event key — the tests never reuse a fixed key.
-    /// Drawn straight from the AEAD's own generator, so no literal buffer
-    /// ever exists that could be mistaken for key material.
-    fn random_key() -> [u8; 32] {
-        Aes256Gcm::generate_key(OsRng).into()
+    fn load(name: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/crypto/tests/fixtures/v2")
+            .join(name);
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
-    /// Seal `json` exactly as the server's `encryptEventContent` does: pad to a
-    /// bucket, then AES-256-GCM under `key` with a fresh random nonce, AAD bound
-    /// to the epoch, output `nonce(12) || ciphertext`, hex-encoded.
-    fn seal_like_server(key: &[u8; 32], json: &str, epoch: u64) -> String {
-        let padded = llamenos_core::padding::pad_to_bucket(json.as_bytes());
-        let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let cipher = Aes256Gcm::new_from_slice(key).unwrap();
-        let ct = cipher
-            .encrypt(
-                &nonce,
-                Payload {
-                    msg: &padded,
-                    aad: aad.as_bytes(),
-                },
+    fn strings(v: &serde_json::Value) -> Vec<String> {
+        serde_json::from_value(v.clone()).unwrap()
+    }
+
+    /// `CryptoError::code` is carried as the first word of the error string.
+    fn code(err: &str) -> &str {
+        err.split(':').next().unwrap_or(err)
+    }
+
+    #[test]
+    fn every_server_event_vector_opens_or_fails_with_its_code() {
+        let f = load("server-event.json");
+        let state = CryptoState::new();
+        let keys: Vec<ServerEventKey> = serde_json::from_value(f["heldKeys"].clone()).unwrap();
+        *state.event_keys.lock().unwrap() = EventKeyring::from_keys(&keys).unwrap();
+        let open = |v: &serde_json::Value| {
+            state.open_server_event_json(
+                v["hubId"].as_str().unwrap(),
+                v["kind"].as_u64().unwrap() as u32,
+                v["epoch"].as_u64().unwrap(),
+                v["payload"].as_str().unwrap(),
             )
+        };
+        let mut opened = 0;
+        for fr in f["frames"].as_array().unwrap() {
+            if let Ok(json) = open(fr) {
+                assert_eq!(json, fr["plaintext"].as_str().unwrap());
+                opened += 1;
+            }
+        }
+        assert_eq!(
+            opened, 3,
+            "a member of hub A opens hub A's frames and nothing else"
+        );
+        for n in f["negatives"].as_array().unwrap() {
+            let err = open(n).expect_err(n["name"].as_str().unwrap());
+            assert_eq!(
+                code(&err),
+                n["expect"].as_str().unwrap(),
+                "{}: {err}",
+                n["name"]
+            );
+        }
+    }
+
+    /// The webview may open exactly the allow-listed shapes; every other shape is
+    /// refused by the gate before HPKE runs, though Rust itself opens it.
+    #[test]
+    fn every_hpke_wrap_vector_opens_through_the_gate_or_is_refused_by_it() {
+        let f = load("hpke-wrap.json");
+        let seed: [u8; 32] = hex::decode(f["recipientSecretHex"].as_str().unwrap())
+            .unwrap()
+            .try_into()
             .unwrap();
-        let mut out = nonce.to_vec();
-        out.extend_from_slice(&ct);
-        hex::encode(out)
-    }
-
-    #[test]
-    fn a_padded_server_event_opens_to_its_json() {
-        let json = r#"{"type":"conversation:assigned","conversationId":"c1","assignedTo":"ab"}"#;
-        let key = random_key();
-        let keys = vec![(EPOCH, key.to_vec())];
-        let opened = open_server_event(&keys, &seal_like_server(&key, json, EPOCH), EPOCH).unwrap();
-        assert_eq!(opened, json);
-    }
-
-    #[test]
-    fn an_event_sealed_for_another_epoch_does_not_open() {
-        let json = r#"{"type":"message:new","conversationId":"c1"}"#;
-        let key = random_key();
-        let keys = vec![(EPOCH, key.to_vec())];
-        let sealed = seal_like_server(&key, json, EPOCH + 1);
-        assert!(open_server_event(&keys, &sealed, EPOCH).is_err());
-        assert!(open_server_event(&keys, &sealed, EPOCH + 1).is_err());
-    }
-
-    #[test]
-    fn an_event_sealed_under_another_key_does_not_open() {
-        let json = r#"{"type":"message:new","conversationId":"c1"}"#;
-        let keys = vec![(EPOCH, random_key().to_vec())];
-        let sealed = seal_like_server(&random_key(), json, EPOCH);
-        assert!(open_server_event(&keys, &sealed, EPOCH).is_err());
+        let secrets = device_keys::DeviceSecrets {
+            signing_seed: random_key(),
+            encryption_seed: seed,
+        };
+        let ds = device_keys::DeviceKeyState {
+            device_id: "v2-vectors".into(),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+        };
+        let state = CryptoState::new();
+        state.load_secrets_for_test(secrets, ds);
+        for p in f["positives"].as_array().unwrap() {
+            let shape: Shape = serde_json::from_value(p["shape"].clone()).unwrap();
+            let fields = strings(&p["aadFields"]);
+            let env: hpke_envelope::HpkeEnvelope =
+                serde_json::from_value(p["envelope"].clone()).unwrap();
+            let want = p["plaintextHex"].as_str().unwrap();
+            if WEBVIEW_OPENABLE_SHAPES.contains(&shape) {
+                assert_eq!(
+                    state.shape_open_for_webview(shape, &fields, &env).unwrap(),
+                    want
+                );
+            } else {
+                let err = state
+                    .shape_open_for_webview(shape, &fields, &env)
+                    .unwrap_err();
+                assert!(
+                    err.contains("not openable from the webview"),
+                    "{shape:?}: {err}"
+                );
+                assert_eq!(
+                    hex::encode(&*state.shape_open(shape, &fields, &env).unwrap()),
+                    want
+                );
+            }
+        }
+        for n in f["negatives"].as_array().unwrap() {
+            let shape: Shape = serde_json::from_value(n["shape"].clone()).unwrap();
+            let env: hpke_envelope::HpkeEnvelope =
+                serde_json::from_value(n["envelope"].clone()).unwrap();
+            let err = shape::open_from(&seed, shape, &strings(&n["aadFields"]), &env).unwrap_err();
+            assert_eq!(err.code(), n["expect"].as_str().unwrap(), "{}", n["name"]);
+            // ...and the desktop's own reader refuses the same bytes, same code.
+            let err = state
+                .shape_open(shape, &strings(&n["aadFields"]), &env)
+                .unwrap_err();
+            assert_eq!(
+                code(&err),
+                n["expect"].as_str().unwrap(),
+                "{}: {err}",
+                n["name"]
+            );
+        }
     }
 }
 
-// ── Stored-record conformance (#1927) ───────────────────────────────
-//
-// The bytes in `stored-record-vectors.json` were sealed by the server's own
-// `encryptMessageForStorage`/`encryptCallRecordForStorage` — NO AAD on either
-// layer, the label bound as HPKE `info` only (PROTOCOL.md §2.4). The desktop's
-// production reader for these records is split across the IPC boundary:
-// `platform.ts` `decryptMessage`/`decryptCallRecord` builds an `HpkeEnvelope`
-// (`toIpcEnvelope`: v 3, registry labelId, base64url enc/ct), opens it via
-// `hpke_open_key_from_state` with an EMPTY AAD, then AES-256-GCM-decrypts the
-// content with an empty AAD. These tests walk that exact path against the
-// server's bytes — the secrets stay in `CryptoState`, in Rust, the whole time.
 #[cfg(test)]
 mod stored_record_conformance_tests {
     use super::*;
     use aes_gcm::aead::Payload;
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    use llamenos_core::labels::{LABEL_CALL_META, LABEL_MESSAGE, label_to_id};
+    use llamenos_core::labels::{LABEL_CALL_META, LABEL_MESSAGE};
 
     const FIXTURE: &str =
         include_str!("../../../packages/crypto/tests/fixtures/stored-record-vectors.json");
+
+    /// The shape a stored record's label names.
+    fn shape_of(label: &str) -> Shape {
+        if label == LABEL_MESSAGE {
+            Shape::MessageKey
+        } else if label == LABEL_CALL_META {
+            Shape::CallMetaKey
+        } else {
+            panic!("no stored-record shape for {label}")
+        }
+    }
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -1954,17 +1933,6 @@ mod stored_record_conformance_tests {
         state
     }
 
-    /// `platform.ts` `toIpcEnvelope`: wire hex → IPC envelope (base64url, v 3,
-    /// registry labelId).
-    fn to_ipc_envelope(label: &str, wire: &FixtureEnvelope) -> hpke_envelope::HpkeEnvelope {
-        hpke_envelope::HpkeEnvelope {
-            v: 3,
-            label_id: label_to_id(label).expect("fixture label not in the registry"),
-            enc: URL_SAFE_NO_PAD.encode(hex::decode(&wire.enc).unwrap()),
-            ct: URL_SAFE_NO_PAD.encode(hex::decode(&wire.ct).unwrap()),
-        }
-    }
-
     /// The webview's `aesGcmDecrypt(.., aadHex)`: nonce(12) || ciphertext+tag.
     fn aes_gcm_decrypt(
         encrypted_content_hex: &str,
@@ -1986,24 +1954,27 @@ mod stored_record_conformance_tests {
         String::from_utf8(plaintext).map_err(err_str)
     }
 
-    /// The desktop production reader for a stored record: IPC envelope →
-    /// `hpke_open_key_hex` (the inner half of `hpke_open_key_from_state`) →
-    /// AES-256-GCM, both under the caller-supplied AAD.
+    /// The desktop production reader for a stored record: the wire envelope →
+    /// `shape_open_for_webview` (the inner half of `shape_open_from_state`) →
+    /// AES-256-GCM in the webview under the AAD `shape_content_aad` returns.
     fn open_record_as(
         state: &CryptoState,
         rec: &FixtureRecord,
         reader: &FixtureReader,
-        key_wrap_aad_hex: &str,
-        content_aad: &[u8],
+        shape: Shape,
     ) -> Result<String, String> {
         let wire = rec
             .reader_envelopes
             .iter()
             .find(|e| e.pubkey == reader.x25519_pubkey_hex)
             .expect("the fixture sealed no envelope to this reader");
-        let envelope = to_ipc_envelope(&rec.label, wire);
-        let key_hex = state.hpke_open_key_hex(&envelope, &rec.label, key_wrap_aad_hex)?;
-        aes_gcm_decrypt(&rec.encrypted_content, &key_hex, content_aad)
+        let envelope = hpke_envelope::HpkeEnvelope {
+            enc: wire.enc.clone(),
+            ct: wire.ct.clone(),
+        };
+        let key_hex = state.shape_open_for_webview(shape, &[], &envelope)?;
+        let aad = hex::decode(shape_content_aad(shape)?).map_err(err_str)?;
+        aes_gcm_decrypt(&rec.encrypted_content, &key_hex, &aad)
     }
 
     #[test]
@@ -2015,11 +1986,9 @@ mod stored_record_conformance_tests {
             let rec = record(&f, label);
             assert_eq!(rec.reader_envelopes.len(), f.readers.len(), "{}", rec.name);
         }
-        // `platform.ts` hardcodes these labelIds at the decryptMessage /
-        // decryptCallRecord call sites; pin them against the registry so a
-        // registry reorder cannot silently desync the webview constants.
-        assert_eq!(label_to_id(LABEL_MESSAGE), Some(5));
-        assert_eq!(label_to_id(LABEL_CALL_META), Some(6));
+        // The stored-record shapes carry no content AAD either.
+        assert_eq!(shape_content_aad(Shape::MessageKey).unwrap(), "");
+        assert_eq!(shape_content_aad(Shape::CallMetaKey).unwrap(), "");
     }
 
     #[test]
@@ -2030,10 +1999,9 @@ mod stored_record_conformance_tests {
             for label in [LABEL_MESSAGE, LABEL_CALL_META] {
                 let rec = record(&f, label);
                 assert_eq!(
-                    open_record_as(&state, rec, reader, "", &[]).unwrap_or_else(|e| panic!(
-                        "{} cannot open {}: {e}",
-                        reader.name, rec.name
-                    )),
+                    open_record_as(&state, rec, reader, shape_of(label)).unwrap_or_else(
+                        |e| panic!("{} cannot open {}: {e}", reader.name, rec.name)
+                    ),
                     rec.plaintext,
                     "{} opened {} but the plaintext differs",
                     reader.name,
@@ -2043,29 +2011,24 @@ mod stored_record_conformance_tests {
         }
     }
 
-    /// The canonical notes AAD (`label` / `label:key-wrap`) applied to a stored
-    /// record must fail on BOTH layers — the #1927 defect shape, pinned here so
-    /// the desktop can never re-introduce it at either call site.
+    /// A stored record does not open as another shape — not as the other stored
+    /// record, and not as a note (the canonical-AAD shape, the #1927 defect).
     #[test]
-    fn the_canonical_aad_does_not_open_a_server_written_record() {
-        use llamenos_core::envelope_aad::{content_aad_hex, key_wrap_aad_hex};
-
+    fn a_server_written_record_opens_as_its_own_shape_only() {
         let f = fixture();
         let reader = &f.readers[0];
         let state = state_for(reader);
-        for label in [LABEL_MESSAGE, LABEL_CALL_META] {
+        for (label, wrong) in [
+            (LABEL_MESSAGE, Shape::CallMetaKey),
+            (LABEL_CALL_META, Shape::MessageKey),
+            (LABEL_MESSAGE, Shape::NoteKey),
+        ] {
             let rec = record(&f, label);
-            let wrap = key_wrap_aad_hex(label).unwrap();
-            let content = content_aad_hex(label).unwrap();
-            let content_aad = hex::decode(&content).unwrap();
             assert!(
-                open_record_as(&state, rec, reader, &wrap, &content_aad).is_err(),
-                "{} opened under the canonical AAD pair — the stored-record format is no longer pinned",
+                open_record_as(&state, rec, reader, wrong).is_err(),
+                "{} opened as {wrong:?}",
                 rec.name
             );
-            // Each layer fails on its own as well.
-            assert!(open_record_as(&state, rec, reader, &wrap, &[]).is_err());
-            assert!(open_record_as(&state, rec, reader, "", &content_aad).is_err());
         }
     }
 }
@@ -2079,9 +2042,7 @@ mod stored_record_conformance_tests {
 #[cfg(test)]
 mod ipc_surface_tests {
     use super::*;
-    use llamenos_core::labels::{
-        LABEL_DEVICE_PROVISION, LABEL_HUB_KEY_WRAP, LABEL_PUK_WRAP_TO_DEVICE,
-    };
+    use llamenos_core::labels::LABEL_HUB_KEY_WRAP;
 
     struct TestDevice {
         state: CryptoState,
@@ -2116,8 +2077,12 @@ mod ipc_surface_tests {
         }
     }
 
-    fn seal(dev: &TestDevice, plaintext: &[u8], label: &str) -> hpke_envelope::HpkeEnvelope {
-        hpke_envelope::hpke_seal(plaintext, &dev.encryption_pubkey_hex, label, &[]).unwrap()
+    fn fields(shape: Shape) -> Vec<String> {
+        (0..shape.arity()).map(|i| format!("f{i}")).collect()
+    }
+
+    fn seal(dev: &TestDevice, plaintext: &[u8], shape: Shape) -> hpke_envelope::HpkeEnvelope {
+        shape::seal_to(&dev.encryption_pubkey_hex, shape, &fields(shape), plaintext).unwrap()
     }
 
     /// The offline queue and drafts are per-device: they must seal and open with
@@ -2179,77 +2144,45 @@ mod ipc_surface_tests {
     }
 
     #[test]
-    fn open_returns_the_plaintext_only_for_the_allow_listed_text_labels() {
+    fn open_returns_the_plaintext_for_every_webview_openable_shape() {
         let dev = device();
-        for label in OPEN_ALLOWED_LABELS {
-            let env = seal(&dev, b"Shift supervisor", label);
-            let hex_plain = dev.state.hpke_open_hex(&env, label, "").unwrap();
-            assert_eq!(hex::decode(hex_plain).unwrap(), b"Shift supervisor");
-        }
-    }
-
-    #[test]
-    fn open_refuses_the_hub_key_and_puk_envelopes_even_under_their_own_label() {
-        let dev = device();
-        for label in [
-            LABEL_HUB_KEY_WRAP,
-            LABEL_PUK_WRAP_TO_DEVICE,
-            LABEL_RECOVERY_GROUP_SHARE_WRAP,
-            LABEL_RECOVERY_SHARE_CONTRIBUTE,
-            LABEL_DEVICE_PROVISION,
-            // A per-item key label is not a text label either.
-            LABEL_NOTE_KEY,
-        ] {
-            let env = seal(&dev, &[7u8; 32], label);
-            // Sanity: the envelope IS valid under that label — the oracle would
-            // have returned the key had the allow-list not stopped it.
-            assert!(
-                hpke_envelope::hpke_open(&env, &hex::encode(dev.encryption_seed), label, &[])
-                    .is_ok()
-            );
-            let err = dev.state.hpke_open_hex(&env, label, "").unwrap_err();
-            assert!(
-                err.contains("not openable from the webview"),
-                "{label}: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn open_key_returns_only_per_item_content_keys() {
-        let dev = device();
-        for label in OPEN_KEY_ALLOWED_LABELS {
-            let env = seal(&dev, &[9u8; 32], label);
+        for &shape in WEBVIEW_OPENABLE_SHAPES {
+            let env = seal(&dev, &[9u8; 32], shape);
             assert_eq!(
-                dev.state.hpke_open_key_hex(&env, label, "").unwrap(),
-                hex::encode([9u8; 32])
+                dev.state
+                    .shape_open_for_webview(shape, &fields(shape), &env)
+                    .unwrap(),
+                hex::encode([9u8; 32]),
+                "{shape:?}"
             );
         }
     }
 
+    /// Every shape outside the allow-list is refused even though the envelope
+    /// IS valid for it — so the refusal can only come from the gate.
     #[test]
-    fn open_key_refuses_the_hub_key_and_puk_seed_envelopes() {
+    fn open_refuses_the_hub_key_puk_recovery_and_audit_envelopes() {
         let dev = device();
-        for label in [
-            LABEL_HUB_KEY_WRAP,
-            LABEL_PUK_WRAP_TO_DEVICE,
-            LABEL_RECOVERY_GROUP_SHARE_WRAP,
-            LABEL_RECOVERY_SHARE_CONTRIBUTE,
-            LABEL_DEVICE_PROVISION,
-            // Allowed for the TEXT command, but its plaintext is not a content key.
-            LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
-        ] {
-            let env = seal(&dev, &[7u8; 32], label);
-            let err = dev.state.hpke_open_key_hex(&env, label, "").unwrap_err();
+        for shape in Shape::ALL {
+            if WEBVIEW_OPENABLE_SHAPES.contains(&shape) {
+                continue;
+            }
+            let env = seal(&dev, &[7u8; 32], shape);
+            assert!(
+                shape::open_from(&dev.encryption_seed, shape, &fields(shape), &env).is_ok(),
+                "{shape:?}: the envelope must be valid, or the test proves nothing"
+            );
+            let err = dev
+                .state
+                .shape_open_for_webview(shape, &fields(shape), &env)
+                .unwrap_err();
             assert!(
                 err.contains("not openable from the webview"),
-                "{label}: {err}"
+                "{shape:?}: {err}"
             );
         }
     }
 
-    /// A fresh challenge nonce, as the relay would send one. The binding tests
-    /// need two distinct nonces, not particular ones.
     fn fresh_nonce() -> String {
         let bytes: [u8; 16] = rand::rngs::OsRng.r#gen();
         hex::encode(bytes)
@@ -2309,12 +2242,13 @@ mod ipc_surface_tests {
         let mut shares = Vec::new();
         for (holder, env) in holders.iter().zip(envelopes).take(2) {
             let env: hpke_envelope::HpkeEnvelope = serde_json::from_value(env.clone()).unwrap();
-            let plain = hpke_envelope::hpke_open(
-                &env,
+            let plain = shape::open_from_hex(
                 &hex::encode(holder.encryption_seed),
-                LABEL_RECOVERY_GROUP_SHARE_WRAP,
+                Shape::RecoveryGroupShare,
                 &[],
+                &env,
             )
+            .map(|p| p.to_vec())
             .unwrap();
             shares.push(shamir::Share {
                 x: plain[0],
@@ -2334,12 +2268,13 @@ mod ipc_surface_tests {
         let other: hpke_envelope::HpkeEnvelope =
             serde_json::from_value(envelopes[1].clone()).unwrap();
         assert!(
-            hpke_envelope::hpke_open(
-                &other,
+            shape::open_from_hex(
                 &hex::encode(holders[0].encryption_seed),
-                LABEL_RECOVERY_GROUP_SHARE_WRAP,
-                &[]
+                Shape::RecoveryGroupShare,
+                &[],
+                &other
             )
+            .map(|p| p.to_vec())
             .is_err()
         );
     }
@@ -2391,25 +2326,27 @@ mod ipc_surface_tests {
         // label with the session-bound AAD, and gets back the holder's own share.
         let encrypted = out["encryptedShare"].as_str().unwrap();
         let contribution: hpke_envelope::HpkeEnvelope = serde_json::from_str(encrypted).unwrap();
-        let aad = format!("sess-1:{}", holder.signing_pubkey_hex);
-        let opened = hpke_envelope::hpke_open(
-            &contribution,
+        let aad = ["sess-1".to_string(), holder.signing_pubkey_hex.clone()];
+        let opened = shape::open_from_hex(
             &hex::encode(recovering.encryption_seed),
-            LABEL_RECOVERY_SHARE_CONTRIBUTE,
-            aad.as_bytes(),
+            Shape::RecoveryShareContribution,
+            &aad,
+            &contribution,
         )
+        .map(|p| p.to_vec())
         .unwrap();
         assert_eq!(
             shamir_commit(opened[0], hex::encode(&opened[1..])).unwrap(),
             commitment
         );
         assert!(
-            hpke_envelope::hpke_open(
-                &contribution,
+            shape::open_from_hex(
                 &hex::encode(recovering.encryption_seed),
-                LABEL_RECOVERY_SHARE_CONTRIBUTE,
-                b"sess-2:wrong"
+                Shape::RecoveryShareContribution,
+                &["sess-2".to_string(), "wrong".to_string()],
+                &contribution
             )
+            .map(|p| p.to_vec())
             .is_err()
         );
 
@@ -2567,23 +2504,25 @@ mod ipc_surface_tests {
             .unwrap();
         let contribution: hpke_envelope::HpkeEnvelope =
             serde_json::from_str(out["encryptedShare"].as_str().unwrap()).unwrap();
-        let aad = format!("sess-1:{}", holder.signing_pubkey_hex);
+        let aad = ["sess-1".to_string(), holder.signing_pubkey_hex.clone()];
         assert!(
-            hpke_envelope::hpke_open(
-                &contribution,
+            shape::open_from_hex(
                 &hex::encode(recovering.encryption_seed),
-                LABEL_RECOVERY_SHARE_CONTRIBUTE,
-                aad.as_bytes()
+                Shape::RecoveryShareContribution,
+                &aad,
+                &contribution
             )
+            .map(|p| p.to_vec())
             .is_ok()
         );
         assert!(
-            hpke_envelope::hpke_open(
-                &contribution,
+            shape::open_from_hex(
                 &hex::encode(attacker.encryption_seed),
-                LABEL_RECOVERY_SHARE_CONTRIBUTE,
-                aad.as_bytes()
+                Shape::RecoveryShareContribution,
+                &aad,
+                &contribution
             )
+            .map(|p| p.to_vec())
             .is_err()
         );
     }
@@ -2718,12 +2657,13 @@ mod ipc_surface_tests {
             .zip(commitments)
         {
             let env: hpke_envelope::HpkeEnvelope = serde_json::from_value(env.clone()).unwrap();
-            let plain = hpke_envelope::hpke_open(
-                &env,
+            let plain = shape::open_from_hex(
                 &hex::encode(holder.encryption_seed),
-                LABEL_RECOVERY_GROUP_SHARE_WRAP,
+                Shape::RecoveryGroupShare,
                 &[],
+                &env,
             )
+            .map(|p| p.to_vec())
             .unwrap();
             let share = shamir::Share {
                 x: plain[0],
@@ -2766,7 +2706,14 @@ mod ipc_surface_tests {
             encryption::decrypt_hub_field(&sealed, &key_array, label).unwrap(),
             "night shift"
         );
-        assert!(encryption::decrypt_hub_field(&sealed, &key_array, LABEL_MESSAGE).is_err());
+        assert!(
+            encryption::decrypt_hub_field(
+                &sealed,
+                &key_array,
+                llamenos_core::labels::LABEL_MESSAGE
+            )
+            .is_err()
+        );
 
         // A locked state, or no hub id, yields no key at all.
         assert!(hub_key_array(&CryptoState::new(), "hub-a").is_err());
@@ -2963,6 +2910,7 @@ mod ipc_surface_tests {
 mod case_record_conformance_tests {
     use super::*;
     use llamenos_core::encryption::open_record_for_reader;
+    use llamenos_core::labels::LABEL_MESSAGE;
 
     const FIXTURE: &str =
         include_str!("../../../packages/crypto/tests/fixtures/case-record-vectors.json");

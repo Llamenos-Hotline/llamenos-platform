@@ -189,8 +189,8 @@ class WebSocketService @Inject constructor(
      * Store server event keys in Rust memory after authentication.
      * Keys never touch JVM memory.
      */
-    fun setServerEventKeys(currentHex: String, previousHex: String = "") {
-        cryptoService.setServerEventKeys(currentHex, previousHex)
+    fun setServerEventKeys(keys: List<org.llamenos.core.ServerEventKey>) {
+        cryptoService.setServerEventKeys(keys)
     }
 
     private val client = OkHttpClient.Builder()
@@ -470,12 +470,11 @@ class WebSocketService @Inject constructor(
 
     /**
      * Handle a relay event envelope. The envelope's `hubId` is the source of
-     * truth for attribution — the payload is encrypted with the server event
-     * key (not a per-hub key), so key-trial attribution cannot work here and
-     * the active hub is never used as a fallback.
+     * truth for attribution, and the active hub is never used as a fallback.
      *
-     * The server seals each frame under an epoch-scoped AAD, so the envelope's
-     * `epoch` is part of the key material for opening it.
+     * The frame is sealed under its hub's key for its epoch, with an AAD that
+     * binds hub, kind and epoch (#2999): a frame presented under another hub or
+     * kind does not open.
      */
     private fun handleEventMessage(obj: kotlinx.serialization.json.JsonObject) {
         val hubId = obj["hubId"]?.jsonPrimitive?.content ?: return
@@ -483,7 +482,7 @@ class WebSocketService @Inject constructor(
         val epoch = obj["epoch"]?.jsonPrimitive?.longOrNull ?: return
         val kind = obj["kind"]?.jsonPrimitive?.intOrNull ?: return
 
-        val plaintext = cryptoService.decryptServerEventWithStoredKeys(payload, epoch)
+        val plaintext = cryptoService.openServerEvent(hubId, kind, epoch, payload)
         if (plaintext != null) {
             dispatchEvent(hubId, kind, plaintext)
             return
@@ -492,7 +491,7 @@ class WebSocketService @Inject constructor(
         // `/auth/me`; a socket that outlives UTC midnight meets a newer epoch.
         scope.launch {
             if (refreshServerEventKeys()) {
-                cryptoService.decryptServerEventWithStoredKeys(payload, epoch)?.let {
+                cryptoService.openServerEvent(hubId, kind, epoch, payload)?.let {
                     dispatchEvent(hubId, kind, it)
                     return@launch
                 }
@@ -524,8 +523,8 @@ class WebSocketService @Inject constructor(
         lastKeyRefreshMs = now
         try {
             val me = apiService.getAuthMe()
-            val current = me.serverEventKeyHex ?: return@withLock false
-            cryptoService.setServerEventKeys(current, me.serverEventKeyPrevHex ?: "")
+            if (me.serverEventKeys.isEmpty()) return@withLock false
+            cryptoService.setServerEventKeys(me.toFfiKeys())
             true
         } catch (e: Exception) {
             android.util.Log.w("WebSocketService", "Event key refresh failed: ${e.message}")

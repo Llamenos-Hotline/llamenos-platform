@@ -7,60 +7,52 @@ import Foundation
 ///
 /// "The record was created" passes with every reader missing, which is how the
 /// defect survived. So these tests assert on the envelope set a record would be
-/// STORED with and then OPEN it with real HPKE as each member, using the
-/// reader secrets of the server-persisted fixture
-/// (`packages/crypto/tests/fixtures/case-record-vectors.json`, loaded as the
-/// wake key — a real opener on the same binary). Label and AAD are read from the
-/// fixture, never spelled in Swift. The "server" tiers are decoded from the JSON
-/// `GET /api/records/envelope-recipients` returns.
+/// STORED with and then OPEN it as each member through the production reader
+/// (`openCase`), each member being a real device this test generated and
+/// unlocks again through `mobileUnlock`. Nothing here names a label or an AAD:
+/// the crate's case module does (spec D1). The "server" tiers are decoded from
+/// the JSON `GET /api/records/envelope-recipients` returns.
 final class RecordReadersTests: XCTestCase {
 
-    // MARK: - Fixture
+    private static let pin = "12345678"
 
-    private struct Fixture: Decodable {
-        struct AAD: Decodable { let content: String; let keyWrap: String }
-        struct Reader: Decodable { let name: String; let x25519SecretHex: String; let x25519PubkeyHex: String }
-        struct Record: Decodable { let purpose: String; let label: String; let aadHex: AAD }
-        let readers: [Reader]
-        let records: [Record]
+    /// A device a member holds: its X25519 key and the PIN blob that unlocks it.
+    private struct Member {
+        let name: String
+        let blob: EncryptedDeviceKeys
+        var x25519PubkeyHex: String { blob.state.encryptionPubkeyHex }
     }
 
-    private func loadFixture() throws -> Fixture {
-        var dir = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { dir.deleteLastPathComponent() }   // Unit, Tests, ios, apps, <repo>
-        let url = dir.appendingPathComponent("packages/crypto/tests/fixtures/case-record-vectors.json")
-        return try JSONDecoder().decode(Fixture.self, from: try Data(contentsOf: url))
-    }
-
-    /// `volunteer` is the member the server puts on the tier; `admin` is the instance admin key.
+    /// `volunteer` is the member the server puts on the tier; `admin` and
+    /// `secondAdmin` are hub admins; `service` is loaded as the author.
     private struct World {
-        let volunteer: Fixture.Reader
-        let admin: Fixture.Reader
-        let summaryRecord: Fixture.Record
+        let volunteer: Member
+        let admin: Member
+        let secondAdmin: Member
+        let author: Member
         let service: CryptoService
-        var device: String { service.encryptionPubkeyHex ?? "" }
+        var device: String { author.x25519PubkeyHex }
+    }
+
+    private func member(_ name: String, _ service: CryptoService) throws -> Member {
+        Member(name: name, blob: try service.generateDeviceKeys(deviceId: UUID().uuidString, pin: Self.pin))
     }
 
     private func world() throws -> World {
-        let f = try loadFixture()
         let service = CryptoService()
-        _ = try service.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
-        return World(
-            volunteer: try XCTUnwrap(f.readers.first { $0.name == "volunteer" }),
-            admin: try XCTUnwrap(f.readers.first { $0.name == "admin" }),
-            summaryRecord: try XCTUnwrap(f.records.first { $0.purpose == "summary" }),
-            service: service
-        )
+        let volunteer = try member("volunteer", service)
+        let admin = try member("admin", service)
+        let secondAdmin = try member("second admin", service)
+        let author = try member("author", service)   // generated last: loaded now
+        return World(volunteer: volunteer, admin: admin, secondAdmin: secondAdmin, author: author, service: service)
     }
 
     override func setUp() {
         super.setUp()
         CryptoService().lock()
-        mobileClearWakeKey()
     }
 
     override func tearDown() {
-        mobileClearWakeKey()
         CryptoService().lock()
         super.tearDown()
     }
@@ -71,41 +63,10 @@ final class RecordReadersTests: XCTestCase {
         return try JSONDecoder().decode(EnvelopeRecipientsResponse.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
-    /// Open the sealed summary as the holder of `secretHex`, or throw when no
-    /// envelope in the set opens for them.
-    private func open(
-        _ sealed: (encryptedContent: String, envelopes: [RecipientEnvelope]),
-        secretHex: String,
-        pubkey: String?,
-        record: Fixture.Record
-    ) throws -> String {
-        try mobileLoadWakeKey(secretHex: secretHex)
-        // Without a pubkey the holder is not addressed by anything; try every envelope.
-        let candidates = sealed.envelopes.filter { pubkey == nil || $0.pubkey == pubkey }
-        var lastError: Error = CryptoServiceError.decryptionFailed("no envelope addressed to this key")
-        for env in candidates {
-            do {
-                let keyHex = try mobileHpkeOpenWithWakeKey(
-                    envelope: HpkeEnvelope(
-                        v: 3,
-                        labelId: try mobileLabelToId(label: record.label),
-                        enc: try mobileHexToBase64url(hexStr: env.enc),
-                        ct: try mobileHexToBase64url(hexStr: env.ct)
-                    ),
-                    expectedLabel: record.label,
-                    aadHex: record.aadHex.keyWrap
-                )
-                let plaintextHex = try mobileSymmetricDecrypt(ciphertextHex: sealed.encryptedContent, keyHex: keyHex, aadHex: record.aadHex.content)
-                let bytes = stride(from: 0, to: plaintextHex.count, by: 2).map { i -> UInt8 in
-                    let s = plaintextHex.index(plaintextHex.startIndex, offsetBy: i)
-                    return UInt8(plaintextHex[s..<plaintextHex.index(s, offsetBy: 2)], radix: 16)!
-                }
-                return String(decoding: bytes, as: UTF8.self)
-            } catch {
-                lastError = error
-            }
-        }
-        throw lastError
+    /// Open the sealed summary as `member`'s device, through the production reader.
+    private func open(_ sealed: (encryptedContent: String, envelopes: [RecipientEnvelope]), as member: Member, _ w: World) throws -> String {
+        _ = try w.service.unlockWithPin(data: member.blob, pin: Self.pin)
+        return try w.service.openCase(purpose: .summary, encryptedContent: sealed.encryptedContent, envelopes: sealed.envelopes)
     }
 
     private func sealSummary(_ w: World, readers: [String]) throws -> (encryptedContent: String, envelopes: [RecipientEnvelope]) {
@@ -133,7 +94,7 @@ final class RecordReadersTests: XCTestCase {
         let sealed = try sealSummary(w, readers: readers.summary)
 
         for member in [w.volunteer, w.admin] {
-            let opened = try open(sealed, secretHex: member.x25519SecretHex, pubkey: member.x25519PubkeyHex, record: w.summaryRecord)
+            let opened = try open(sealed, as: member, w)
             XCTAssertEqual(opened, "{\"title\":\"Welfare check\"}", "\(member.name) cannot open the stored summary")
         }
     }
@@ -148,7 +109,7 @@ final class RecordReadersTests: XCTestCase {
 
         XCTAssertFalse(sealed.envelopes.map(\.pubkey).contains(w.volunteer.x25519PubkeyHex))
         // No envelope is addressed to them, and their key opens none of the others.
-        XCTAssertThrowsError(try open(sealed, secretHex: w.volunteer.x25519SecretHex, pubkey: nil, record: w.summaryRecord))
+        XCTAssertThrowsError(try open(sealed, as: w.volunteer, w))
     }
 
     // MARK: - Failed lookup
@@ -164,7 +125,7 @@ final class RecordReadersTests: XCTestCase {
         let sealed = try sealSummary(w, readers: readers.summary)
         XCTAssertEqual(Set(sealed.envelopes.map(\.pubkey)), Set([w.device, w.admin.x25519PubkeyHex]))
         XCTAssertEqual(
-            try open(sealed, secretHex: w.admin.x25519SecretHex, pubkey: w.admin.x25519PubkeyHex, record: w.summaryRecord),
+            try open(sealed, as: w.admin, w),
             "{\"title\":\"Welfare check\"}"
         )
     }
@@ -199,7 +160,7 @@ final class RecordReadersTests: XCTestCase {
     /// #1035: a second admin is a reader too — the scalar `adminDecryptionPubkey` held one.
     func testEveryAdminOfTheHubCanOpenWhatWasStored() async throws {
         let w = try world()
-        let second = try XCTUnwrap(try loadFixture().readers.first { $0.name == "volunteer" })
+        let second = w.secondAdmin
         let admins = try HubAdminReaders.admins(
             from: [w.admin.x25519PubkeyHex.uppercased(), second.x25519PubkeyHex, w.admin.x25519PubkeyHex]
         )
@@ -211,7 +172,7 @@ final class RecordReadersTests: XCTestCase {
         let sealed = try sealSummary(w, readers: readers.summary)
         for admin in [w.admin, second] {
             XCTAssertEqual(
-                try open(sealed, secretHex: admin.x25519SecretHex, pubkey: admin.x25519PubkeyHex, record: w.summaryRecord),
+                try open(sealed, as: admin, w),
                 "{\"title\":\"Welfare check\"}",
                 "\(admin.name) cannot open what the hub's admins must be able to read"
             )

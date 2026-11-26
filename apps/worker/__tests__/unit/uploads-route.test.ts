@@ -41,7 +41,7 @@ const HUB = 'hub-1'
 // The hub's admin recipient: a file's key must be wrapped for it (#2174).
 const ADMIN = 'ad'.repeat(32)
 const NON_ADMIN = 'ee'.repeat(32)
-const fileKeyFor = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: 'wrapped-file-key' })
+const fileKeyFor = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: 'a3d5ebd6ebc146da4dd81d9c119edd1efadeca1c1e73fabd70b9c1addfcac598fc460778415adbd1ed098712511ab244' })
 /** An init body's key envelopes, sealed to the admin. */
 const SEALED = { recipientEnvelopes: [fileKeyFor(ADMIN), fileKeyFor(NON_ADMIN)] }
 const COMPLETED_AT = new Date('2026-11-05T12:00:00.000Z')

@@ -17,7 +17,8 @@ import {
 } from '../../simulation-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { decryptHubEvent } from '../../helpers/relay-crypto'
+import { fetchServerEventKeys, openRelayEvent } from '../../helpers/relay-crypto'
+import type { RelayEventKey } from '@protocol/schemas/auth'
 import {
   ADMIN_SEED,
   addHubMemberViaApi,
@@ -47,8 +48,8 @@ const RELAY_KEY = 'relay'
 interface RelayStepState {
   lastCapturedEvent?: CapturedEvent
   serverPubkey?: string
-  /** Server event key (hex) fetched from GET /api/auth/me */
-  serverEventKeyHex?: string
+  /** The subscriber's relay-event keys, per (hub, epoch), from GET /api/auth/me */
+  serverEventKeys?: RelayEventKey[]
   /** A user who belongs to a different hub only (never to the scenario hub) */
   otherHubMember?: { seedHex: string; hubId: string }
   /** A user who belongs to BOTH the scenario hub and a second hub */
@@ -116,14 +117,9 @@ Given('the test relay is connected and capturing events', async ({ request, worl
     hubId: state.hubId ?? undefined,
   })
 
-  // Fetch the server event key from /api/auth/me so we can decrypt relay events.
-  // This makes tests work regardless of what SERVER_SECRET the server uses.
-  if (!rs.serverEventKeyHex) {
-    const { status, data } = await apiGet<{ serverEventKeyHex?: string }>(request, '/auth/me', ADMIN_SEED)
-    if (status === 200 && data?.serverEventKeyHex) {
-      rs.serverEventKeyHex = data.serverEventKeyHex
-    }
-  }
+  // The subscriber's own relay-event keys (#2999): it is handed keys only for
+  // the hubs it belongs to, so these open exactly what it may read.
+  rs.serverEventKeys = await fetchServerEventKeys(request, subscriber.seedHex)
 })
 
 After(async ({ world }) => {
@@ -314,7 +310,7 @@ Then(
 Then('the decrypted event content type should be {string}', async ({ world }, expectedType: string) => {
   const rs = getRelayState(world)
   expect(rs.lastCapturedEvent).toBeTruthy()
-  const content = decryptEventPayload(rs.lastCapturedEvent!, rs.serverEventKeyHex)
+  const content = decryptEventPayload(rs.lastCapturedEvent!, rs.serverEventKeys)
   expect(content).toBeTruthy()
   expect(content!.type).toBe(expectedType)
 })
@@ -322,7 +318,7 @@ Then('the decrypted event content type should be {string}', async ({ world }, ex
 Then('the event should contain a {string} field', async ({ world }, fieldName: string) => {
   const rs = getRelayState(world)
   expect(rs.lastCapturedEvent).toBeTruthy()
-  const content = decryptEventPayload(rs.lastCapturedEvent!, rs.serverEventKeyHex)
+  const content = decryptEventPayload(rs.lastCapturedEvent!, rs.serverEventKeys)
   expect(content).toBeTruthy()
   expect(content![fieldName]).toBeDefined()
 })
@@ -332,7 +328,7 @@ Then(
   async ({ world }, fieldName: string, expectedValue: string) => {
     const rs = getRelayState(world)
     expect(rs.lastCapturedEvent).toBeTruthy()
-    const content = decryptEventPayload(rs.lastCapturedEvent!, rs.serverEventKeyHex)
+    const content = decryptEventPayload(rs.lastCapturedEvent!, rs.serverEventKeys)
     expect(content).toBeTruthy()
     expect(content![fieldName]).toBe(expectedValue)
   },
@@ -354,7 +350,7 @@ Then('the raw event payload should NOT be valid JSON', async ({ world }) => {
 Then('the decrypted event content should be valid JSON', async ({ world }) => {
   const rs = getRelayState(world)
   expect(rs.lastCapturedEvent).toBeTruthy()
-  const content = decryptEventPayload(rs.lastCapturedEvent!, rs.serverEventKeyHex)
+  const content = decryptEventPayload(rs.lastCapturedEvent!, rs.serverEventKeys)
   expect(content).toBeTruthy()
 })
 
@@ -419,32 +415,10 @@ Then("the event pubkey should match the server's configured pubkey", async ({ re
 // --- Helpers ---
 
 /**
- * Decrypt event payload using the server event key fetched from GET /api/auth/me.
- *
- * The server provides `serverEventKeyHex` (epoch-scoped AES-256-GCM key) to
- * authenticated clients. Using this key directly avoids any dependency on knowing
- * the server's SERVER_SECRET — the test works with any server configuration.
- *
- * Falls back to direct JSON parse for unencrypted content (shouldn't happen in prod).
+ * Open a captured frame with the subscriber's per-hub key (#2999). There is no
+ * plaintext fallback: the relay never sends an unsealed frame.
  */
-function decryptEventPayload(event: CapturedEvent, serverEventKeyHex?: string): Record<string, unknown> | null {
-  // Try direct JSON parse first (unencrypted fallback)
-  try {
-    return JSON.parse(event.payload) as Record<string, unknown>
-  } catch {
-    // Payload is encrypted — decrypt with server event key
-  }
-
-  if (!serverEventKeyHex) {
-    console.warn('[relay.steps] No serverEventKeyHex from /api/auth/me — cannot decrypt event payload')
-    return null
-  }
-
-  try {
-    const eventKey = hexToBytes(serverEventKeyHex)
-    return decryptHubEvent(event.payload, eventKey, event.epoch)
-  } catch (err) {
-    console.warn('[relay.steps] Failed to decrypt event payload:', err)
-    return null
-  }
+function decryptEventPayload(event: CapturedEvent, keys?: readonly RelayEventKey[]): Record<string, unknown> | null {
+  if (!keys) throw new Error('[relay.steps] no relay-event keys were fetched for the subscriber')
+  return openRelayEvent(keys, event)
 }

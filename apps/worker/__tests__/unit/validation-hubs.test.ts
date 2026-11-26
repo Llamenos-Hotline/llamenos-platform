@@ -248,7 +248,7 @@ describe('hubs route validation', () => {
         envelopes: [{
           pubkey: 'bad',
           enc: VALID_PUBKEY,
-          ct: 'deadbeef',
+          ct: '568386664572b902242e5e0954a38161b0ea9436ad014330e2fe9ff5fd8e83f8bb4f54f953e8dcc9b3bf4d4b083aa850',
         }],
       }, 'PUT')
       expect(res.status).toBe(400)
@@ -269,7 +269,7 @@ describe('hubs route validation', () => {
     it('rejects envelopes without the generation they were read at', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/hubs/hub-1/key', {
-        envelopes: [{ pubkey: VALID_PUBKEY, enc: VALID_PUBKEY_2, ct: 'deadbeef' }],
+        envelopes: [{ pubkey: VALID_PUBKEY, enc: VALID_PUBKEY_2, ct: '568386664572b902242e5e0954a38161b0ea9436ad014330e2fe9ff5fd8e83f8bb4f54f953e8dcc9b3bf4d4b083aa850' }],
       }, 'PUT')
       expect(res.status).toBe(400)
     })
@@ -280,7 +280,7 @@ describe('hubs route validation', () => {
         envelopes: [{
           pubkey: VALID_PUBKEY,
           enc: VALID_PUBKEY_2,
-          ct: 'deadbeef',
+          ct: '568386664572b902242e5e0954a38161b0ea9436ad014330e2fe9ff5fd8e83f8bb4f54f953e8dcc9b3bf4d4b083aa850',
         }],
         expectedGeneration: 0,
       }, 'PUT')

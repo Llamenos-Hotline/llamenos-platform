@@ -603,13 +603,12 @@ final class AppState {
             case .loaded(let response):
                 syncDisplayRole()
 
-                // Store server event keys in Rust CryptoState for epoch-aware decryption.
-                // current key is required; previous key is optional (used during epoch rotation).
-                if let keyHex = response.serverEventKeyHex {
-                    try? cryptoService.setServerEventKeys(
-                        currentHex: keyHex,
-                        previousHex: response.serverEventKeyPrevHex
-                    )
+                // Relay-event keys per (hub, epoch), for every hub this user
+                // belongs to (#2999), held in Rust CryptoState.
+                if let keys = response.serverEventKeys, !keys.isEmpty {
+                    try? cryptoService.setServerEventKeys(keys.map {
+                        ServerEventKey(hubId: $0.hubID, epoch: UInt64($0.epoch), keyHex: $0.keyHex)
+                    })
                 }
             }
         }
@@ -690,6 +689,6 @@ struct AuthMeResponse: Decodable {
     let name: String?
     let profileCompleted: Bool?
     let onBreak: Bool?
-    let serverEventKeyHex: String?
-    let serverEventKeyPrevHex: String?
+    /// One relay-event key per (hub, epoch), the generated protocol type (#2999).
+    let serverEventKeys: [RelayEventKey]?
 }

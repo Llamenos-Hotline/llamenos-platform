@@ -185,20 +185,20 @@ Feature: Crypto Interop
     And every label should be prefixed "llamenos:"
 
   @desktop @regression
-  Scenario: A key wrapped under one label cannot be unwrapped under another
+  Scenario: A key wrapped as one shape cannot be unwrapped as another
     Given I have an unlocked device
-    When I wrap a key under the label "LABEL_NOTE_KEY"
-    Then unwrapping it under the label "LABEL_NOTE_KEY" should succeed
-    And unwrapping it under the label "LABEL_MESSAGE" should be rejected
-    And unwrapping it under the label "LABEL_HUB_KEY_WRAP" should be rejected
+    When I wrap a key as the shape "note-key"
+    Then unwrapping it as the shape "note-key" should succeed
+    And unwrapping it as the shape "message-key" should be rejected
+    And unwrapping it as the shape "file-key" should be rejected
 
   @desktop @regression
   Scenario: The hub-key and PUK envelopes cannot be opened from the webview
     Given I have an unlocked device
-    When I wrap a key under the label "LABEL_HUB_KEY_WRAP"
-    Then unwrapping it under the label "LABEL_HUB_KEY_WRAP" should be refused as not openable from the webview
-    When I wrap a key under the label "LABEL_PUK_WRAP_TO_DEVICE"
-    Then unwrapping it under the label "LABEL_PUK_WRAP_TO_DEVICE" should be refused as not openable from the webview
+    When I wrap a key as the shape "hub-key"
+    Then unwrapping it as the shape "hub-key" should be refused as not openable from the webview
+    When I wrap a key as the shape "puk-seed"
+    Then unwrapping it as the shape "puk-seed" should be refused as not openable from the webview
 
   @desktop @regression
   Scenario: Creating a recovery group seals every share in Rust and returns no plaintext

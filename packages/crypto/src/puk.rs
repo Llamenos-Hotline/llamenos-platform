@@ -31,11 +31,9 @@ use sha2::Sha256;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::errors::CryptoError;
-use crate::hpke_envelope::{hpke_seal, HpkeEnvelope};
-use crate::labels::{
-    LABEL_PUK_DH, LABEL_PUK_PREVIOUS_GEN, LABEL_PUK_SECRETBOX, LABEL_PUK_SIGN,
-    LABEL_PUK_WRAP_TO_DEVICE,
-};
+use crate::hpke_envelope::HpkeEnvelope;
+use crate::labels::{LABEL_PUK_DH, LABEL_PUK_PREVIOUS_GEN, LABEL_PUK_SECRETBOX, LABEL_PUK_SIGN};
+use crate::shape::{seal_to, Shape};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -134,12 +132,11 @@ pub fn create_initial_puk(
     let state = derive_puk_subkeys(&seed, 1);
 
     // Seal seed to device
-    let aad = format!("{LABEL_PUK_WRAP_TO_DEVICE}:{device_id}");
-    let envelope = hpke_seal(
-        seed.as_slice(),
+    let envelope = seal_to(
         device_encryption_pubkey_hex,
-        LABEL_PUK_WRAP_TO_DEVICE,
-        aad.as_bytes(),
+        Shape::PukSeed,
+        &[device_id.to_string()],
+        seed.as_slice(),
     )?;
 
     Ok((state, *seed, envelope))
@@ -170,12 +167,11 @@ pub fn rotate_puk(
     // Seal new seed to each remaining device
     let mut device_envelopes = Vec::with_capacity(remaining_devices.len());
     for (device_id, pubkey_hex) in remaining_devices {
-        let aad = format!("{LABEL_PUK_WRAP_TO_DEVICE}:{device_id}");
-        let envelope = hpke_seal(
-            new_seed.as_slice(),
+        let envelope = seal_to(
             pubkey_hex,
-            LABEL_PUK_WRAP_TO_DEVICE,
-            aad.as_bytes(),
+            Shape::PukSeed,
+            std::slice::from_ref(device_id),
+            new_seed.as_slice(),
         )?;
         device_envelopes.push(DevicePukEnvelope {
             device_id: device_id.clone(),
@@ -316,6 +312,7 @@ pub fn generation_walk(
 mod tests {
     use super::*;
     use crate::hpke_envelope::{generate_x25519_keypair, hpke_open};
+    use crate::labels::LABEL_PUK_WRAP_TO_DEVICE;
 
     #[test]
     fn subkey_derivation_deterministic() {

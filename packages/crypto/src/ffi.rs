@@ -11,9 +11,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::encryption::{encrypt_note, random_bytes_32, EncryptedNote, KeyEnvelope};
+use crate::encryption::{encrypt_note, random_bytes_32, EncryptedNote};
 use crate::errors::CryptoError;
-use crate::hpke_envelope;
 
 /// RACE-12: Recovery key entry with TTL tracking.
 struct KeyEntry {
@@ -39,57 +38,6 @@ static NEXT_HANDLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 #[uniffi::export]
 pub fn random_bytes_hex() -> String {
     hex::encode(random_bytes_32())
-}
-
-/// Wrap a 32-byte symmetric key (hex) for a recipient using HPKE.
-/// Returns a wire-format KeyEnvelope (hex-encoded enc/ct).
-#[uniffi::export]
-pub fn hpke_wrap_key_hex(
-    key_hex: &str,
-    recipient_pubkey_hex: &str,
-    label: &str,
-) -> Result<KeyEnvelope, CryptoError> {
-    let key = crate::encryption::secret_from_hex(key_hex)?;
-    let aad = crate::envelope_aad::key_wrap_aad(label);
-    let envelope = hpke_envelope::hpke_seal_key(&key, recipient_pubkey_hex, label, &aad)?;
-    // Convert base64url → hex wire format
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-    let enc_bytes = URL_SAFE_NO_PAD
-        .decode(&envelope.enc)
-        .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url enc: {e}")))?;
-    let ct_bytes = URL_SAFE_NO_PAD
-        .decode(&envelope.ct)
-        .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url ct: {e}")))?;
-    Ok(KeyEnvelope {
-        enc: hex::encode(enc_bytes),
-        ct: hex::encode(ct_bytes),
-    })
-}
-
-/// Unwrap a 32-byte symmetric key from a wire-format KeyEnvelope using HPKE.
-#[uniffi::export]
-pub fn hpke_unwrap_key_hex(
-    envelope: &KeyEnvelope,
-    secret_key_hex: &str,
-    label: &str,
-) -> Result<String, CryptoError> {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-    let aad = crate::envelope_aad::key_wrap_aad(label);
-    let enc_bytes = hex::decode(&envelope.enc).map_err(CryptoError::HexError)?;
-    let ct_bytes = hex::decode(&envelope.ct).map_err(CryptoError::HexError)?;
-    let label_id = crate::labels::label_to_id(label)
-        .ok_or_else(|| CryptoError::InvalidInput(format!("unknown crypto label: {label}")))?;
-    let hpke_env = hpke_envelope::HpkeEnvelope {
-        v: 3,
-        label_id,
-        enc: URL_SAFE_NO_PAD.encode(&enc_bytes),
-        ct: URL_SAFE_NO_PAD.encode(&ct_bytes),
-    };
-    let key = hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, &aad)?;
-    let hex_out = hex::encode(key.as_ref());
-    Ok(hex_out)
 }
 
 /// Encrypt a note with a random per-note key, wrapped for the author and all admins.
@@ -197,59 +145,10 @@ pub fn compute_sas_code(shared_x_hex: &str) -> Result<String, CryptoError> {
     Ok(crate::provisioning::compute_sas(&shared_x))
 }
 
-/// Decrypt a server-encrypted event payload (AES-256-GCM).
-///
-/// Input: hex(nonce_12 + ciphertext), 32-byte key as hex.
-/// Output: decrypted UTF-8 string (JSON).
-///
-/// Used by mobile platforms to decrypt Nostr relay events encrypted
-/// with the server event key (from GET /api/auth/me serverEventKeyHex).
-#[uniffi::export]
-pub fn decrypt_server_event_hex(encrypted_hex: &str, key_hex: &str) -> Result<String, CryptoError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-
-    let data = hex::decode(encrypted_hex).map_err(CryptoError::HexError)?;
-    let key_bytes = crate::encryption::secret_from_hex(key_hex)?;
-    if data.len() < 28 {
-        return Err(CryptoError::InvalidCiphertext);
-    }
-
-    let nonce = Nonce::from_slice(&data[..12]);
-    let cipher = Aes256Gcm::new_from_slice(key_bytes.as_slice())
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    let plaintext = cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: &data[12..],
-                aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-            },
-        )
-        .map_err(|_| CryptoError::DecryptionFailed)?;
-
-    String::from_utf8(plaintext).map_err(|_| CryptoError::DecryptionFailed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encryption::random_bytes_32;
     use crate::hpke_envelope::generate_x25519_keypair;
-    use crate::labels::LABEL_NOTE_KEY;
-
-    #[test]
-    fn roundtrip_hpke_hex() {
-        let (sk_hex, pk_hex) = generate_x25519_keypair();
-        let key_hex = random_bytes_hex();
-        assert_eq!(key_hex.len(), 64);
-
-        let envelope = hpke_wrap_key_hex(&key_hex, &pk_hex, LABEL_NOTE_KEY).unwrap();
-        let recovered = hpke_unwrap_key_hex(&envelope, &sk_hex, LABEL_NOTE_KEY).unwrap();
-        assert_eq!(key_hex, recovered);
-    }
 
     #[test]
     fn encrypt_note_via_ffi() {
@@ -369,82 +268,6 @@ mod tests {
             compute_sas_code(&hex::encode([0x11u8; 31])),
             Err(CryptoError::InvalidSecretKey)
         ));
-    }
-
-    #[test]
-    fn roundtrip_server_event_decrypt() {
-        use aes_gcm::{
-            aead::{Aead, KeyInit, Payload},
-            Aes256Gcm, Nonce,
-        };
-
-        let key = random_bytes_32();
-        let key_hex = hex::encode(key);
-
-        let plaintext = r#"{"type":"call:ring","callId":"abc123"}"#;
-        let mut nonce_bytes = [0u8; 12];
-        getrandom::getrandom(&mut nonce_bytes).unwrap();
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
-        let ciphertext = cipher
-            .encrypt(
-                nonce,
-                Payload {
-                    msg: plaintext.as_bytes(),
-                    aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-                },
-            )
-            .unwrap();
-
-        let mut packed = Vec::with_capacity(12 + ciphertext.len());
-        packed.extend_from_slice(&nonce_bytes);
-        packed.extend_from_slice(&ciphertext);
-        let encrypted_hex = hex::encode(&packed);
-
-        let decrypted = decrypt_server_event_hex(&encrypted_hex, &key_hex).unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn server_event_decrypt_wrong_key_fails() {
-        use aes_gcm::{
-            aead::{Aead, KeyInit, Payload},
-            Aes256Gcm, Nonce,
-        };
-
-        let key = random_bytes_32();
-        let wrong_key = random_bytes_32();
-
-        let plaintext = r#"{"type":"call:ring"}"#;
-        let mut nonce_bytes = [0u8; 12];
-        getrandom::getrandom(&mut nonce_bytes).unwrap();
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
-        let ciphertext = cipher
-            .encrypt(
-                nonce,
-                Payload {
-                    msg: plaintext.as_bytes(),
-                    aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-                },
-            )
-            .unwrap();
-
-        let mut packed = Vec::with_capacity(12 + ciphertext.len());
-        packed.extend_from_slice(&nonce_bytes);
-        packed.extend_from_slice(&ciphertext);
-        let encrypted_hex = hex::encode(&packed);
-
-        let result = decrypt_server_event_hex(&encrypted_hex, &hex::encode(wrong_key));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn server_event_decrypt_too_short_fails() {
-        let key_hex = hex::encode(random_bytes_32());
-        let short_hex = hex::encode([0u8; 20]);
-        let result = decrypt_server_event_hex(&short_hex, &key_hex);
-        assert!(result.is_err());
     }
 
     #[test]

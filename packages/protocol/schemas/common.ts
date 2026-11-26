@@ -3,11 +3,31 @@ import { z } from 'zod'
 /** Hex-encoded 32-byte Nostr public key (x-only, 64 hex chars) */
 export const pubkeySchema = z.string().regex(/^[0-9a-f]{64}$/, 'Must be a 64-character hex string')
 
-/** Hex-encoded X25519 ephemeral public key (32 bytes → 64 lowercase hex chars). Hex is the sole wire encoding. */
-export const hpkeEncSchema = z.string().regex(
-  /^[0-9a-f]{64}$/,
-  'Must be a 64-character lowercase hex string',
-)
+/**
+ * Exactly `n` bytes as lowercase hex (spec D2). Uppercase, base64url and any
+ * other length are refused, never normalised — the same rule the crate
+ * enforces at its boundary (`hpke_envelope::decode_hex_exact`).
+ */
+export function hexBytes(n: number) {
+  return z.string().regex(
+    new RegExp(`^[0-9a-f]{${2 * n}}$`),
+    `Must be ${n} bytes of lowercase hex (${2 * n} characters)`,
+  )
+}
+
+/** At least `n` bytes as lowercase hex, even length (spec D2). */
+export function hexBytesMin(n: number) {
+  return z.string().regex(
+    new RegExp(`^(?:[0-9a-f]{2}){${n},}$`),
+    `Must be at least ${n} bytes of lowercase hex`,
+  )
+}
+
+/** The HPKE encapsulated key of the X25519 suite: 32 bytes, lowercase hex. */
+export const hpkeEncSchema = hexBytes(32)
+
+/** A 32-byte key HPKE-wrapped: the key plus the 16-byte AES-GCM tag, lowercase hex. */
+export const hpkeKeyWrapCtSchema = hexBytes(48)
 
 /** @deprecated Use hpkeEncSchema — kept only for schema migration references */
 export const eciesPubkeySchema = hpkeEncSchema
@@ -109,33 +129,36 @@ export const paginatedMeta = {
 export const okResponseSchema = z.object({ ok: z.boolean() })
 export type OkResponse = z.infer<typeof okResponseSchema>
 
-/** HPKE recipient envelope — used across notes, messages, files */
+/**
+ * The one HPKE envelope (spec D1): `{enc, ct}`, lowercase hex, no `v` and no
+ * `labelId` — the label is the shape's, supplied by the crate. This is a 32-byte
+ * key wrap, so `ct` is exactly 48 bytes.
+ */
+export const keyEnvelopeSchema = z.object({
+  enc: hpkeEncSchema,
+  ct: hpkeKeyWrapCtSchema,
+})
+
+/** A key envelope addressed to one reader — used across notes, messages, files. */
 export const recipientEnvelopeSchema = z.object({
   pubkey: pubkeySchema,
   enc: hpkeEncSchema,
-  // HPKE-wrapped 32-byte symmetric key: 48 bytes ciphertext + base64 overhead ≤ 512 chars
-  ct: z.string().min(1).max(512),
-})
-
-/** Key envelope — used for note author copies (no pubkey) */
-export const keyEnvelopeSchema = z.object({
-  enc: hpkeEncSchema,
-  ct: z.string().min(1).max(512),
+  ct: hpkeKeyWrapCtSchema,
 })
 
 /** File key envelope — used for file uploads */
 export const fileKeyEnvelopeSchema = z.object({
   pubkey: pubkeySchema,
   enc: hpkeEncSchema,
-  ct: z.string().min(1).max(512),
+  ct: hpkeKeyWrapCtSchema,
 })
 
 /** Encrypted metadata entry — used for file uploads */
 export const encryptedMetadataEntrySchema = z.object({
   pubkey: z.string().min(1),
-  encryptedContent: z.string().min(1).max(4096),
+  encryptedContent: hexBytesMin(28).max(4096),
   enc: hpkeEncSchema,
-  ct: z.string().min(1).max(512),
+  ct: hpkeKeyWrapCtSchema,
 })
 
 // --- Inferred types (canonical source of truth for envelope types) ---
@@ -143,7 +166,7 @@ export const encryptedMetadataEntrySchema = z.object({
 /** HPKE-wrapped symmetric key for one recipient. */
 export type RecipientEnvelope = z.infer<typeof recipientEnvelopeSchema>
 
-/** Key envelope — note author copies (no pubkey). @deprecated Use RecipientEnvelope. */
+/** The one HPKE envelope: `{enc, ct}` (spec D1). */
 export type KeyEnvelope = z.infer<typeof keyEnvelopeSchema>
 
 /** @deprecated Use RecipientEnvelope instead. */

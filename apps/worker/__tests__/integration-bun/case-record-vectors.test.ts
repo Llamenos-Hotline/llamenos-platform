@@ -19,9 +19,8 @@
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { caseOpen, hpkeOpen, symmetricDecrypt, type CasePurpose, type EncryptedCaseCiphertext } from '@llamenos/crypto/ffi'
-import { LABEL_MESSAGE } from '@shared/crypto-labels'
-import { hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { caseOpen, contentOpen, shapeOpen, type CasePurpose, type EncryptedCaseCiphertext } from '@llamenos/crypto/ffi'
+import { hexToBytes } from '@shared/encoding'
 import { sealCaseForReaders, type SampleReader } from '../../lib/sample-crypto'
 
 interface Fixture {
@@ -50,13 +49,8 @@ describe('case-record vectors through the server binding', () => {
       const env = rec.readerEnvelopes.find(e => e.pubkey === reader.x25519PubkeyHex)
       if (!env) throw new Error(`the fixture sealed no ${rec.name} envelope to ${reader.name}`)
       expect(() => {
-        const key = hpkeOpen(
-          hexToBytes(reader.x25519SecretHex),
-          new Uint8Array([...hexToBytes(env.enc), ...hexToBytes(env.ct)]),
-          utf8ToBytes(LABEL_MESSAGE),
-          new Uint8Array(0),
-        )
-        symmetricDecrypt(key, hexToBytes(rec.encryptedContent), new Uint8Array(0))
+        const key = shapeOpen('message-key', hexToBytes(reader.x25519SecretHex), [], env)
+        contentOpen('message-key', key, hexToBytes(rec.encryptedContent))
       }).toThrow()
     })
 

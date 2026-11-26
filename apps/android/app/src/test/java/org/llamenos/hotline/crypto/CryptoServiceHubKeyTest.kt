@@ -20,8 +20,8 @@ import org.llamenos.hotline.model.HubKeyEnvelopeResponseEnvelope
  * native lib is absent — we inject test state directly via
  * [CryptoService.injectHubKeyForTest] to verify cache semantics.
  *
- * Decryption methods ([decryptHubEvent], [decryptHubEventTrial],
- * [decryptServerEvent], [decryptServerEventWithStoredKeys]) return null when
+ * Decryption methods ([openServerEvent])
+ * return null when
  * native lib is absent — ensuring graceful degradation.
  */
 class CryptoServiceHubKeyTest {
@@ -107,40 +107,10 @@ class CryptoServiceHubKeyTest {
 
     // ---- decryptHubEvent: graceful null without native lib ----
 
-    @Test
-    fun `decryptHubEvent returns null without native lib`() {
-        val result = cryptoService.decryptHubEvent("deadbeef", "hub-1")
-        assertNull(result)
-    }
-
-    // ---- decryptHubEventTrial: graceful null without native lib ----
-
-    @Test
-    fun `decryptHubEventTrial returns null without native lib`() {
-        val result = cryptoService.decryptHubEventTrial("deadbeef")
-        assertNull(result)
-    }
-
-    // ---- decryptServerEvent: graceful null without native lib ----
-
-    @Test
-    fun `decryptServerEvent returns null without native lib`() {
-        val result = cryptoService.decryptServerEvent("deadbeef", "aa".repeat(32))
-        assertNull(result)
-    }
-
-    // ---- decryptServerEventWithStoredKeys: graceful null without native lib ----
-
-    @Test
-    fun `decryptServerEventWithStoredKeys returns null without native lib`() {
-        val result = cryptoService.decryptServerEventWithStoredKeys("deadbeef", 1L)
-        assertNull(result)
-    }
-
-    // ---- setServerEventKeys: hard-fail without native lib ----
-
     @Test(expected = IllegalStateException::class)
     fun `setServerEventKeys throws without native lib`() {
-        cryptoService.setServerEventKeys("aa".repeat(32))
+        cryptoService.setServerEventKeys(
+            listOf(org.llamenos.core.ServerEventKey(hubId = "hub-1", epoch = 1uL, keyHex = "aa".repeat(32))),
+        )
     }
 }

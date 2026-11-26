@@ -65,7 +65,7 @@ Given('a record exists with blindIndexes containing {string} for field {string}'
       entityTypeId: state.entityTypeId,
       statusHash: 'active',
       encryptedSummary: `enc-${token}`,
-      summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'ct' }],
+      summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'c'.repeat(96) }],
       blindIndexes: { [field]: [token] },
     })
     expect(res.status).toBe(201)
@@ -116,7 +116,7 @@ Given('a record exists with start_date blind indexes for {string}',
       entityTypeId: state.entityTypeId,
       statusHash: 'active',
       encryptedSummary: `enc-${token}`,
-      summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'ct' }],
+      summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'c'.repeat(96) }],
       blindIndexes: { start_date: [token] },
     })
     expect(res.status).toBe(201)
@@ -160,7 +160,7 @@ Given('{int} events exist without deprecated_at set', async ({ request, world, w
       eventTypeHash: 'legacy',
       startDate: new Date().toISOString(),
       encryptedDetails: `legacy-event-${Date.now()}-${i}`,
-      detailEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'ct' }],
+      detailEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'c'.repeat(96) }],
     })
     expect(res.status).toBe(201)
     state.createdRecordIds ??= []
@@ -174,7 +174,7 @@ When('the admin creates a record with that entity type', async ({ request, world
     entityTypeId: state.entityTypeId,
     statusHash: 'active',
     encryptedSummary: 'encrypted-test-summary',
-    summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'ct' }],
+    summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'c'.repeat(96) }],
   })
   expect(res.status).toBe(201)
   state.recordId = res.data.id

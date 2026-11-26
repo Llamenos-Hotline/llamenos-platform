@@ -2,10 +2,9 @@ import { describe, it, expect, vi } from 'vitest'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { contentOpen, shapeOpen, type Shape } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
-import { contentAad, keyWrapAad } from '@shared/envelope-aad'
+import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
 import {
   SAMPLE_ACCOUNTS,
   SAMPLE_CALLS, SAMPLE_CASES, SAMPLE_CONTACTS, SAMPLE_CONVERSATIONS, SAMPLE_HUB, SAMPLE_SHIFTS,
@@ -21,12 +20,11 @@ const DEV_SERVER = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' } as
 const seedHexToEd25519Pubkey = (seedHex: string): string => bytesToHex(ed25519.getPublicKey(hexToBytes(seedHex)))
 
 /** Open a sealed item the way a sample account's device would: derive its X25519 secret, open the key wrap, decrypt. */
-function openAs(name: string, encryptedContent: string, envelope: { enc: string; ct: string }, label: string): string {
+function openAs(name: string, encryptedContent: string, envelope: { enc: string; ct: string }, shape: Shape): string {
   const identity = sampleIdentityByName(DEV_SERVER, name)
   const encSecret = hkdf(sha256, hexToBytes(identity.seedHex), new Uint8Array(0), utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
-  const wrapped = new Uint8Array([...hexToBytes(envelope.enc), ...Buffer.from(envelope.ct, 'base64url')])
-  const contentKey = hpkeOpen(encSecret, wrapped, utf8ToBytes(label), keyWrapAad(label))
-  return new TextDecoder().decode(symmetricDecrypt(contentKey, hexToBytes(encryptedContent), contentAad(label)))
+  const contentKey = shapeOpen(shape, encSecret, [], { enc: envelope.enc, ct: envelope.ct })
+  return new TextDecoder().decode(contentOpen(shape, contentKey, hexToBytes(encryptedContent)))
 }
 
 describe('sample dataset content', () => {
@@ -120,38 +118,22 @@ describe('sample identities', () => {
 describe('sealForReaders', () => {
   it('produces the desktop wire format and each reader can open it', () => {
     const [maria, admin] = [sampleReader(sampleIdentityByName(DEV_SERVER, 'Maria Santos')), sampleReader(sampleIdentityByName(DEV_SERVER, 'Sample Admin'))]
-    const sealed = sealForReaders('hello sample', [maria, admin], LABEL_NOTE_KEY)
+    const sealed = sealForReaders('hello sample', [maria, admin], 'note-key')
 
     expect(sealed.encryptedContent).toMatch(/^[0-9a-f]+$/)
     expect(sealed.envelopes.map(e => e.pubkey)).toEqual([maria.pubkey, admin.pubkey])
     for (const envelope of sealed.envelopes) {
       expect(envelope.enc).toMatch(/^[0-9a-f]{64}$/)
-      expect(envelope.ct).toMatch(/^[A-Za-z0-9_-]+$/) // base64url, no padding
+      expect(envelope.ct).toMatch(/^[0-9a-f]{96}$/) // lowercase hex, 48 bytes (spec D2)
     }
-    expect(openAs('Maria Santos', sealed.encryptedContent, sealed.envelopes[0], LABEL_NOTE_KEY)).toBe('hello sample')
-    expect(openAs('Sample Admin', sealed.encryptedContent, sealed.envelopes[1], LABEL_NOTE_KEY)).toBe('hello sample')
+    expect(openAs('Maria Santos', sealed.encryptedContent, sealed.envelopes[0], 'note-key')).toBe('hello sample')
+    expect(openAs('Sample Admin', sealed.encryptedContent, sealed.envelopes[1], 'note-key')).toBe('hello sample')
   })
 
-  it('does not open under a different label (domain separation)', () => {
+  it('does not open as a different shape (domain separation)', () => {
     const admin = sampleReader(sampleIdentityByName(DEV_SERVER, 'Sample Admin'))
-    const sealed = sealForReaders('secret', [admin], LABEL_NOTE_KEY)
-    expect(() => openAs('Sample Admin', sealed.encryptedContent, sealed.envelopes[0], LABEL_CALL_META)).toThrow()
-  })
-
-  it('does not open under an empty AAD — the pre-convention desktop format is dead', () => {
-    // The sealer once bound no AAD at either layer, which made sample notes
-    // unreadable to every canonical implementation (Rust `encrypt_note`, the
-    // mobile clients, the desktop). Pin the convention: both layers carry the
-    // canonical AAD, and empty AAD fails at the HPKE tag first.
-    const admin = sampleReader(sampleIdentityByName(DEV_SERVER, 'Sample Admin'))
-    const sealed = sealForReaders('secret', [admin], LABEL_NOTE_KEY)
-    const identity = sampleIdentityByName(DEV_SERVER, 'Sample Admin')
-    const encSecret = hkdf(sha256, hexToBytes(identity.seedHex), new Uint8Array(0), utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
-    const wrapped = new Uint8Array([...hexToBytes(sealed.envelopes[0].enc), ...Buffer.from(sealed.envelopes[0].ct, 'base64url')])
-
-    expect(() => hpkeOpen(encSecret, wrapped, utf8ToBytes(LABEL_NOTE_KEY), new Uint8Array(0))).toThrow()
-    const contentKey = hpkeOpen(encSecret, wrapped, utf8ToBytes(LABEL_NOTE_KEY), keyWrapAad(LABEL_NOTE_KEY))
-    expect(() => symmetricDecrypt(contentKey, hexToBytes(sealed.encryptedContent), new Uint8Array(0))).toThrow()
+    const sealed = sealForReaders('secret', [admin], 'note-key')
+    expect(() => openAs('Sample Admin', sealed.encryptedContent, sealed.envelopes[0], 'call-meta-key')).toThrow()
   })
 
   it('seals to the X25519 key the client derives from the signing seed', () => {
@@ -254,10 +236,10 @@ describe('seedSampleDataset', () => {
       const input = args[0] as { encryptedContent: string; authorEnvelope: { enc: string; ct: string }; adminEnvelopes: Array<{ pubkey: string; enc: string; ct: string }> }
       const call = noted[i]
       const text = JSON.stringify({ text: call.note })
-      expect(openAs(names[call.answeredBy!], input.encryptedContent, input.authorEnvelope, LABEL_NOTE_KEY)).toBe(text)
+      expect(openAs(names[call.answeredBy!], input.encryptedContent, input.authorEnvelope, 'note-key')).toBe(text)
       expect(input.adminEnvelopes).toHaveLength(1)
       expect(input.adminEnvelopes[0].pubkey).toBe(sampleIdentityByName(DEV_SERVER, 'Sample Admin').pubkey)
-      expect(openAs('Sample Admin', input.encryptedContent, input.adminEnvelopes[0], LABEL_NOTE_KEY)).toBe(text)
+      expect(openAs('Sample Admin', input.encryptedContent, input.adminEnvelopes[0], 'note-key')).toBe(text)
     })
   })
 

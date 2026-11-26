@@ -106,6 +106,10 @@ required-features = ["uniffi-bindgen"]
 
 [dev-dependencies]
 serde_json = "1"
+# Seeded ChaCha20 RNG for the cross-platform v2 vectors (spec D15). Test-only:
+# it implements hpke's rand_core 0.9 so every ephemeral key, nonce and padding
+# byte in `tests/fixtures/v2/` is reproducible. Never a normal dependency.
+rand_chacha = "0.9"
 
 [profile.release]
 lto = true

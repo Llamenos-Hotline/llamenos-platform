@@ -402,8 +402,8 @@ final class WakeKeyService {
     /// Decrypt an HPKE-encrypted push notification payload using the wake private key.
     /// This is called by the notification service extension when a push arrives.
     ///
-    /// The server encrypts the push payload using HPKE seal with the wake public key
-    /// and the CryptoLabels.LABEL_PUSH_WAKE label. The payload is a JSON-encoded HpkeEnvelope.
+    /// The server seals the push payload to the wake public key as the push-wake
+    /// shape. The payload is the JSON envelope `{enc, ct}`.
     ///
     /// - Parameter envelopeJSON: JSON string of the HPKE envelope from the push payload.
     /// - Returns: The decrypted plaintext string (typically JSON).
@@ -416,14 +416,11 @@ final class WakeKeyService {
 
         let envelope = try JSONDecoder().decode(HpkeEnvelope.self, from: data)
 
-        // Use the HPKE open function with the wake private key
-        // Note: This calls into the Rust FFI which needs the wake private key directly,
-        // not the device key state.
-        let plaintextHex = try mobileHpkeOpen(
-            envelope: envelope,
-            expectedLabel: CryptoLabels.LABEL_PUSH_WAKE,
-            aadHex: ""
-        )
+        // Open with the WAKE key, not the device key: load it into Rust state,
+        // then open as the push-wake shape (the crate supplies label and AAD).
+        // The device key opened this before, so no wake payload could decrypt.
+        try mobileLoadWakeKey(secretHex: privateKeyHex)
+        let plaintextHex = try mobileShapeOpenWithWakeKey(shape: .pushWake, envelope: envelope)
 
         guard let resultData = hexToData(plaintextHex),
               let result = String(data: resultData, encoding: .utf8) else {

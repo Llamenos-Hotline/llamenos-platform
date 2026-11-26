@@ -143,7 +143,7 @@ interface HubData { recordId: string; reportId: string; sourceId: string }
 const data = {} as Record<'A' | 'B', HubData>
 
 async function seedHub(hubId: string, owner: Actor, numbers: string[], sealedTo: string[]): Promise<HubData> {
-  const envelopes = sealedTo.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(32) }))
+  const envelopes = sealedTo.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }))
   const [record] = await db.insert(caseRecords).values({
     hubId, entityTypeId: ENTITY_TYPE, caseNumber: numbers[0], statusHash: 'open', createdBy: owner.pubkey,
     summaryEnvelopes: envelopes,

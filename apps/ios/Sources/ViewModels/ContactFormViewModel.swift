@@ -50,7 +50,7 @@ final class ContactFormViewModel {
         let summaryResult = try cryptoService.encryptContactData(
             jsonPayload: summaryJSON,
             readerPubkeys: readerPubkeys,
-            label: CryptoLabels.LABEL_CONTACT_PROFILE
+            shape: .contactProfileKey
         )
 
         // Encrypt PII tier (identifiers, notes)
@@ -60,7 +60,7 @@ final class ContactFormViewModel {
             piiResult = try cryptoService.encryptContactData(
                 jsonPayload: piiJSON,
                 readerPubkeys: readerPubkeys,
-                label: CryptoLabels.LABEL_CONTACT_ID
+                shape: .contactIdKey
             )
         } else {
             piiResult = nil
@@ -113,7 +113,7 @@ final class ContactFormViewModel {
         let summaryResult = try cryptoService.encryptContactData(
             jsonPayload: summaryJSON,
             readerPubkeys: readerPubkeys,
-            label: CryptoLabels.LABEL_CONTACT_PROFILE
+            shape: .contactProfileKey
         )
 
         // Encrypt PII
@@ -123,7 +123,7 @@ final class ContactFormViewModel {
             piiResult = try cryptoService.encryptContactData(
                 jsonPayload: piiJSON,
                 readerPubkeys: readerPubkeys,
-                label: CryptoLabels.LABEL_CONTACT_ID
+                shape: .contactIdKey
             )
         } else {
             piiResult = nil

@@ -1733,7 +1733,7 @@ export function adminDeviceKey(): string {
  * ({@link uploadFileViaApi}, {@link createContactViaApi}).
  */
 export function adminPlaceholderEnvelopes(): Array<{ pubkey: string; enc: string; ct: string }> {
-  return [{ pubkey: adminDeviceKey(), enc: 'b'.repeat(64), ct: 'c'.repeat(32) }]
+  return [{ pubkey: adminDeviceKey(), enc: 'b'.repeat(64), ct: 'c'.repeat(96) }]
 }
 
 /** {@link realEnvelope} for the writer and the admin. */

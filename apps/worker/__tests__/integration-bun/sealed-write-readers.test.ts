@@ -129,7 +129,7 @@ async function call(actor: Actor, hubId: string, method: string, path: string, b
   return { status: res.status, text, json }
 }
 
-const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(32) }))
+const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }))
 
 // ── Seed ───────────────────────────────────────────────────────────
 

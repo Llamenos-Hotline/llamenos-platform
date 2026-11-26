@@ -196,7 +196,8 @@ final class APIServiceWireFormatTests: XCTestCase {
     // One per at-risk call site. Values are fixed strings so the bytes are stable.
 
     private static let enc = String(repeating: "cd", count: 32)
-    private static let ct = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    // A 48-byte key wrap, lowercase hex (spec D2); also long enough to stand in for content.
+    private static let ct = String(repeating: "a1b2c3d4e5f60718293a4b5c6d7e8f90", count: 3)
     private static let pubkey = String(repeating: "ab", count: 32)
 
     private static let recipient = RecipientEnvelope(ct: ct, enc: enc, pubkey: pubkey)

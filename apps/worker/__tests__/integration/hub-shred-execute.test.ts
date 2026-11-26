@@ -11,7 +11,6 @@
 import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { insertHubFounder } from '../helpers/hub-founder'
-import { LABEL_CALL_META } from '@shared/crypto-labels'
 import * as schema from '../../db/schema'
 import { encryptCallRecordForStorage, encryptMessageForStorage } from '../../lib/crypto'
 
@@ -149,8 +148,7 @@ describe('HubShredService.execute', () => {
       })
       .returning()
 
-    const label = LABEL_CALL_META
-    expect(readSealed(admin.secret, sealed.adminEnvelopes[0]!, sealed.encryptedContent, label))
+    expect(readSealed(admin.secret, sealed.adminEnvelopes[0]!, sealed.encryptedContent, 'call-meta-key'))
       .toContain('5555')
 
     await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)

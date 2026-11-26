@@ -22,6 +22,14 @@ const MIN_BUCKET: usize = 512;
 ///
 /// Output format: `[4-byte LE length][plaintext][random padding]`
 pub fn pad_to_bucket(plaintext: &[u8]) -> Vec<u8> {
+    pad_to_bucket_with(plaintext, |tail| {
+        getrandom::getrandom(tail).expect("getrandom failed")
+    })
+}
+
+/// [`pad_to_bucket`] with the padding filled by `fill`, so the cross-platform
+/// vectors can be generated from a fixed seed. Production uses [`pad_to_bucket`].
+pub(crate) fn pad_to_bucket_with(plaintext: &[u8], mut fill: impl FnMut(&mut [u8])) -> Vec<u8> {
     let total_needed = 4 + plaintext.len();
     let mut bucket = MIN_BUCKET;
     while bucket < total_needed {
@@ -40,7 +48,7 @@ pub fn pad_to_bucket(plaintext: &[u8]) -> Vec<u8> {
     // Fill padding region with random bytes
     let padding_start = 4 + plaintext.len();
     if padding_start < bucket {
-        getrandom::getrandom(&mut out[padding_start..]).expect("getrandom failed");
+        fill(&mut out[padding_start..]);
     }
 
     out

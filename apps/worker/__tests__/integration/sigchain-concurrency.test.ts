@@ -421,7 +421,7 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
 })
 
 describe('revoking a device removes its PUK envelopes and its authorisation (#1050)', () => {
-  const hpke = { v: 3, labelId: 1, enc: 'ZW5j', ct: 'Y3Q' }
+  const hpke = { enc: 'ab'.repeat(32), ct: 'cd'.repeat(48) }
 
   it('deletes the revoked device\'s envelopes and refuses new ones, though the revoke link names the registry id', async () => {
     const genesis = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload('dev-1')))

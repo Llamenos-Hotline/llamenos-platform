@@ -82,7 +82,8 @@ class NotesViewModelRecipientsTest {
                 envelopes = recipients.map { pub ->
                     NoteEnvelope(
                         recipientPubkey = pub,
-                        hpkeEnvelope = HpkeEnvelope(v = 3, labelId = 0, enc = "enc-$pub", ct = "ct-$pub"),
+                        hpkeEnvelope = HpkeEnvelope(
+                enc = "enc-$pub", ct = "ct-$pub"),
                     )
                 },
             )

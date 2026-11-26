@@ -17,7 +17,7 @@ describe('ContactsService', () => {
       nameHash: 'name-hash',
       trigramTokens: ['tok1'],
       encryptedSummary: 'enc-summary',
-      summaryEnvelopes: [{ v: 1, enc: 'abc', ct: 'def' }],
+      summaryEnvelopes: [{ v: 1, enc: '14e9ef511f3a7447ca78bb1517d8bd937cc5146021d6102c55290ce6e93995f3', ct: 'c698a9f9fa9a82f2b1009189ef22a4459e40a02dd7ee8d8857862df388651d7fff035fa977da6ad24a832e192519b057' }],
       encryptedPii: null,
       piiEnvelopes: null,
       contactTypeHash: null,

@@ -11,13 +11,10 @@
  *
  * Circuit breaker: 3 consecutive extraction failures auto-pause the connection.
  */
-import { hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { contentAad, keyWrapAad } from '@shared/envelope-aad'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { hexToBytes } from '@shared/encoding'
+import { contentOpen, shapeOpen } from '@llamenos/crypto/ffi'
 import {
   LABEL_FIREHOSE_AGENT_SEAL,
-  LABEL_FIREHOSE_BUFFER_ENCRYPT,
-  LABEL_MESSAGE,
 } from '@shared/crypto-labels'
 import { KIND_FIREHOSE_REPORT } from '@shared/event-kinds'
 import { bufferEnvelopeJsonSchema } from '@protocol/schemas/firehose'
@@ -496,16 +493,7 @@ export class FirehoseAgentService {
       ct: string
     }
 
-    const envelope = new Uint8Array(hexToBytes(sealed.enc).length + hexToBytes(sealed.ct).length)
-    envelope.set(hexToBytes(sealed.enc))
-    envelope.set(hexToBytes(sealed.ct), 32)
-
-    return hpkeOpen(
-      secretKey,
-      envelope,
-      utf8ToBytes(LABEL_FIREHOSE_BUFFER_ENCRYPT),
-      keyWrapAad(LABEL_FIREHOSE_BUFFER_ENCRYPT),
-    )
+    return shapeOpen('firehose-window-key', secretKey, [], sealed)
   }
 
   /**
@@ -513,37 +501,22 @@ export class FirehoseAgentService {
    * Format: hex-encoded nonce(12) + ciphertext + tag(16) (AES-256-GCM).
    */
   private decryptWithWindowKey(encryptedHex: string, windowKey: Uint8Array): string {
-    const bytes = hexToBytes(encryptedHex)
-    const plaintext = symmetricDecrypt(windowKey, bytes, contentAad(LABEL_FIREHOSE_BUFFER_ENCRYPT))
+    const plaintext = contentOpen('firehose-window-key', windowKey, hexToBytes(encryptedHex))
     return new TextDecoder().decode(plaintext)
   }
 
   /**
    * Decrypt an HPKE envelope-encrypted value using the agent's secret key.
-   * Inverse of encryptMessageForStorage: LABEL_MESSAGE as HPKE info, no AAD.
+   * Inverse of encryptMessageForStorage: the crate's 'message-key' shape.
    */
   private decryptEnvelope(
     encryptedHex: string,
     envelope: RecipientEnvelope,
     secretKey: Uint8Array,
   ): string {
-    const labelBytes = utf8ToBytes(LABEL_MESSAGE)
-    const noAad = new Uint8Array(0)
-
-    // Reconstruct the HPKE envelope: enc(32) || ct
-    const encBytes = hexToBytes(envelope.enc)
-    const ctBytes = hexToBytes(envelope.ct)
-    const hpkeEnvelope = new Uint8Array(encBytes.length + ctBytes.length)
-    hpkeEnvelope.set(encBytes)
-    hpkeEnvelope.set(ctBytes, encBytes.length)
-
-    // Unwrap the per-message key via HPKE
-    const messageKey = hpkeOpen(secretKey, hpkeEnvelope, labelBytes, noAad)
-
-    // Decrypt the content with AES-256-GCM
-    const contentBytes = hexToBytes(encryptedHex)
-    const plaintext = symmetricDecrypt(messageKey, contentBytes, noAad)
-
+    const messageKey = shapeOpen('message-key', secretKey, [], { enc: envelope.enc, ct: envelope.ct })
+    const plaintext = contentOpen('message-key', messageKey, hexToBytes(encryptedHex))
+    messageKey.fill(0)
     return new TextDecoder().decode(plaintext)
   }
 

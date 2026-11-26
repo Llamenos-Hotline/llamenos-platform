@@ -61,7 +61,7 @@ final class RolesAPIService: RolesAPIServiceProtocol, @unchecked Sendable {
 /// - hub-owned roles (`hubId` set) are sealed under that hub's key with
 ///   LABEL_HUB_ROLE_ENCRYPT — opened in Rust by hub id, the key never enters Swift;
 /// - platform roles keep them in per-admin HPKE envelopes
-///   (LABEL_PLATFORM_ROLE_NAME_ENCRYPT / _DESC_ENCRYPT, AAD "{roleId}:name" /
+///   (the platform-role-name / -description shapes, bound to the role id —
 ///   "{roleId}:description").
 /// A role this device cannot open shows its slug, which for a custom role IS its
 /// id — never an empty string that would read as "unnamed".
@@ -218,22 +218,19 @@ final class RolesViewModel {
         )
     }
 
-    /// `encrypted` is the server string: JSON of the Rust-serialized
-    /// HpkeEnvelope ({v, labelId, enc, ct} with base64url enc/ct) — passed to
-    /// the UniFFI record unchanged.
+    /// `encrypted` is the server string: JSON of the one envelope `{enc, ct}`
+    /// (lowercase hex). The platform-role shapes bind the role id; the crate
+    /// supplies the label and AAD.
     private func openRoleField(_ encrypted: String, roleId: String, field: String) -> String? {
         guard let jsonData = encrypted.data(using: .utf8),
               let wire = try? JSONDecoder().decode(RoleFieldEnvelopeWire.self, from: jsonData) else {
             return nil
         }
-        let label = field == "name"
-            ? CryptoLabels.LABEL_PLATFORM_ROLE_NAME_ENCRYPT
-            : CryptoLabels.LABEL_PLATFORM_ROLE_DESC_ENCRYPT
-        let aadHex = Data("\(roleId):\(field)".utf8).map { String(format: "%02x", $0) }.joined()
-        guard let plaintextHex = try? cryptoService.hpkeOpen(
-            envelope: HpkeEnvelope(v: wire.v, labelId: wire.labelId, enc: wire.enc, ct: wire.ct),
-            expectedLabel: label,
-            aadHex: aadHex
+        let shape: Shape = field == "name" ? .platformRoleName : .platformRoleDescription
+        guard let plaintextHex = try? cryptoService.shapeOpen(
+            shape: shape,
+            envelope: HpkeEnvelope(enc: wire.enc, ct: wire.ct),
+            aadFields: [roleId]
         ), let bytes = Data(hexString: plaintextHex) else {
             return nil
         }
@@ -242,11 +239,8 @@ final class RolesViewModel {
 }
 
 /// Wire shape of the JSON string inside `RoleEnvelope.encryptedName/Description`:
-/// the serde form of `HpkeEnvelope` (base64url enc/ct), exactly what the desktop
-/// seals and what the UniFFI record consumes.
+/// the one envelope `{enc, ct}` (lowercase hex), exactly what the desktop seals.
 private struct RoleFieldEnvelopeWire: Codable {
-    let v: UInt8
-    let labelId: UInt8
     let enc: String
     let ct: String
 }

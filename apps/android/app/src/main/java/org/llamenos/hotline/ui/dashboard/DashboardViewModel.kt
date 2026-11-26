@@ -231,15 +231,15 @@ class DashboardViewModel @Inject constructor(
      * Fetch the server event encryption keys from GET /api/auth/me.
      * Stores them in Rust memory via CryptoService — keys never touch JVM memory.
      *
-     * The server returns account-wide epoch keys (`serverEventKeyHex` /
-     * `serverEventKeyPrevHex`) that decrypt relay events from every hub; the
-     * schema-side `hubEventKeys` field was never implemented by the server.
+     * The server returns one key per (hub, epoch) for every hub this user
+     * belongs to (#2999) — all of them, not only the active hub's: relay events
+     * from every member hub are handled whichever hub the UI shows.
      */
     private suspend fun fetchServerEventKey() {
         try {
             val me = apiService.getAuthMe()
-            val currentKey = me.serverEventKeyHex ?: return
-            webSocketService.setServerEventKeys(currentKey, me.serverEventKeyPrevHex ?: "")
+            if (me.serverEventKeys.isEmpty()) return
+            webSocketService.setServerEventKeys(me.toFfiKeys())
         } catch (_: Exception) {
             // Non-fatal — WebSocket will still connect but events won't decrypt.
             // The key will be retried on next refresh.

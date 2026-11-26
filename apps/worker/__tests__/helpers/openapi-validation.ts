@@ -41,13 +41,13 @@ export const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 export const VALID_ENVELOPE = {
   pubkey: VALID_PUBKEY,
   enc: VALID_HPKE_ENC,
-  ct: 'deadbeef',
+  ct: 'de'.repeat(48), // a 48-byte key wrap, lowercase hex (spec D2)
 }
 
 /** Valid key envelope (no pubkey, for author copies) */
 export const VALID_KEY_ENVELOPE = {
   enc: VALID_HPKE_ENC,
-  ct: 'deadbeef',
+  ct: 'de'.repeat(48), // a 48-byte key wrap, lowercase hex (spec D2)
 }
 
 // ---------------------------------------------------------------------------

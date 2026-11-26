@@ -82,7 +82,8 @@ apps/worker/lib/webauthn.ts         @rhonda-rodododo
 apps/worker/lib/session-renewal.ts  @rhonda-rodododo
 apps/worker/lib/crypto.ts           @rhonda-rodododo
 apps/worker/lib/crypto.test.ts      @rhonda-rodododo
-apps/worker/lib/hub-event-crypto.ts @rhonda-rodododo
+apps/worker/lib/ws-events.ts       @rhonda-rodododo
+apps/worker/lib/member-hubs.ts      @rhonda-rodododo
 apps/worker/lib/push-encryption.ts  @rhonda-rodododo
 apps/worker/lib/server-identity.ts  @rhonda-rodododo
 apps/worker/lib/agent-identity.ts   @rhonda-rodododo

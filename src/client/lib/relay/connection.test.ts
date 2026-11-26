@@ -32,7 +32,7 @@ vi.mock('../platform', async importOriginal => ({
   }),
   // The scripted server sends event payloads in the clear: "decryption" is the
   // identity, so a test controls exactly what content the client sees.
-  decryptServerEvent: vi.fn(async (payload: string) => payload),
+  openServerEvent: vi.fn(async (_hubId: string, _kind: number, _epoch: number, payload: string) => payload),
 }))
 
 class ScriptedSocket extends EventTarget {

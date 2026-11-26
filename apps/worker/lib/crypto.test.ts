@@ -8,9 +8,9 @@
 
 import { describe, it, expect } from 'vitest'
 import { x25519, ristretto255_oprf } from '@noble/curves/ed25519.js'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { contentOpen, shapeOpen, type Shape } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_BAN_KEY_DERIVE, HMAC_BAN_PREFIX } from '@shared/crypto-labels'
+import { LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_USER_KEY_WRAP, LABEL_BAN_KEY_DERIVE, HMAC_BAN_PREFIX } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
 import {
@@ -197,48 +197,39 @@ function x25519Reader(): { secret: Uint8Array; pubkey: string } {
   return { secret, pubkey: bytesToHex(x25519.getPublicKey(secret)) }
 }
 
-/** Open a record as a reader would: HPKE info = label, then the content. */
+/** Open a record as a reader would: the shape's key wrap, then its content. */
 function openAsReader(
   encryptedContent: string,
   envelope: RecipientEnvelope,
   secret: Uint8Array,
-  label: string,
-  aad: Uint8Array = new Uint8Array(0),
+  shape: Shape,
 ): string {
-  const wrapped = hexToBytes(envelope.enc + envelope.ct)
-  const contentKey = hpkeOpen(secret, wrapped, utf8ToBytes(label), aad)
-  return new TextDecoder().decode(symmetricDecrypt(contentKey, hexToBytes(encryptedContent), aad))
+  const contentKey = shapeOpen(shape, secret, [], envelope)
+  return new TextDecoder().decode(contentOpen(shape, contentKey, hexToBytes(encryptedContent)))
 }
 
-describe('server-sealed records (no AAD, label-bound)', () => {
-  it('every reader opens an inbound message with LABEL_MESSAGE and no AAD', () => {
+describe('server-sealed records (the message-key and call-meta-key shapes)', () => {
+  it('every reader opens an inbound message as the message-key shape', () => {
     const admin = x25519Reader()
     const volunteer = x25519Reader()
     const { encryptedContent, readerEnvelopes } = encryptMessageForStorage('caller: I need help', [admin.pubkey, volunteer.pubkey])
-    expect(openAsReader(encryptedContent, readerEnvelopes[0], admin.secret, LABEL_MESSAGE)).toBe('caller: I need help')
-    expect(openAsReader(encryptedContent, readerEnvelopes[1], volunteer.secret, LABEL_MESSAGE)).toBe('caller: I need help')
+    expect(openAsReader(encryptedContent, readerEnvelopes[0], admin.secret, 'message-key')).toBe('caller: I need help')
+    expect(openAsReader(encryptedContent, readerEnvelopes[1], volunteer.secret, 'message-key')).toBe('caller: I need help')
   })
 
-  it('an admin opens call metadata with LABEL_CALL_META and no AAD', () => {
+  it('an admin opens call metadata as the call-meta-key shape', () => {
     const admin = x25519Reader()
     const meta = { answeredBy: 'ab'.repeat(32), callerNumber: '+15555550142' }
     const { encryptedContent, adminEnvelopes } = encryptCallRecordForStorage(meta, [admin.pubkey])
-    expect(JSON.parse(openAsReader(encryptedContent, adminEnvelopes[0], admin.secret, LABEL_CALL_META))).toEqual(meta)
-  })
-
-  it('the key-wrap AAD the server used to add is gone', () => {
-    const admin = x25519Reader()
-    const { encryptedContent, readerEnvelopes } = encryptMessageForStorage('x', [admin.pubkey])
-    const oldAad = utf8ToBytes(`${LABEL_MESSAGE}:key-wrap`)
-    expect(() => openAsReader(encryptedContent, readerEnvelopes[0], admin.secret, LABEL_MESSAGE, oldAad)).toThrow()
+    expect(JSON.parse(openAsReader(encryptedContent, adminEnvelopes[0], admin.secret, 'call-meta-key'))).toEqual(meta)
   })
 
   it('call metadata does not open as a message, nor a message as call metadata', () => {
     const admin = x25519Reader()
     const meta = encryptCallRecordForStorage({ callerNumber: '+15555550142' }, [admin.pubkey])
     const msg = encryptMessageForStorage('x', [admin.pubkey])
-    expect(() => openAsReader(meta.encryptedContent, meta.adminEnvelopes[0], admin.secret, LABEL_MESSAGE)).toThrow()
-    expect(() => openAsReader(msg.encryptedContent, msg.readerEnvelopes[0], admin.secret, LABEL_CALL_META)).toThrow()
+    expect(() => openAsReader(meta.encryptedContent, meta.adminEnvelopes[0], admin.secret, 'message-key')).toThrow()
+    expect(() => openAsReader(msg.encryptedContent, msg.readerEnvelopes[0], admin.secret, 'call-meta-key')).toThrow()
   })
 })
 
@@ -439,14 +430,8 @@ describe('wrapAuditKeyForAdmins', () => {
     expect(envelopes).toHaveLength(1)
     expect(envelopes[0]!.pubkey).toBe(adminPubkey)
 
-    // Open with the audit_key.rs AAD convention: `${label}:${userPubkey}`
-    const bytes = new Uint8Array([...hexToBytes(envelopes[0]!.enc), ...hexToBytes(envelopes[0]!.ct)])
-    const opened = hpkeOpen(
-      adminSecret,
-      bytes,
-      utf8ToBytes(LABEL_AUDIT_USER_KEY_WRAP),
-      utf8ToBytes(`${LABEL_AUDIT_USER_KEY_WRAP}:${userPubkey}`),
-    )
+    // Opened as audit_key.rs opens it: the audit-user-key shape, bound to the user.
+    const opened = shapeOpen('audit-user-key', adminSecret, [userPubkey], envelopes[0]!)
     expect(bytesToHex(opened)).toBe(bytesToHex(auditKey))
   })
 
@@ -460,10 +445,7 @@ describe('wrapAuditKeyForAdmins', () => {
     const adminPubkey = bytesToHex(x25519.getPublicKey(adminSecret))
 
     const envelopes = wrapAuditKeyForAdmins(auditKey, [adminPubkey], userPubkey)
-    const bytes = new Uint8Array([...hexToBytes(envelopes[0]!.enc), ...hexToBytes(envelopes[0]!.ct)])
-    expect(() =>
-      hpkeOpen(adminSecret, bytes, utf8ToBytes(LABEL_AUDIT_USER_KEY_WRAP), utf8ToBytes(`${LABEL_AUDIT_USER_KEY_WRAP}:${'b'.repeat(64)}`)),
-    ).toThrow()
+    expect(() => shapeOpen('audit-user-key', adminSecret, ['b'.repeat(64)], envelopes[0]!)).toThrow()
   })
 })
 

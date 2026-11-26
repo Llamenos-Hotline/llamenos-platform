@@ -263,7 +263,7 @@ When('the admin creates a case record from the report', async ({ request, world 
       entityTypeId: getTriageState(world).entityTypeId,
       statusHash: 'open',
       encryptedSummary: 'triage-case-summary',
-      summaryEnvelopes: [{ pubkey: adminDeviceKey(), ct: 'key', enc: 'b'.repeat(64) }],
+      summaryEnvelopes: [{ pubkey: adminDeviceKey(), ct: 'c'.repeat(96), enc: 'b'.repeat(64) }],
     },
   )
   // Both writes are this scenario's subject. They used to be guarded by

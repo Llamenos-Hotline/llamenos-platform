@@ -23,8 +23,10 @@ use crate::auth;
 use crate::device_keys::{self, DeviceKeyState, DeviceSecrets, EncryptedDeviceKeys};
 use crate::encryption::{self, RecipientKeyEnvelope};
 use crate::errors::CryptoError;
+use crate::events::{EventKeyring, ServerEventKey};
 use crate::hpke_envelope::{self, HpkeEnvelope};
 use crate::puk::{self, PukState, RotatePukResult};
+use crate::shape::{self, Shape};
 use crate::sigchain::{self, SigchainLink, SigchainVerifiedState};
 use zeroize::Zeroizing;
 
@@ -38,9 +40,8 @@ struct MobileState {
     /// dropping the whole state all wipe the bytes — a bare `[u8; 32]` is `Copy`
     /// and would leave every overwritten key behind in the freed heap (#1107).
     hub_keys: HashMap<String, Zeroizing<[u8; 32]>>,
-    /// Server event keys: (current, previous). Previous used during epoch rotation.
-    server_event_current_key: Option<Zeroizing<[u8; 32]>>,
-    server_event_previous_key: Option<Zeroizing<[u8; 32]>>,
+    /// Relay-event keys, per `(hub, epoch)` (#2999). Replaced whole on every set.
+    event_keys: EventKeyring,
     /// Ephemeral X25519 secret for device-linking ECDH. Zeroized after use.
     ephemeral_secret: Option<Zeroizing<[u8; 32]>>,
     /// Wake key X25519 secret for push notification decryption.
@@ -54,8 +55,7 @@ impl MobileState {
             secrets: None,
             device_state: None,
             hub_keys: HashMap::new(),
-            server_event_current_key: None,
-            server_event_previous_key: None,
+            event_keys: EventKeyring::default(),
             ephemeral_secret: None,
             wake_key_secret: None,
         }
@@ -120,10 +120,6 @@ fn with_secrets<T>(
     f(secrets, ds)
 }
 
-fn encryption_secret_hex() -> Result<Zeroizing<String>, CryptoError> {
-    with_secrets(|secrets, _| Ok(Zeroizing::new(hex::encode(secrets.encryption_seed))))
-}
-
 // ── Device key management (stateful) ───────────────────────────────
 
 /// Generate a new device keypair, encrypt with PIN, load into mobile state.
@@ -170,8 +166,7 @@ pub fn mobile_lock() {
     // Hub keys, server event keys and the ephemeral key are all `Zeroizing`:
     // dropping them wipes them.
     guard.hub_keys.clear();
-    guard.server_event_current_key = None;
-    guard.server_event_previous_key = None;
+    guard.event_keys = EventKeyring::default();
     guard.ephemeral_secret = None;
     // NOTE: wake_key_secret intentionally NOT cleared on lock —
     // it must remain available for push notification decryption without PIN.
@@ -300,60 +295,91 @@ pub fn mobile_ed25519_verify(
     device_keys::verify_signature(&message, &signature, &pubkey_hex)
 }
 
-// ── HPKE envelope encryption ──────────────────────────────────────
+// ── HPKE envelopes, by shape (D1) ─────────────────────────────────
 
-/// HPKE seal: encrypt plaintext for a recipient's X25519 pubkey (stateless).
+/// Seal `plaintext_hex` as `shape` to `recipient_pubkey_hex` (stateless).
+/// The crate chooses the label and AAD; `aad_fields` are the per-record values
+/// the shape binds (see [`Shape::arity`]).
 #[uniffi::export]
-pub fn mobile_hpke_seal(
+pub fn mobile_shape_seal(
+    shape: Shape,
+    recipient_pubkey_hex: String,
+    aad_fields: Vec<String>,
     plaintext_hex: String,
-    recipient_pubkey_hex: String,
-    label: String,
-    aad_hex: String,
 ) -> Result<HpkeEnvelope, CryptoError> {
-    let plaintext = hex::decode(&plaintext_hex).map_err(CryptoError::HexError)?;
-    let aad = hex::decode(&aad_hex).map_err(CryptoError::HexError)?;
-    hpke_envelope::hpke_seal(&plaintext, &recipient_pubkey_hex, &label, &aad)
+    let plaintext = Zeroizing::new(hpke_envelope::decode_hex_min(
+        "plaintext",
+        &plaintext_hex,
+        0,
+    )?);
+    shape::seal_to(&recipient_pubkey_hex, shape, &aad_fields, &plaintext)
 }
 
-/// HPKE open: decrypt an envelope using the device's X25519 key from mobile state.
+/// Open an envelope of `shape` with the device's X25519 key from mobile state.
+/// Returns the plaintext as hex.
 #[uniffi::export]
-pub fn mobile_hpke_open(
+pub fn mobile_shape_open(
+    shape: Shape,
+    aad_fields: Vec<String>,
     envelope: HpkeEnvelope,
-    expected_label: String,
-    aad_hex: String,
 ) -> Result<String, CryptoError> {
-    let aad = hex::decode(&aad_hex).map_err(CryptoError::HexError)?;
-    let secret_hex = encryption_secret_hex()?;
-    let plaintext = hpke_envelope::hpke_open(&envelope, &secret_hex, &expected_label, &aad)?;
-    Ok(hex::encode(plaintext))
+    with_secrets(|secrets, _| {
+        let pt = shape::open_from(&secrets.encryption_seed, shape, &aad_fields, &envelope)?;
+        Ok(hex::encode(&*pt))
+    })
 }
 
-/// HPKE seal a 32-byte key for a recipient (stateless convenience wrapper).
+// ── Content layer, by shape ────────────────────────────────────────
+
+/// Seal `plaintext_hex` under a fresh content key with `shape`'s content AAD.
+/// Returns `[ciphertext_hex, key_hex]`; the key is what the shape's HPKE layer
+/// wraps for each reader (`mobile_shape_seal`).
 #[uniffi::export]
-pub fn mobile_hpke_seal_key(
+pub fn mobile_content_seal(
+    shape: Shape,
+    plaintext_hex: String,
+) -> Result<Vec<String>, CryptoError> {
+    let plaintext = Zeroizing::new(hpke_envelope::decode_hex_min(
+        "plaintext",
+        &plaintext_hex,
+        0,
+    )?);
+    let sealed = shape::content_seal(shape, &plaintext)?;
+    Ok(vec![hex::encode(sealed.packed), hex::encode(*sealed.key)])
+}
+
+/// Open a content ciphertext of `shape` with its key. Returns the plaintext as hex.
+#[uniffi::export]
+pub fn mobile_content_open(
+    shape: Shape,
+    ciphertext_hex: String,
     key_hex: String,
-    recipient_pubkey_hex: String,
-    label: String,
-    aad_hex: String,
-) -> Result<HpkeEnvelope, CryptoError> {
+) -> Result<String, CryptoError> {
     let key_hex = Zeroizing::new(key_hex);
-    let key = crate::encryption::secret_from_hex(&key_hex)?;
-    let aad = hex::decode(&aad_hex).map_err(CryptoError::HexError)?;
-    hpke_envelope::hpke_seal_key(&key, &recipient_pubkey_hex, &label, &aad)
+    let key = Zeroizing::new(hpke_envelope::decode_hex_exact("key", &key_hex, 32)?);
+    let key: [u8; 32] = key
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::InvalidSecretKey)?;
+    let key = Zeroizing::new(key);
+    let packed = hpke_envelope::decode_hex_min("ciphertext", &ciphertext_hex, 28)?;
+    Ok(hex::encode(&*shape::content_open(shape, &packed, &key)?))
 }
 
-/// HPKE open a 32-byte key from an envelope using mobile state.
+/// Open the content of `shape` in one call: unwrap the content key from
+/// `envelope` with the device key, then open `ciphertext_hex`. The content key
+/// never leaves Rust. Returns the plaintext as hex.
 #[uniffi::export]
-pub fn mobile_hpke_open_key(
+pub fn mobile_open_sealed_content(
+    shape: Shape,
+    ciphertext_hex: String,
     envelope: HpkeEnvelope,
-    expected_label: String,
-    aad_hex: String,
 ) -> Result<String, CryptoError> {
-    let aad = hex::decode(&aad_hex).map_err(CryptoError::HexError)?;
-    let secret_hex = encryption_secret_hex()?;
-    let key = hpke_envelope::hpke_open_key(&envelope, &secret_hex, &expected_label, &aad)?;
-    let hex_out = hex::encode(key.as_ref());
-    Ok(hex_out)
+    let packed = hpke_envelope::decode_hex_min("ciphertext", &ciphertext_hex, 28)?;
+    with_secrets(|secrets, _| {
+        let key = shape::open_key_from(&secrets.encryption_seed, shape, &[], &envelope)?;
+        Ok(hex::encode(&*shape::content_open(shape, &packed, &key)?))
+    })
 }
 
 /// Prove this device still holds its recovery share (#2782).
@@ -379,13 +405,12 @@ pub fn mobile_recovery_share_liveness_proof(
             ))
         })?;
     with_secrets(|secrets, ds| {
-        let secret_hex = Zeroizing::new(hex::encode(secrets.encryption_seed));
-        let plaintext = Zeroizing::new(hpke_envelope::hpke_open(
-            &share_envelope,
-            &secret_hex,
-            crate::labels::LABEL_RECOVERY_GROUP_SHARE_WRAP,
+        let plaintext = shape::open_from(
+            &secrets.encryption_seed,
+            Shape::RecoveryGroupShare,
             &[],
-        )?);
+            &share_envelope,
+        )?;
         let Some((&x, y)) = plaintext.split_first() else {
             return Err(CryptoError::InvalidInput("Decrypted share is empty".into()));
         };
@@ -398,112 +423,6 @@ pub fn mobile_recovery_share_liveness_proof(
         )?;
         Ok(hex::encode(sig))
     })
-}
-
-// ── Symmetric encryption (AES-256-GCM) ────────────────────────────
-
-/// Encrypt plaintext with a random AES-256-GCM key, binding `aad_hex`.
-/// Returns (ciphertext_hex, key_hex) where ciphertext = hex(nonce_12 || ciphertext || tag_16).
-///
-/// `aad_hex` is required, not defaulted. The canonical-AAD envelopes (notes,
-/// files, contact identifiers — `docs/protocol/PROTOCOL.md` §2.3) bind
-/// `UTF-8(label)` to the content layer and `UTF-8("{label}:key-wrap")` to the
-/// key wrap; this function previously had no AAD parameter at all, so Android
-/// and iOS were structurally incapable of producing or reading a conformant
-/// content ciphertext. A defaulted empty AAD would have reproduced exactly
-/// that defect while appearing to fix it. Derive the value with
-/// [`crate::envelope_aad::content_aad_hex`] — exported to mobile as
-/// `mobile_content_aad_hex` — and pass `""` for the envelopes every
-/// implementation agrees carry no AAD: stored records (messages, call
-/// metadata — #1393, read by `open_record_for_reader` / `mobile_decrypt_message`)
-/// and the hub-key/PUK flows. Never pass `""` beside a canonical label.
-#[uniffi::export]
-pub fn mobile_symmetric_encrypt(
-    plaintext_hex: String,
-    aad_hex: String,
-) -> Result<Vec<String>, CryptoError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-
-    let plaintext = hex::decode(&plaintext_hex).map_err(CryptoError::HexError)?;
-    let aad = hex::decode(&aad_hex).map_err(CryptoError::HexError)?;
-
-    // `Zeroizing`, not a manual `.zeroize()` at the end: the `?` below returns
-    // before any trailing wipe would run.
-    let mut key_bytes = Zeroizing::new([0u8; 32]);
-    getrandom::getrandom(&mut *key_bytes).expect("getrandom failed");
-    let mut nonce_bytes = [0u8; 12];
-    getrandom::getrandom(&mut nonce_bytes).expect("getrandom failed");
-
-    let cipher = Aes256Gcm::new_from_slice(key_bytes.as_slice())
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let ciphertext = cipher
-        .encrypt(
-            nonce,
-            Payload {
-                msg: &plaintext,
-                aad: &aad,
-            },
-        )
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-
-    let mut packed = Vec::with_capacity(12 + ciphertext.len());
-    packed.extend_from_slice(&nonce_bytes);
-    packed.extend_from_slice(&ciphertext);
-
-    let key_hex = hex::encode(*key_bytes);
-
-    Ok(vec![hex::encode(packed), key_hex])
-}
-
-/// Decrypt AES-256-GCM ciphertext, binding `aad_hex`.
-/// Input: hex(nonce_12 || ciphertext || tag_16), key_hex, aad_hex.
-///
-/// The AAD must match the one bound at encryption byte for byte or the GCM tag
-/// check fails and this returns [`CryptoError::DecryptionFailed`]. That is the
-/// point: it is the only thing separating a key-wrap envelope from a content
-/// envelope carried under the same label. See [`crate::envelope_aad`].
-#[uniffi::export]
-pub fn mobile_symmetric_decrypt(
-    ciphertext_hex: String,
-    key_hex: String,
-    aad_hex: String,
-) -> Result<String, CryptoError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-
-    let data = hex::decode(&ciphertext_hex).map_err(CryptoError::HexError)?;
-    let aad = hex::decode(&aad_hex).map_err(CryptoError::HexError)?;
-    let key_hex = Zeroizing::new(key_hex);
-    let key_bytes = crate::encryption::secret_from_hex(&key_hex)?;
-    if data.len() < 28 {
-        // 12 nonce + 16 tag minimum
-        return Err(CryptoError::InvalidCiphertext);
-    }
-
-    let nonce = Nonce::from_slice(&data[..12]);
-    let ciphertext = &data[12..];
-
-    let cipher = Aes256Gcm::new_from_slice(key_bytes.as_slice())
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: ciphertext,
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| CryptoError::DecryptionFailed)?,
-    );
-
-    Ok(hex::encode(&*plaintext))
 }
 
 // ── Stored multi-reader records (messages, call metadata) ───────────
@@ -687,23 +606,6 @@ pub fn mobile_open_shift_field(
 
 /// `UTF-8(label)` as hex — the AAD bound to an envelope's *content* layer.
 ///
-/// Exported over UniFFI so Kotlin and Swift derive the AAD from
-/// [`crate::envelope_aad`], the same definition `encryption.rs` and the
-/// server-side `packages/shared/envelope-aad.ts` use, instead of writing out
-/// `label` and `${label}:key-wrap` at each call site. Errors on a label that
-/// is not in the generated registry.
-#[uniffi::export]
-pub fn mobile_content_aad_hex(label: String) -> Result<String, CryptoError> {
-    crate::envelope_aad::content_aad_hex(&label)
-}
-
-/// `UTF-8("{label}:key-wrap")` as hex — the AAD bound to an envelope's
-/// *key-wrap* layer. See [`mobile_content_aad_hex`].
-#[uniffi::export]
-pub fn mobile_key_wrap_aad_hex(label: String) -> Result<String, CryptoError> {
-    crate::envelope_aad::key_wrap_aad_hex(&label)
-}
-
 /// The admin reader set of a hub, from `GET /api/hubs/:hubId/readers?purpose=admin`.
 ///
 /// The one place mobile decides which keys count as readers of hub content
@@ -715,48 +617,6 @@ pub fn mobile_resolve_admin_readers(
     server_recipients: Vec<String>,
 ) -> Result<Vec<String>, CryptoError> {
     crate::readers::resolve_admin_readers(&server_recipients)
-}
-
-/// The numeric registry ID for a domain separation label.
-///
-/// `HpkeEnvelope.labelId` is a wire field that must agree with the label the
-/// envelope is opened under — `hpke_open_key` rejects a mismatch before
-/// touching any key material (the Albrecht defense). Both mobile clients kept
-/// their own hand-written tables of these indices, and iOS's had drifted:
-/// `CryptoService.swift` built call-metadata and hub-key envelopes with
-/// `labelId: 0` (LABEL_NOTE_KEY), which that check rejects. Derive the ID from
-/// the label instead of transcribing the registry a third and fourth time.
-#[uniffi::export]
-pub fn mobile_label_to_id(label: String) -> Result<u8, CryptoError> {
-    crate::labels::label_to_id(&label)
-        .ok_or_else(|| CryptoError::InvalidInput(format!("unknown crypto label: {label}")))
-}
-
-/// Convert a wire-format hex string to the base64url the UniFFI
-/// [`HpkeEnvelope`] record carries.
-///
-/// `PROTOCOL.md` §2.3/§2.4 specify `enc` and `ct` as **hex** on the wire, while
-/// `hpke_envelope.rs` encodes both as base64url inside the record. Mobile was
-/// handing wire hex straight to `mobile_hpke_open_key`, which base64url-decoded
-/// it into garbage — so even with a correct AAD the envelope could not open.
-/// Exported so the conversion is done once here rather than reimplemented in
-/// Kotlin and again in Swift.
-#[uniffi::export]
-pub fn mobile_hex_to_base64url(hex_str: String) -> Result<String, CryptoError> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    let bytes = hex::decode(&hex_str).map_err(CryptoError::HexError)?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
-}
-
-/// Convert the base64url a UniFFI [`HpkeEnvelope`] carries back to wire-format
-/// hex. See [`mobile_hex_to_base64url`].
-#[uniffi::export]
-pub fn mobile_base64url_to_hex(b64: String) -> Result<String, CryptoError> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    let bytes = URL_SAFE_NO_PAD
-        .decode(&b64)
-        .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url: {e}")))?;
-    Ok(hex::encode(bytes))
 }
 
 // ── PUK operations ─────────────────────────────────────────────────
@@ -794,18 +654,19 @@ pub fn mobile_puk_rotate(
     puk::rotate_puk(&old_seed, old_gen, &remaining_devices)
 }
 
-/// Unwrap a PUK seed from an HPKE envelope using the device's X25519 key.
+/// Unwrap a PUK seed sealed to this device (`Shape::PukSeed`, bound to this
+/// device's id) using the device's X25519 key.
 #[uniffi::export]
-pub fn mobile_puk_unwrap_seed(
-    envelope: HpkeEnvelope,
-    expected_label: String,
-    aad_hex: String,
-) -> Result<String, CryptoError> {
-    let aad = hex::decode(&aad_hex).map_err(CryptoError::HexError)?;
-    let secret_hex = encryption_secret_hex()?;
-    let seed = hpke_envelope::hpke_open_key(&envelope, &secret_hex, &expected_label, &aad)?;
-    let hex_out = hex::encode(seed.as_ref());
-    Ok(hex_out)
+pub fn mobile_puk_unwrap_seed(envelope: HpkeEnvelope) -> Result<String, CryptoError> {
+    with_secrets(|secrets, ds| {
+        let seed = shape::open_key_from(
+            &secrets.encryption_seed,
+            Shape::PukSeed,
+            std::slice::from_ref(&ds.device_id),
+            &envelope,
+        )?;
+        Ok(hex::encode(seed.as_ref()))
+    })
 }
 
 /// Derive PUK subkeys for a given seed + generation (stateless).
@@ -885,212 +746,30 @@ pub fn mobile_clear_hub_keys() {
     state().lock().unwrap().hub_keys.clear();
 }
 
-/// Store server event keys (current + optional previous for epoch rotation).
+/// Replace the relay-event keys held in Rust with the server's list (one entry per
+/// hub the user belongs to and epoch it hands out, `GET /api/auth/me`). The keys
+/// never come back out (#2999).
 #[uniffi::export]
-pub fn mobile_set_server_event_keys(
-    current_hex: String,
-    previous_hex: Option<String>,
-) -> Result<(), CryptoError> {
-    let current_hex = Zeroizing::new(current_hex);
-    let previous_hex = previous_hex.map(Zeroizing::new);
-    let current = crate::encryption::secret_from_hex(&current_hex)?;
-    let previous = previous_hex
-        .as_deref()
-        .map(|h| crate::encryption::secret_from_hex(h))
-        .transpose()?;
-    let mut guard = state().lock().unwrap();
-    // Assigning drops the previous values, which wipes them.
-    guard.server_event_current_key = Some(current);
-    guard.server_event_previous_key = previous;
+pub fn mobile_set_server_event_keys(keys: Vec<ServerEventKey>) -> Result<(), CryptoError> {
+    let ring = EventKeyring::from_keys(&keys)?;
+    state().lock().unwrap().event_keys = ring;
     Ok(())
 }
 
-/// Decrypt a hub event payload (AES-256-GCM) using the stored hub key.
+/// Open one relay frame of `hub_id` with the key held for its epoch (D9). The
+/// frame's `hubId`, `kind` and `epoch` are bound in the AAD.
 #[uniffi::export]
-pub fn mobile_decrypt_hub_event(
-    ciphertext_hex: String,
+pub fn mobile_open_server_event(
     hub_id: String,
-) -> Result<String, CryptoError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-    let guard = state().lock().unwrap();
-    let key = guard
-        .hub_keys
-        .get(&hub_id)
-        .ok_or_else(|| CryptoError::InvalidInput(format!("No hub key for hub: {hub_id}")))?;
-    let data = hex::decode(&ciphertext_hex).map_err(CryptoError::HexError)?;
-    if data.len() < 28 {
-        return Err(CryptoError::InvalidCiphertext);
-    }
-    let nonce = Nonce::from_slice(&data[..12]);
-    let cipher = Aes256Gcm::new_from_slice(key.as_slice())
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    let plaintext = cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: &data[12..],
-                aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-            },
-        )
-        .map_err(|_| CryptoError::DecryptionFailed)?;
-    String::from_utf8(plaintext).map_err(|_| CryptoError::DecryptionFailed)
-}
-
-/// Try to decrypt a relay event against ALL stored hub keys.
-/// Returns [hub_id, decrypted_json] for the first key that succeeds.
-#[uniffi::export]
-pub fn mobile_decrypt_event_with_attribution(
-    ciphertext_hex: String,
-) -> Result<Vec<String>, CryptoError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-    let data = hex::decode(&ciphertext_hex).map_err(CryptoError::HexError)?;
-    if data.len() < 28 {
-        return Err(CryptoError::InvalidCiphertext);
-    }
-    let nonce = Nonce::from_slice(&data[..12]);
-    let ciphertext = &data[12..];
-    let guard = state().lock().unwrap();
-    for (hub_id, key) in &guard.hub_keys {
-        if let Ok(cipher) = Aes256Gcm::new_from_slice(key.as_slice()) {
-            if let Ok(plaintext) = cipher.decrypt(
-                nonce,
-                Payload {
-                    msg: ciphertext,
-                    aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-                },
-            ) {
-                if let Ok(json) = String::from_utf8(plaintext) {
-                    return Ok(vec![hub_id.clone(), json]);
-                }
-            }
-        }
-    }
-    Err(CryptoError::DecryptionFailed)
-}
-
-/// Decrypt a server-published event using stored server event keys.
-/// Tries current key first, falls back to previous key (epoch rotation).
-#[uniffi::export]
-pub fn mobile_decrypt_server_event(encrypted_hex: String) -> Result<String, CryptoError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-    let guard = state().lock().unwrap();
-    let current = guard
-        .server_event_current_key
-        .as_ref()
-        .ok_or_else(|| CryptoError::InvalidInput("No server event key set".into()))?;
-    let data = hex::decode(&encrypted_hex).map_err(CryptoError::HexError)?;
-    if data.len() < 28 {
-        return Err(CryptoError::InvalidCiphertext);
-    }
-    let nonce = Nonce::from_slice(&data[..12]);
-    let ciphertext = &data[12..];
-    let aad = crate::labels::LABEL_HUB_EVENT.as_bytes();
-    let cipher = Aes256Gcm::new_from_slice(current.as_slice())
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    if let Ok(plaintext) = cipher.decrypt(
-        nonce,
-        Payload {
-            msg: ciphertext,
-            aad,
-        },
-    ) {
-        return String::from_utf8(plaintext).map_err(|_| CryptoError::DecryptionFailed);
-    }
-    if let Some(previous) = guard.server_event_previous_key.as_ref() {
-        let cipher = Aes256Gcm::new_from_slice(previous.as_slice())
-            .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-        let plaintext = cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: ciphertext,
-                    aad,
-                },
-            )
-            .map_err(|_| CryptoError::DecryptionFailed)?;
-        return String::from_utf8(plaintext).map_err(|_| CryptoError::DecryptionFailed);
-    }
-    Err(CryptoError::DecryptionFailed)
-}
-
-/// Decrypt a server-published event using the epoch-aware AAD and padding format.
-///
-/// The server pads plaintext to a power-of-2 bucket (min 512B) before encrypting:
-///   `[4-byte LE actual-length][plaintext JSON bytes][random padding]`
-/// AAD = `"llamenos:hub-event:{epoch}"` (includes epoch for domain separation).
-///
-/// Tries the stored current key first, then the previous key for epoch rotation.
-/// Returns the decrypted JSON string with padding stripped.
-#[uniffi::export]
-pub fn mobile_decrypt_server_event_with_epoch(
-    encrypted_hex: String,
+    kind: u32,
     epoch: u64,
+    payload_hex: String,
 ) -> Result<String, CryptoError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-    let guard = state().lock().unwrap();
-    let current = guard
-        .server_event_current_key
-        .as_ref()
-        .ok_or_else(|| CryptoError::InvalidInput("No server event key set".into()))?;
-    let data = hex::decode(&encrypted_hex).map_err(CryptoError::HexError)?;
-    if data.len() < 28 {
-        return Err(CryptoError::InvalidCiphertext);
-    }
-    let nonce = Nonce::from_slice(&data[..12]);
-    let ciphertext = &data[12..];
-    let aad = format!("{}:{}", crate::labels::LABEL_HUB_EVENT_EPOCH, epoch);
-    let aad_bytes = aad.as_bytes();
-
-    let try_decrypt = |key: &[u8]| -> Option<Vec<u8>> {
-        let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-        cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: ciphertext,
-                    aad: aad_bytes,
-                },
-            )
-            .ok()
-    };
-
-    let unpad = |padded: Vec<u8>| -> Result<String, CryptoError> {
-        if padded.len() < 4 {
-            return Err(CryptoError::InvalidCiphertext);
-        }
-        let actual_len = u32::from_le_bytes(
-            padded[..4]
-                .try_into()
-                .map_err(|_| CryptoError::InvalidCiphertext)?,
-        ) as usize;
-        if actual_len + 4 > padded.len() {
-            return Err(CryptoError::InvalidCiphertext);
-        }
-        String::from_utf8(padded[4..4 + actual_len].to_vec())
-            .map_err(|_| CryptoError::DecryptionFailed)
-    };
-
-    if let Some(plaintext) = try_decrypt(current.as_slice()) {
-        return unpad(plaintext);
-    }
-    if let Some(previous) = guard.server_event_previous_key.as_ref() {
-        if let Some(plaintext) = try_decrypt(previous.as_slice()) {
-            return unpad(plaintext);
-        }
-    }
-    Err(CryptoError::DecryptionFailed)
+    state()
+        .lock()
+        .unwrap()
+        .event_keys
+        .open(&hub_id, kind, epoch, &payload_hex)
 }
 
 // ── Utility ────────────────────────────────────────────────────────
@@ -1145,41 +824,6 @@ pub fn get_public_key(secret_key_hex: String) -> Result<String, CryptoError> {
     let secret = X25519StaticSecret::from(*sk_arr);
     let public_key = X25519PublicKey::from(&secret);
     Ok(hex::encode(public_key.as_bytes()))
-}
-
-/// Try to decrypt an event by trial-decrypting with all cached hub keys.
-///
-/// Returns `[hub_id, plaintext_json]` for the first key that succeeds,
-/// or an error if no key works. Equivalent to `mobile_decrypt_event_with_attribution`.
-#[uniffi::export]
-pub fn mobile_decrypt_hub_event_trial(encrypted_hex: String) -> Result<Vec<String>, CryptoError> {
-    use aes_gcm::{
-        aead::{Aead, KeyInit, Payload},
-        Aes256Gcm, Nonce,
-    };
-    let data = hex::decode(&encrypted_hex).map_err(CryptoError::HexError)?;
-    if data.len() < 28 {
-        return Err(CryptoError::InvalidCiphertext);
-    }
-    let nonce = Nonce::from_slice(&data[..12]);
-    let ciphertext = &data[12..];
-    let guard = state().lock().unwrap();
-    for (hub_id, key) in &guard.hub_keys {
-        if let Ok(cipher) = Aes256Gcm::new_from_slice(key.as_slice()) {
-            if let Ok(plaintext) = cipher.decrypt(
-                nonce,
-                Payload {
-                    msg: ciphertext,
-                    aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-                },
-            ) {
-                if let Ok(json) = String::from_utf8(plaintext) {
-                    return Ok(vec![hub_id.clone(), json]);
-                }
-            }
-        }
-    }
-    Err(CryptoError::DecryptionFailed)
 }
 
 /// Encrypt a draft using the stored hub key for the given hub.
@@ -1246,12 +890,10 @@ pub fn mobile_decrypt_hub_field(
     crate::encryption::decrypt_hub_field(&packed_hex, &key, &label)
 }
 
-/// Clear server event keys from Rust memory.
+/// Clear the relay-event keys from Rust memory.
 #[uniffi::export]
 pub fn mobile_clear_server_event_keys() {
-    let mut guard = state().lock().unwrap();
-    guard.server_event_current_key = None;
-    guard.server_event_previous_key = None;
+    state().lock().unwrap().event_keys = EventKeyring::default();
 }
 
 // ── A3: Ephemeral ECDH held entirely in Rust ─────────────────────────
@@ -1325,24 +967,20 @@ pub fn mobile_clear_ephemeral_key() {
 /// Unwrap a hub key from the server's stored wrap and hold it in state, per hub.
 ///
 /// `enc` and `ct` are the wrap exactly as `GET /api/hubs/:hubId/key` returns it:
-/// **hex**, the one wire encoding (`hpkeEncSchema`; PROTOCOL.md §2.7). The
-/// envelope version, registry `labelId`, label and AAD are fixed here, by
-/// [`crate::encryption::hpke_unwrap_key`] — the same function the desktop
-/// loader calls — so no client hardcodes a protocol constant.
-///
-/// The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)`, what
-/// [`crate::encryption::hpke_wrap_key`] seals a hub key under. This passed `&[]`
-/// until #1631, and until #2788's follow-up it read `enc`/`ct` as base64url —
-/// the in-memory `HpkeEnvelope` encoding, not the wire one — so no wrap a
-/// server ever stored could open on Android.
+/// lowercase **hex**, the one wire encoding (spec D2; base64url and uppercase are
+/// refused as `invalid_format`, never normalised). The label and AAD are the
+/// hub-key shape's, fixed by the crate (spec D1) — the same shape the desktop
+/// loader opens — so no client names a protocol constant.
 #[uniffi::export]
 pub fn mobile_load_hub_key(hub_id: String, enc: String, ct: String) -> Result<(), CryptoError> {
-    let secret_hex = encryption_secret_hex()?;
-    let key = crate::encryption::hpke_unwrap_key(
-        &crate::encryption::KeyEnvelope { enc, ct },
-        &secret_hex,
-        crate::labels::LABEL_HUB_KEY_WRAP,
-    )?;
+    let key = with_secrets(|secrets, _| {
+        shape::open_key_from(
+            &secrets.encryption_seed,
+            Shape::HubKey,
+            &[],
+            &HpkeEnvelope { enc, ct },
+        )
+    })?;
 
     let mut guard = state().lock().unwrap();
     guard.hub_keys.insert(hub_id, key);
@@ -1417,25 +1055,30 @@ pub fn mobile_has_wake_key() -> bool {
     state().lock().unwrap().wake_key_secret.is_some()
 }
 
-/// HPKE open using the stored wake key (not the device key).
-/// Used for decrypting push notification payloads when the device is locked.
+/// Open a push payload of `shape` with the stored wake key (not the device key),
+/// for decrypting push notifications while the device is locked. Only the
+/// push shapes are accepted: the wake key opens nothing else.
 #[uniffi::export]
-pub fn mobile_hpke_open_with_wake_key(
+pub fn mobile_shape_open_with_wake_key(
+    shape: Shape,
     envelope: HpkeEnvelope,
-    expected_label: String,
-    aad_hex: String,
 ) -> Result<String, CryptoError> {
-    let guard = state().lock().unwrap();
-    let secret_bytes = guard
-        .wake_key_secret
-        .as_ref()
-        .ok_or_else(|| CryptoError::InvalidInput("No wake key in state".into()))?;
-    let secret_hex = Zeroizing::new(hex::encode(secret_bytes.as_ref()));
-    drop(guard);
-
-    let aad = hex::decode(&aad_hex).map_err(CryptoError::HexError)?;
-    let plaintext = hpke_envelope::hpke_open(&envelope, &secret_hex, &expected_label, &aad)?;
-    Ok(hex::encode(plaintext))
+    if shape != Shape::PushWake {
+        return Err(CryptoError::InvalidInput(
+            "the wake key opens only wake-tier push payloads".into(),
+        ));
+    }
+    let secret = {
+        let guard = state().lock().unwrap();
+        Zeroizing::new(
+            **guard
+                .wake_key_secret
+                .as_ref()
+                .ok_or_else(|| CryptoError::InvalidInput("No wake key in state".into()))?,
+        )
+    };
+    let pt = shape::open_from(&secret, shape, &[], &envelope)?;
+    Ok(hex::encode(&*pt))
 }
 
 /// Clear the wake key from Rust state. Called on logout/wipe.
@@ -1625,18 +1268,16 @@ mod tests {
             "the loaded device must still be the one this test generated"
         );
 
-        let plaintext = hex::encode(b"isolated");
-        let label = crate::labels::LABEL_NOTE_KEY;
-        let aad = hex::encode(b"iso-aad");
-        let envelope = mobile_hpke_seal(
-            plaintext.clone(),
+        let plaintext = hex::encode([0x15u8; 32]);
+        let envelope = mobile_shape_seal(
+            Shape::NoteKey,
             ds.encryption_pubkey_hex.clone(),
-            label.into(),
-            aad.clone(),
+            vec![],
+            plaintext.clone(),
         )
         .unwrap();
         assert_eq!(
-            mobile_hpke_open(envelope, label.into(), aad).unwrap(),
+            mobile_shape_open(Shape::NoteKey, vec![], envelope).unwrap(),
             plaintext
         );
 
@@ -1732,28 +1373,60 @@ mod tests {
     }
 
     #[test]
-    fn hpke_roundtrip_with_state() {
+    fn shape_roundtrip_with_state() {
         let _encrypted = mobile_generate_and_load("hpke-dev".into(), "65432100".into()).unwrap();
         let ds = mobile_get_device_state().unwrap();
 
-        // Seal to our own encryption pubkey
-        let plaintext = hex::encode(b"secret data");
-        let label = crate::labels::LABEL_NOTE_KEY;
-        let aad = hex::encode(b"test-aad");
-
-        let envelope = mobile_hpke_seal(
-            plaintext.clone(),
+        let key = hex::encode([0xabu8; 32]);
+        let envelope = mobile_shape_seal(
+            Shape::NoteKey,
             ds.encryption_pubkey_hex.clone(),
-            label.into(),
-            aad.clone(),
+            vec![],
+            key.clone(),
         )
         .unwrap();
-
-        // Open with state
-        let decrypted = mobile_hpke_open(envelope, label.into(), aad).unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(
+            mobile_shape_open(Shape::NoteKey, vec![], envelope.clone()).unwrap(),
+            key
+        );
+        // Another shape is another label as HPKE info: it does not open.
+        assert_eq!(
+            mobile_shape_open(Shape::FileKey, vec![], envelope)
+                .unwrap_err()
+                .code(),
+            "decryption_failed"
+        );
+        // A key shape refuses a non-key plaintext.
+        assert!(mobile_shape_seal(
+            Shape::NoteKey,
+            ds.encryption_pubkey_hex.clone(),
+            vec![],
+            hex::encode(b"short")
+        )
+        .is_err());
+        // Uppercase hex is refused, never normalised (D2).
+        assert_eq!(
+            mobile_shape_seal(
+                Shape::NoteKey,
+                ds.encryption_pubkey_hex,
+                vec![],
+                key.to_uppercase()
+            )
+            .unwrap_err()
+            .code(),
+            "invalid_format"
+        );
 
         mobile_lock();
+        assert!(mobile_shape_open(
+            Shape::NoteKey,
+            vec![],
+            HpkeEnvelope {
+                enc: "00".repeat(32),
+                ct: "00".repeat(48),
+            }
+        )
+        .is_err());
     }
 
     #[test]
@@ -1766,11 +1439,11 @@ mod tests {
         let shares = crate::shamir::split(&secret, 3, 2).unwrap();
         let mut plaintext = vec![shares[0].x];
         plaintext.extend_from_slice(&shares[0].y);
-        let envelope = hpke_envelope::hpke_seal(
-            &plaintext,
+        let envelope = shape::seal_to(
             &ds.encryption_pubkey_hex,
-            crate::labels::LABEL_RECOVERY_GROUP_SHARE_WRAP,
+            Shape::RecoveryGroupShare,
             &[],
+            &plaintext,
         )
         .unwrap();
 
@@ -1815,28 +1488,24 @@ mod tests {
     }
 
     #[test]
-    fn symmetric_roundtrip() {
+    fn content_roundtrip() {
         let plaintext = hex::encode(b"hello world");
-        let aad = mobile_content_aad_hex(crate::labels::LABEL_MESSAGE.into()).unwrap();
-        let result = mobile_symmetric_encrypt(plaintext.clone(), aad.clone()).unwrap();
+        let result = mobile_content_seal(Shape::MessageKey, plaintext.clone()).unwrap();
         assert_eq!(result.len(), 2);
-
         let decrypted =
-            mobile_symmetric_decrypt(result[0].clone(), result[1].clone(), aad).unwrap();
+            mobile_content_open(Shape::MessageKey, result[0].clone(), result[1].clone()).unwrap();
         assert_eq!(decrypted, plaintext);
+        // A shape with no content layer is refused.
+        assert!(mobile_content_seal(Shape::HubKey, plaintext).is_err());
     }
 
     /// A file's content layer is the RAW BYTES of the file, on every client (#3003).
     ///
     /// `tests/fixtures/file-content-vectors.json` holds one file sealed by the
     /// desktop's production primitive (WebCrypto) and one sealed by the crate's
-    /// C-ABI, both under the canonical `LABEL_FILE_KEY` content AAD
-    /// (`scripts/gen-file-content-vectors.ts`). `mobile_symmetric_decrypt` is
-    /// what iOS and Android call, so opening the DESKTOP vector here is "a file
-    /// sealed on desktop opens on iOS and Android"; the same bytes opening
-    /// through the desktop's reader (`src/client/lib/file-crypto-wire.test.ts`)
-    /// is the reverse. The desktop used to seal the hex TEXT of the file, which
-    /// this test cannot open: it would yield ASCII, 2n bytes long.
+    /// C-ABI, both under the `Shape::FileKey` content AAD. `mobile_content_open`
+    /// is what iOS and Android call, so opening the DESKTOP vector here is "a file
+    /// sealed on desktop opens on iOS and Android".
     #[test]
     fn a_file_sealed_by_the_desktop_opens_through_the_mobile_entry_point() {
         let fixture: serde_json::Value =
@@ -1844,11 +1513,10 @@ mod tests {
                 .expect("file-content-vectors.json does not parse");
         let field = |name: &str| fixture[name].as_str().unwrap().to_string();
 
-        assert_eq!(field("label"), crate::labels::LABEL_FILE_KEY);
         assert_eq!(
             field("aadHex"),
-            mobile_content_aad_hex(crate::labels::LABEL_FILE_KEY.into()).unwrap(),
-            "the fixture's AAD is not the canonical content AAD for the file label"
+            hex::encode(shape::content_aad_of(Shape::FileKey).unwrap()),
+            "the fixture's AAD is not the file shape's content AAD"
         );
         let plaintext_hex = field("plaintextHex");
         let plaintext_len = plaintext_hex.len() / 2;
@@ -1858,22 +1526,15 @@ mod tests {
             assert_eq!(
                 ct_hex.len() / 2,
                 plaintext_len + 28,
-                "{sealer}: a content ciphertext is nonce(12) + file bytes + tag(16) — \
-                 anything longer sealed an encoding of the file, not the file"
+                "{sealer}: not raw bytes"
             );
-            let opened = mobile_symmetric_decrypt(ct_hex.clone(), field("keyHex"), field("aadHex"))
+            let opened = mobile_content_open(Shape::FileKey, ct_hex.clone(), field("keyHex"))
                 .unwrap_or_else(|e| panic!("{sealer} does not open through mobile: {e}"));
             assert_eq!(opened, plaintext_hex, "{sealer} opened to different bytes");
-
-            // Verify by breaking it: the open is bound to the file label's AAD.
+            // Verify by breaking it: the open is bound to the file shape's AAD.
             assert!(
-                mobile_symmetric_decrypt(
-                    ct_hex,
-                    field("keyHex"),
-                    mobile_content_aad_hex(crate::labels::LABEL_FILE_METADATA.into()).unwrap(),
-                )
-                .is_err(),
-                "{sealer} opened under another label's AAD"
+                mobile_content_open(Shape::FileMetadataKey, ct_hex, field("keyHex")).is_err(),
+                "{sealer} opened as another shape"
             );
         }
     }
@@ -1882,188 +1543,51 @@ mod tests {
     #[test]
     fn mobile_seals_the_bytes_of_a_file_not_their_hex_text() {
         let file: Vec<u8> = (0..=255u8).collect();
-        let aad = mobile_content_aad_hex(crate::labels::LABEL_FILE_KEY.into()).unwrap();
-        let sealed = mobile_symmetric_encrypt(hex::encode(&file), aad.clone()).unwrap();
+        let sealed = mobile_content_seal(Shape::FileKey, hex::encode(&file)).unwrap();
         assert_eq!(hex::decode(&sealed[0]).unwrap().len(), file.len() + 28);
-        let opened = mobile_symmetric_decrypt(sealed[0].clone(), sealed[1].clone(), aad).unwrap();
+        let opened =
+            mobile_content_open(Shape::FileKey, sealed[0].clone(), sealed[1].clone()).unwrap();
         assert_eq!(hex::decode(opened).unwrap(), file);
     }
 
-    /// The AAD parameter must be *load-bearing*, not merely accepted.
-    ///
-    /// An ignored parameter would decrypt under every AAD, which is
-    /// indistinguishable from a correct implementation when you only test the
-    /// happy path — and is the exact defect #1520 describes. Each case below
-    /// is a label confusion that must fail.
+    /// No two content shapes open each other's ciphertext.
     #[test]
-    fn symmetric_decrypt_rejects_every_wrong_aad() {
+    fn content_open_rejects_every_other_shape() {
         let plaintext = hex::encode(b"the volunteer reply");
-        let correct = mobile_content_aad_hex(crate::labels::LABEL_MESSAGE.into()).unwrap();
-        let result = mobile_symmetric_encrypt(plaintext.clone(), correct.clone()).unwrap();
-        let (ct, key) = (result[0].clone(), result[1].clone());
-
-        // Sanity: the correct AAD opens it.
-        assert_eq!(
-            mobile_symmetric_decrypt(ct.clone(), key.clone(), correct).unwrap(),
-            plaintext
-        );
-
-        let wrong = [
-            // A different label entirely.
-            mobile_content_aad_hex(crate::labels::LABEL_NOTE_KEY.into()).unwrap(),
-            mobile_content_aad_hex(crate::labels::LABEL_CALL_META.into()).unwrap(),
-            // The *key-wrap* AAD of the same label — the domain separation
-            // this module exists to enforce. If content and key-wrap were
-            // interchangeable, a key-wrap envelope could be opened as content.
-            mobile_key_wrap_aad_hex(crate::labels::LABEL_MESSAGE.into()).unwrap(),
-            // No AAD at all — what every mobile call site passed before.
-            String::new(),
-        ];
-        for aad in wrong {
+        let result = mobile_content_seal(Shape::NoteKey, plaintext.clone()).unwrap();
+        for other in Shape::ALL {
+            if other == Shape::NoteKey || other.content_aad().is_none() {
+                continue;
+            }
             assert!(
-                mobile_symmetric_decrypt(ct.clone(), key.clone(), aad.clone()).is_err(),
-                "AAD {aad} must not open a ciphertext sealed under the content AAD of LABEL_MESSAGE"
+                mobile_content_open(other, result[0].clone(), result[1].clone()).is_err(),
+                "{other:?} opened a note ciphertext"
             );
         }
     }
 
-    /// Open, through the mobile FFI, an envelope shaped exactly as the server
-    /// writes one: hex `enc`/`ct`, `UTF-8("{label}:key-wrap")` on the key wrap
-    /// and `UTF-8(label)` on the content.
-    ///
-    /// `crate::encryption::hpke_wrap_key` is the Rust reference implementation
-    /// of the server's `encryptMessageForStorage`, so this is the server side
-    /// of the wire, not a mobile-shaped stand-in.
+    /// A note sealed by the crate's server-side reference (`encrypt_note`) opens
+    /// through the mobile one-call reader, and the content key never surfaces.
     #[test]
-    fn opens_a_server_shaped_message_envelope_and_rejects_a_mislabelled_one() {
-        let label = crate::labels::LABEL_MESSAGE;
-        let encrypted = mobile_generate_and_load("aad-dev".into(), "24681357".into()).unwrap();
-        assert!(!encrypted.ciphertext.is_empty());
+    fn open_sealed_content_reads_a_note_sealed_elsewhere() {
+        let _ = mobile_generate_and_load("aad-dev".into(), "24681357".into()).unwrap();
         let ds = mobile_get_device_state().unwrap();
-
-        // ── Server side ──────────────────────────────────────────────
-        let mut message_key = [0u8; 32];
-        getrandom::getrandom(&mut message_key).unwrap();
-        let plaintext = b"are you safe right now?";
-        let content_aad = crate::envelope_aad::content_aad(label);
-        let content_hex = {
-            use aes_gcm::{
-                aead::{Aead, KeyInit, Payload},
-                Aes256Gcm, Nonce,
-            };
-            let mut nonce_bytes = [0u8; 12];
-            getrandom::getrandom(&mut nonce_bytes).unwrap();
-            let cipher = Aes256Gcm::new_from_slice(&message_key).unwrap();
-            let ct = cipher
-                .encrypt(
-                    Nonce::from_slice(&nonce_bytes),
-                    Payload {
-                        msg: plaintext,
-                        aad: &content_aad,
-                    },
-                )
-                .unwrap();
-            let mut packed = nonce_bytes.to_vec();
-            packed.extend_from_slice(&ct);
-            hex::encode(packed)
-        };
-        // hex `enc`/`ct`, key-wrap AAD — the server's wire envelope.
-        let wire = crate::encryption::hpke_wrap_key(&message_key, &ds.encryption_pubkey_hex, label)
+        let note = crate::encryption::encrypt_note("are you safe?", &ds.encryption_pubkey_hex, &[])
             .unwrap();
-
-        // ── Mobile side ──────────────────────────────────────────────
-        let ipc = HpkeEnvelope {
-            v: 3,
-            label_id: crate::labels::label_to_id(label).unwrap(),
-            enc: mobile_hex_to_base64url(wire.enc.clone()).unwrap(),
-            ct: mobile_hex_to_base64url(wire.ct.clone()).unwrap(),
-        };
-        let key_hex = mobile_hpke_open_key(
-            ipc.clone(),
-            label.into(),
-            mobile_key_wrap_aad_hex(label.into()).unwrap(),
+        let opened = mobile_open_sealed_content(
+            Shape::NoteKey,
+            note.encrypted_content.clone(),
+            note.author_envelope.clone(),
         )
         .unwrap();
-        let opened = mobile_symmetric_decrypt(
-            content_hex.clone(),
-            key_hex.clone(),
-            mobile_content_aad_hex(label.into()).unwrap(),
+        assert_eq!(hex::decode(opened).unwrap(), b"are you safe?");
+        assert!(mobile_open_sealed_content(
+            Shape::FileKey,
+            note.encrypted_content,
+            note.author_envelope
         )
-        .unwrap();
-        assert_eq!(hex::decode(&opened).unwrap(), plaintext);
-
-        // ── Verify by breaking it ────────────────────────────────────
-        // Wrong label's AAD at the key-wrap layer: the HPKE tag must fail.
-        assert!(
-            mobile_hpke_open_key(
-                ipc.clone(),
-                label.into(),
-                mobile_key_wrap_aad_hex(crate::labels::LABEL_NOTE_KEY.into()).unwrap(),
-            )
-            .is_err(),
-            "key wrap opened under another label's AAD"
-        );
-        // Content AAD where the key-wrap AAD belongs — the two must not be
-        // interchangeable even for the same label.
-        assert!(
-            mobile_hpke_open_key(
-                ipc.clone(),
-                label.into(),
-                mobile_content_aad_hex(label.into()).unwrap(),
-            )
-            .is_err(),
-            "key wrap opened under the content AAD of the same label"
-        );
-        // Empty AAD — what Android passed before this change.
-        assert!(
-            mobile_hpke_open_key(ipc, label.into(), String::new()).is_err(),
-            "key wrap opened under an empty AAD"
-        );
-        // Wrong label's AAD at the content layer.
-        assert!(
-            mobile_symmetric_decrypt(
-                content_hex,
-                key_hex,
-                mobile_content_aad_hex(crate::labels::LABEL_CALL_META.into()).unwrap(),
-            )
-            .is_err(),
-            "content opened under another label's AAD"
-        );
-
+        .is_err());
         mobile_lock();
-    }
-
-    /// The wire↔IPC encoding boundary. Mobile handed the server's hex `enc`
-    /// and `ct` straight to a record that carries base64url, which decoded
-    /// them into unrelated bytes — so the envelope could not open even with
-    /// the AAD correct.
-    #[test]
-    fn hex_and_base64url_round_trip() {
-        let wire = "00112233445566778899aabbccddeeff";
-        let b64 = mobile_hex_to_base64url(wire.into()).unwrap();
-        assert_ne!(b64, wire);
-        assert_eq!(mobile_base64url_to_hex(b64).unwrap(), wire);
-        assert!(mobile_hex_to_base64url("not hex".into()).is_err());
-        assert!(mobile_base64url_to_hex("!!!!".into()).is_err());
-    }
-
-    /// The registry ID mobile derives must be the registry ID Rust uses, and
-    /// an unknown label must not silently become one.
-    #[test]
-    fn label_ids_come_from_the_registry() {
-        for label in [
-            crate::labels::LABEL_NOTE_KEY,
-            crate::labels::LABEL_MESSAGE,
-            crate::labels::LABEL_CALL_META,
-            crate::labels::LABEL_HUB_KEY_WRAP,
-        ] {
-            let id = mobile_label_to_id(label.into()).unwrap();
-            assert_eq!(crate::labels::id_to_label(id), Some(label));
-        }
-        // Derived from a registered label so the raw spelling lives only in
-        // labels.rs; an unregistered label must not silently map to an ID.
-        let unknown = format!("{}-not-a-real-label", crate::labels::LABEL_MESSAGE);
-        assert!(mobile_label_to_id(unknown).is_err());
     }
 
     #[test]
@@ -2110,24 +1634,30 @@ mod tests {
         // Sealed with an explicit AAD (to prove it binds), then put in the
         // wire encoding the server stores and `mobile_load_hub_key` reads: hex.
         let seal = |aad: &[u8]| {
-            let env = hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, aad)
-                .unwrap();
-            crate::encryption::KeyEnvelope {
-                enc: mobile_base64url_to_hex(env.enc).unwrap(),
-                ct: mobile_base64url_to_hex(env.ct).unwrap(),
-            }
+            hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, aad).unwrap()
         };
 
-        // 0. What a client actually stores — `hpke_wrap_key`'s hex — opens.
-        let wire =
-            crate::encryption::hpke_wrap_key(&hub_key, &ds.encryption_pubkey_hex, label).unwrap();
+        // 0. What a client actually stores — the hub-key shape's hex — opens.
+        let wire = shape::seal_to(&ds.encryption_pubkey_hex, Shape::HubKey, &[], &hub_key).unwrap();
         mobile_load_hub_key("hub-wire".into(), wire.enc.clone(), wire.ct.clone()).unwrap();
         assert!(mobile_has_hub_key("hub-wire".into()));
-        // ...and the in-memory base64url form is not a wire form.
-        let b64 =
-            hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, &composite)
-                .unwrap();
-        assert!(mobile_load_hub_key("hub-b64".into(), b64.enc, b64.ct).is_err());
+        // ...and base64url or uppercase are not a wire form (D2): refused, not normalised.
+        let b64 = |h: &str| {
+            use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+            URL_SAFE_NO_PAD.encode(hex::decode(h).unwrap())
+        };
+        for (enc, ct) in [
+            (b64(&wire.enc), b64(&wire.ct)),
+            (wire.enc.clone(), b64(&wire.ct)),
+            (wire.enc.to_uppercase(), wire.ct.clone()),
+        ] {
+            assert_eq!(
+                mobile_load_hub_key("hub-bad".into(), enc, ct)
+                    .unwrap_err()
+                    .code(),
+                "invalid_format"
+            );
+        }
 
         // 1. Composite AAD round-trips.
         let good = seal(&composite);
@@ -2169,38 +1699,12 @@ mod tests {
     }
 
     /// A hub-key rotation (#1042) from the survivor's and the departed member's
-    /// side, over the wire encoding the server stores (#1090).
-    ///
-    /// A member who stays holds K1 in Rust until it reloads. After the admin
-    /// rotates to K2 — wrapped for the survivor only — K1 cannot open K2
-    /// content, so the survivor only reads post-rotation events once it
-    /// refetches its envelope and calls `mobile_load_hub_key` again. A device
-    /// the rotation excluded can open neither the survivor's K2 envelope nor
-    /// K2 content. This pins the contract Android's refetch relies on: loading
-    /// a second key for the same hub id REPLACES the first.
+    /// side, over the wire encoding the server stores (#1090). Loading a second
+    /// key for the same hub id REPLACES the first, and a device the rotation
+    /// excluded opens neither the survivor's K2 envelope nor K2 content.
     #[test]
-    fn survivor_reads_post_rotation_events_only_after_reloading_the_hub_key() {
-        use aes_gcm::{
-            aead::{Aead, KeyInit, Payload},
-            Aes256Gcm, Nonce,
-        };
-        // What a hub member publishes: nonce(12) || ciphertext+tag, AAD LABEL_HUB_EVENT.
-        let seal_event = |key: &[u8; 32], json: &str| {
-            let mut nonce = [0u8; 12];
-            getrandom::getrandom(&mut nonce).unwrap();
-            let ct = Aes256Gcm::new_from_slice(key)
-                .unwrap()
-                .encrypt(
-                    Nonce::from_slice(&nonce),
-                    Payload {
-                        msg: json.as_bytes(),
-                        aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-                    },
-                )
-                .unwrap();
-            hex::encode([nonce.as_slice(), ct.as_slice()].concat())
-        };
-        let label = crate::labels::LABEL_HUB_KEY_WRAP;
+    fn survivor_reads_post_rotation_fields_only_after_reloading_the_hub_key() {
+        let label = crate::labels::LABEL_TAG_ENCRYPT;
 
         mobile_lock();
         let _ = mobile_generate_and_load("rot-survivor".into(), "12345678".into()).unwrap();
@@ -2211,31 +1715,25 @@ mod tests {
         let mut k2 = [0u8; 32];
         getrandom::getrandom(&mut k1).unwrap();
         getrandom::getrandom(&mut k2).unwrap();
+        let wrap = |k: &[u8; 32]| {
+            shape::seal_to(&survivor.encryption_pubkey_hex, Shape::HubKey, &[], k).unwrap()
+        };
 
-        // Before rotation: both members hold K1 and read K1 events.
-        let k1_for_survivor =
-            crate::encryption::hpke_wrap_key(&k1, &survivor.encryption_pubkey_hex, label).unwrap();
+        let k1_for_survivor = wrap(&k1);
         mobile_load_hub_key("hub-rot".into(), k1_for_survivor.enc, k1_for_survivor.ct).unwrap();
-        let before = seal_event(&k1, r#"{"type":"before"}"#);
+        let before = crate::encryption::encrypt_hub_field("before", &k1, label).unwrap();
         assert_eq!(
-            mobile_decrypt_hub_event(before, "hub-rot".into()).unwrap(),
-            r#"{"type":"before"}"#
+            mobile_decrypt_hub_field(before, "hub-rot".into(), label.into()).unwrap(),
+            "before"
         );
 
-        // Rotation: K2, wrapped for the survivor only.
-        let after = seal_event(&k2, r#"{"type":"after"}"#);
-        let k2_for_survivor =
-            crate::encryption::hpke_wrap_key(&k2, &survivor.encryption_pubkey_hex, label).unwrap();
-
-        // The survivor still holding K1 cannot read K2 content — the bug.
+        let after = crate::encryption::encrypt_hub_field("after", &k2, label).unwrap();
+        let k2_for_survivor = wrap(&k2);
         assert!(
-            mobile_decrypt_hub_event(after.clone(), "hub-rot".into()).is_err(),
+            mobile_decrypt_hub_field(after.clone(), "hub-rot".into(), label.into()).is_err(),
             "a stale K1 opened K2 content"
         );
-        assert!(mobile_decrypt_hub_event_trial(after.clone()).is_err());
 
-        // Refetch + reload replaces K1 with K2 under the same hub id, and the
-        // survivor now reads post-rotation content.
         mobile_load_hub_key(
             "hub-rot".into(),
             k2_for_survivor.enc.clone(),
@@ -2243,40 +1741,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            mobile_decrypt_hub_event(after.clone(), "hub-rot".into()).unwrap(),
-            r#"{"type":"after"}"#
-        );
-        let trial = mobile_decrypt_hub_event_trial(after.clone()).unwrap();
-        assert_eq!(
-            trial,
-            vec!["hub-rot".to_string(), r#"{"type":"after"}"#.to_string()]
+            mobile_decrypt_hub_field(after.clone(), "hub-rot".into(), label.into()).unwrap(),
+            "after"
         );
 
-        // The departed device: it cannot open the survivor's K2 envelope, and
-        // holds only K1, which opens nothing written after the rotation.
         assert!(
-            crate::encryption::hpke_unwrap_key(
-                &crate::encryption::KeyEnvelope {
-                    enc: k2_for_survivor.enc,
-                    ct: k2_for_survivor.ct,
-                },
-                &departed_secret,
-                label,
-            )
-            .is_err(),
+            shape::open_from_hex(&departed_secret, Shape::HubKey, &[], &k2_for_survivor).is_err(),
             "a device excluded from the rotation opened the survivor's K2 envelope"
         );
         assert!(
-            Aes256Gcm::new_from_slice(&k1)
-                .unwrap()
-                .decrypt(
-                    Nonce::from_slice(&hex::decode(&after).unwrap()[..12]),
-                    Payload {
-                        msg: &hex::decode(&after).unwrap()[12..],
-                        aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-                    },
-                )
-                .is_err(),
+            crate::encryption::decrypt_hub_field(&after, &k1, label).is_err(),
             "the departed member's K1 opened K2 content"
         );
 
@@ -2336,8 +1810,6 @@ mod tests {
         fn assert_option_zeroize_on_drop<V: zeroize::ZeroizeOnDrop>(_: &Option<V>) {}
         let st = MobileState::new();
         assert_map_values_zeroize_on_drop(&st.hub_keys);
-        assert_option_zeroize_on_drop(&st.server_event_current_key);
-        assert_option_zeroize_on_drop(&st.server_event_previous_key);
         assert_option_zeroize_on_drop(&st.ephemeral_secret);
         assert_option_zeroize_on_drop(&st.wake_key_secret);
     }
@@ -2352,7 +1824,7 @@ mod tests {
         let sealed_old = mobile_encrypt_hub_field(
             "old".into(),
             hub.into(),
-            crate::labels::LABEL_HUB_EVENT.into(),
+            crate::labels::LABEL_TAG_ENCRYPT.into(),
         )
         .unwrap();
         mobile_set_hub_key(hub.into(), hex::encode([0x22u8; 32])).unwrap();
@@ -2360,7 +1832,7 @@ mod tests {
             mobile_decrypt_hub_field(
                 sealed_old,
                 hub.into(),
-                crate::labels::LABEL_HUB_EVENT.into()
+                crate::labels::LABEL_TAG_ENCRYPT.into()
             )
             .is_err(),
             "the replaced key must be gone, not kept alongside the new one"
@@ -2369,116 +1841,67 @@ mod tests {
     }
 
     #[test]
-    fn hub_key_set_and_decrypt() {
-        use aes_gcm::{
-            aead::{Aead, KeyInit, Payload},
-            Aes256Gcm, Nonce,
-        };
-
-        let mut key = [0u8; 32];
-        getrandom::getrandom(&mut key).unwrap();
-        let key_hex = hex::encode(key);
+    fn hub_key_set_has_and_clear() {
         let hub_id = "test-hub-1";
-
-        mobile_set_hub_key(hub_id.into(), key_hex.clone()).unwrap();
+        mobile_set_hub_key(hub_id.into(), hex::encode([7u8; 32])).unwrap();
         assert!(mobile_has_hub_key(hub_id.into()));
         assert!(!mobile_has_hub_key("other-hub".into()));
-
-        // Encrypt a test payload with AES-256-GCM
-        let plaintext = r#"{"type":"call:ring","callId":"test123"}"#;
-        let mut nonce_bytes = [0u8; 12];
-        getrandom::getrandom(&mut nonce_bytes).unwrap();
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
-        let ciphertext = cipher
-            .encrypt(
-                nonce,
-                Payload {
-                    msg: plaintext.as_bytes(),
-                    aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-                },
-            )
-            .unwrap();
-        let mut packed = Vec::with_capacity(12 + ciphertext.len());
-        packed.extend_from_slice(&nonce_bytes);
-        packed.extend_from_slice(&ciphertext);
-        let encrypted_hex = hex::encode(&packed);
-
-        // Decrypt via hub key
-        let decrypted = mobile_decrypt_hub_event(encrypted_hex.clone(), hub_id.into()).unwrap();
-        assert_eq!(decrypted, plaintext);
-
-        // Wrong hub fails
-        assert!(mobile_decrypt_hub_event(encrypted_hex.clone(), "wrong-hub".into()).is_err());
-
-        // Trial decrypt finds the right hub
-        let result = mobile_decrypt_hub_event_trial(encrypted_hex).unwrap();
-        assert_eq!(result[0], hub_id);
-        assert_eq!(result[1], plaintext);
-
-        // Clear and verify gone
         mobile_clear_hub_keys();
         assert!(!mobile_has_hub_key(hub_id.into()));
     }
 
+    /// The keyring opens only the hubs and epochs it was handed (#2999), and is
+    /// replaced whole on every set.
     #[test]
-    fn server_event_key_set_and_decrypt() {
-        use aes_gcm::{
-            aead::{Aead, KeyInit, Payload},
-            Aes256Gcm, Nonce,
+    fn server_event_keyring_opens_only_its_own_hubs_and_epochs() {
+        let secret = [0x11u8; 32];
+        let key = |hub: &str, epoch: u64| ServerEventKey {
+            hub_id: hub.into(),
+            epoch,
+            key_hex: hex::encode(
+                *crate::events::derive_server_event_key(&secret, hub, epoch).unwrap(),
+            ),
         };
-
-        let mut key1 = [0u8; 32];
-        let mut key2 = [0u8; 32];
-        getrandom::getrandom(&mut key1).unwrap();
-        getrandom::getrandom(&mut key2).unwrap();
-        let key1_hex = hex::encode(key1);
-        let key2_hex = hex::encode(key2);
-
-        // Helper to encrypt with AES-256-GCM
-        let encrypt = |key: &[u8; 32], msg: &str| -> String {
-            let mut nonce_bytes = [0u8; 12];
-            getrandom::getrandom(&mut nonce_bytes).unwrap();
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            let cipher = Aes256Gcm::new_from_slice(key.as_slice()).unwrap();
-            let ct = cipher
-                .encrypt(
-                    nonce,
-                    Payload {
-                        msg: msg.as_bytes(),
-                        aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
-                    },
-                )
-                .unwrap();
-            let mut packed = Vec::with_capacity(12 + ct.len());
-            packed.extend_from_slice(&nonce_bytes);
-            packed.extend_from_slice(&ct);
-            hex::encode(&packed)
+        let seal = |hub: &str, epoch: u64| {
+            let k = crate::events::derive_server_event_key(&secret, hub, epoch).unwrap();
+            crate::events::seal_server_event(&k, hub, 1000, epoch, r#"{"type":"presence:summary"}"#)
+                .unwrap()
         };
+        let a7 = seal("hub-a", 7);
+        let a6 = seal("hub-a", 6);
+        let b7 = seal("hub-b", 7);
 
-        let msg = r#"{"type":"presence:summary"}"#;
-        let ct_key1 = encrypt(&key1, msg);
-        let ct_key2 = encrypt(&key2, msg);
+        mobile_set_server_event_keys(vec![key("hub-a", 7), key("hub-a", 6)]).unwrap();
+        assert!(mobile_open_server_event("hub-a".into(), 1000, 7, a7.clone()).is_ok());
+        assert!(mobile_open_server_event("hub-a".into(), 1000, 6, a6.clone()).is_ok());
+        assert_eq!(
+            mobile_open_server_event("hub-b".into(), 1000, 7, b7.clone())
+                .unwrap_err()
+                .code(),
+            "no_event_key"
+        );
+        // A frame presented as another hub or kind does not open.
+        assert!(mobile_open_server_event("hub-a".into(), 1001, 7, a7.clone()).is_err());
 
-        // Set current only
-        mobile_set_server_event_keys(key1_hex.clone(), None).unwrap();
-        assert_eq!(mobile_decrypt_server_event(ct_key1.clone()).unwrap(), msg);
-        assert!(mobile_decrypt_server_event(ct_key2.clone()).is_err());
+        // Replaced whole: the old hub's keys are gone.
+        mobile_set_server_event_keys(vec![key("hub-b", 7)]).unwrap();
+        assert!(mobile_open_server_event("hub-b".into(), 1000, 7, b7).is_ok());
+        assert!(mobile_open_server_event("hub-a".into(), 1000, 7, a7.clone()).is_err());
 
-        // Set with epoch rotation (key2 is current, key1 is previous)
-        mobile_set_server_event_keys(key2_hex.clone(), Some(key1_hex.clone())).unwrap();
-        assert_eq!(mobile_decrypt_server_event(ct_key2.clone()).unwrap(), msg);
-        assert_eq!(mobile_decrypt_server_event(ct_key1.clone()).unwrap(), msg); // previous epoch still works
-
-        // Wrong key fails
-        let mut key3 = [0u8; 32];
-        getrandom::getrandom(&mut key3).unwrap();
-        let ct_key3 = encrypt(&key3, msg);
-        assert!(mobile_decrypt_server_event(ct_key3).is_err());
-
-        // Clear
         mobile_clear_server_event_keys();
-        assert!(mobile_decrypt_server_event(ct_key1).is_err());
+        assert_eq!(
+            mobile_open_server_event("hub-a".into(), 1000, 7, a7)
+                .unwrap_err()
+                .code(),
+            "no_event_key"
+        );
+        // A malformed key list is refused whole.
+        assert!(mobile_set_server_event_keys(vec![ServerEventKey {
+            hub_id: "Hub_A".into(),
+            epoch: 1,
+            key_hex: "00".repeat(32),
+        }])
+        .is_err());
     }
 
     #[test]
@@ -2510,14 +1933,19 @@ mod tests {
         getrandom::getrandom(&mut key_bytes).unwrap();
         let key = hex::encode(key_bytes);
         mobile_set_hub_key("hub-lock-test".into(), key.clone()).unwrap();
-        mobile_set_server_event_keys(key, None).unwrap();
+        mobile_set_server_event_keys(vec![ServerEventKey {
+            hub_id: "hub-lock-test".into(),
+            epoch: 1,
+            key_hex: key,
+        }])
+        .unwrap();
         assert!(mobile_has_hub_key("hub-lock-test".into()));
+        assert!(!state().lock().unwrap().event_keys.is_empty());
 
         mobile_lock();
 
         assert!(!mobile_has_hub_key("hub-lock-test".into()));
-        // Server event decrypt should fail after lock (no key set)
-        assert!(mobile_decrypt_server_event("aabbccdd".into()).is_err());
+        assert!(state().lock().unwrap().event_keys.is_empty());
     }
 
     #[test]
@@ -2634,9 +2062,8 @@ mod stored_record_vector_tests {
         guard.device_state = Some(ds);
     }
 
-    /// Open one reader's envelope the way a mobile `CryptoService` builds the
-    /// call by hand: wire hex → `HpkeEnvelope` → `mobile_hpke_open_key`, then
-    /// `mobile_symmetric_decrypt`, each under a caller-chosen AAD.
+    /// Open one reader's envelope under an explicit AAD pair — the crate-internal
+    /// primitive, so a test can show which AADs a record does and does not open under.
     fn open_by_hand(
         rec: &FixtureRecord,
         reader: &FixtureReader,
@@ -2648,19 +2075,18 @@ mod stored_record_vector_tests {
             .iter()
             .find(|e| e.pubkey == reader.x25519_pubkey_hex)
             .expect("the fixture sealed no envelope to this reader");
-        let envelope = HpkeEnvelope {
-            v: 3,
-            label_id: mobile_label_to_id(rec.label.clone())?,
-            enc: mobile_hex_to_base64url(wire.enc.clone())?,
-            ct: mobile_hex_to_base64url(wire.ct.clone())?,
-        };
-        let key_hex = mobile_hpke_open_key(envelope, rec.label.clone(), key_wrap_aad_hex.into())?;
-        let pt_hex = mobile_symmetric_decrypt(
-            rec.encrypted_content.clone(),
-            key_hex,
-            content_aad_hex.into(),
-        )?;
-        Ok(String::from_utf8(hex::decode(pt_hex).unwrap()).unwrap())
+        let pt = with_secrets(|secrets, _| {
+            crate::encryption::open_multi_reader(
+                &rec.encrypted_content,
+                std::slice::from_ref(wire),
+                &[&reader.x25519_pubkey_hex],
+                &hex::encode(secrets.encryption_seed),
+                &rec.label,
+                &hex::decode(content_aad_hex).unwrap(),
+                &hex::decode(key_wrap_aad_hex).unwrap(),
+            )
+        })?;
+        Ok(String::from_utf8(pt.to_vec()).unwrap())
     }
 
     #[test]
@@ -2722,8 +2148,8 @@ mod stored_record_vector_tests {
         load_reader(reader);
         for label in [LABEL_MESSAGE, LABEL_CALL_META] {
             let rec = record(&f, label);
-            let wrap = mobile_key_wrap_aad_hex(label.into()).unwrap();
-            let content = mobile_content_aad_hex(label.into()).unwrap();
+            let wrap = hex::encode(crate::envelope_aad::key_wrap_aad(label));
+            let content = hex::encode(crate::envelope_aad::content_aad(label));
             assert!(
                 open_by_hand(rec, reader, &wrap, &content).is_err(),
                 "{} opened under the canonical AAD — the fixture no longer pins the stored-record format",
@@ -2768,8 +2194,8 @@ mod stored_record_vector_tests {
                 open_by_hand(&rec, reader, &f.aad_hex.key_wrap, &f.aad_hex.content).unwrap(),
                 plaintext
             );
-            let wrap = mobile_key_wrap_aad_hex(LABEL_MESSAGE.into()).unwrap();
-            let content = mobile_content_aad_hex(LABEL_MESSAGE.into()).unwrap();
+            let wrap = hex::encode(crate::envelope_aad::key_wrap_aad(LABEL_MESSAGE));
+            let content = hex::encode(crate::envelope_aad::content_aad(LABEL_MESSAGE));
             assert!(open_by_hand(&rec, reader, &wrap, &content).is_err());
         }
         // Wire shape the server writes: hex enc (32 B) and hex ct (48 B).
@@ -2798,22 +2224,19 @@ mod stored_record_vector_tests {
         load_reader(reader);
         let plaintext = "sealed the pre-fix mobile way";
         let pt_hex = hex::encode(plaintext.as_bytes());
-        let out = mobile_symmetric_encrypt(
-            pt_hex,
-            mobile_content_aad_hex(LABEL_MESSAGE.into()).unwrap(),
-        )
-        .unwrap();
-        let env = mobile_hpke_seal_key(
-            out[1].clone(),
+        // The note shape carries the canonical AAD on both layers.
+        let out = mobile_content_seal(Shape::NoteKey, pt_hex).unwrap();
+        let env = mobile_shape_seal(
+            Shape::NoteKey,
             reader.x25519_pubkey_hex.clone(),
-            LABEL_MESSAGE.into(),
-            mobile_key_wrap_aad_hex(LABEL_MESSAGE.into()).unwrap(),
+            vec![],
+            out[1].clone(),
         )
         .unwrap();
         let envelopes = vec![RecipientKeyEnvelope {
             pubkey: reader.x25519_pubkey_hex.clone(),
-            enc: mobile_base64url_to_hex(env.enc).unwrap(),
-            ct: mobile_base64url_to_hex(env.ct).unwrap(),
+            enc: env.enc,
+            ct: env.ct,
         }];
         assert!(matches!(
             mobile_decrypt_message(out[0].clone(), envelopes),
@@ -2822,108 +2245,91 @@ mod stored_record_vector_tests {
     }
 }
 
-/// The server's relay events, opened through the mobile FFI surface.
-///
-/// `tests/fixtures/server-event-vectors.json` holds frames the **server**
-/// published (`packages/crypto/scripts/gen-server-event-vectors.ts` runs
-/// `encryptEventContent` from `apps/worker/lib/ws-events.ts`), and the event keys
-/// `GET /api/auth/me` returns. The older `mobile_decrypt_server_event` test seals
-/// its own fixture under the epoch-less AAD, so it confirms that function against
-/// itself — and Android called it for every real frame, none of which it can open
-/// (#2117).
+/// The v2 vectors, opened through the mobile FFI surface — what iOS and Android
+/// call (`tests/fixtures/v2/`, generated by `crate::vectors`).
 #[cfg(test)]
-mod server_event_vector_tests {
+mod v2_vector_tests {
     use super::*;
-    use crate::labels::{LABEL_HUB_EVENT, LABEL_HUB_EVENT_EPOCH};
 
-    const FIXTURE: &str = include_str!("../tests/fixtures/server-event-vectors.json");
-
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Fixture {
-        server_event_key_hex: String,
-        server_event_key_prev_hex: String,
-        frames: Vec<Frame>,
+    fn load(name: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/v2")
+            .join(name);
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
-    #[derive(serde::Deserialize)]
-    struct Frame {
-        name: String,
-        epoch: u64,
-        plaintext: String,
-        payload: String,
-    }
-
-    fn fixture_with_keys_stored() -> Fixture {
-        let f: Fixture =
-            serde_json::from_str(FIXTURE).expect("server-event-vectors.json does not parse");
-        mobile_set_server_event_keys(
-            f.server_event_key_hex.clone(),
-            Some(f.server_event_key_prev_hex.clone()),
-        )
-        .unwrap();
-        f
+    fn strings(v: &serde_json::Value) -> Vec<String> {
+        serde_json::from_value(v.clone()).unwrap()
     }
 
     #[test]
-    fn the_fixture_pins_the_labels_the_server_used() {
-        let v: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
-        assert_eq!(v["aad"]["epochLabel"], LABEL_HUB_EVENT_EPOCH);
-        assert_eq!(v["aad"]["epochless"], LABEL_HUB_EVENT);
-    }
-
-    #[test]
-    fn every_server_frame_opens_given_its_own_epoch() {
-        let f = fixture_with_keys_stored();
-        assert!(f.frames.len() >= 3, "the fixture lost frames");
-        for frame in &f.frames {
-            assert_eq!(
-                mobile_decrypt_server_event_with_epoch(frame.payload.clone(), frame.epoch)
-                    .unwrap_or_else(|e| panic!("{} did not open: {e:?}", frame.name)),
-                frame.plaintext,
-                "{}",
-                frame.name,
-            );
+    fn every_server_event_vector_opens_or_fails_with_its_code() {
+        let f = load("server-event.json");
+        mobile_set_server_event_keys(serde_json::from_value(f["heldKeys"].clone()).unwrap())
+            .unwrap();
+        let open = |v: &serde_json::Value| {
+            mobile_open_server_event(
+                v["hubId"].as_str().unwrap().into(),
+                v["kind"].as_u64().unwrap() as u32,
+                v["epoch"].as_u64().unwrap(),
+                v["payload"].as_str().unwrap().into(),
+            )
+        };
+        let mut opened = 0;
+        for fr in f["frames"].as_array().unwrap() {
+            if let Ok(json) = open(fr) {
+                assert_eq!(json, fr["plaintext"].as_str().unwrap());
+                opened += 1;
+            }
         }
-    }
-
-    /// The bucket padding must be gone: the reader hands back exactly the JSON.
-    #[test]
-    fn a_frame_over_the_minimum_bucket_is_unpadded() {
-        let f = fixture_with_keys_stored();
-        let big = f
-            .frames
-            .iter()
-            .find(|fr| fr.name == "padded-to-next-bucket")
-            .expect("the fixture has no multi-bucket frame");
-        // nonce(12) + 1024-byte bucket + tag(16), hex-encoded.
-        assert_eq!(big.payload.len(), (12 + 1024 + 16) * 2);
-        let opened =
-            mobile_decrypt_server_event_with_epoch(big.payload.clone(), big.epoch).unwrap();
-        assert_eq!(opened, big.plaintext);
-        assert!(serde_json::from_str::<serde_json::Value>(&opened).is_ok());
-    }
-
-    #[test]
-    fn the_wrong_epoch_does_not_open_a_frame() {
-        let f = fixture_with_keys_stored();
-        let frame = &f.frames[0];
-        assert!(
-            mobile_decrypt_server_event_with_epoch(frame.payload.clone(), frame.epoch + 1).is_err()
+        assert_eq!(
+            opened, 3,
+            "a member of hub A opens hub A's three frames and nothing else"
         );
-    }
-
-    /// The pre-#2117 Android path: no epoch in the AAD, no unpadding. It cannot
-    /// open a single frame the server really sends.
-    #[test]
-    fn the_epochless_reader_opens_no_server_frame() {
-        let f = fixture_with_keys_stored();
-        for frame in &f.frames {
-            assert!(
-                mobile_decrypt_server_event(frame.payload.clone()).is_err(),
-                "{} opened without its epoch",
-                frame.name,
+        for n in f["negatives"].as_array().unwrap() {
+            assert_eq!(
+                open(n).unwrap_err().code(),
+                n["expect"].as_str().unwrap(),
+                "{}",
+                n["name"]
             );
         }
+        mobile_clear_server_event_keys();
+    }
+
+    /// The mobile reader opens with the device key, so unlock the vectors'
+    /// recipient as this device through the production `mobile_unlock`, from the
+    /// PIN blob the vectors carry — exactly what the iOS XCTest does.
+    #[test]
+    fn every_hpke_wrap_vector_opens_or_fails_with_its_code() {
+        let f = load("hpke-wrap.json");
+        let dk = &f["recipientDeviceKeys"];
+        let blob: EncryptedDeviceKeys = serde_json::from_value(dk["blob"].clone()).unwrap();
+        let ds = mobile_unlock(blob, dk["pin"].as_str().unwrap().into()).unwrap();
+        assert_eq!(
+            ds.encryption_pubkey_hex,
+            f["recipientPubkeyHex"].as_str().unwrap()
+        );
+        let shape_of =
+            |v: &serde_json::Value| -> Shape { serde_json::from_value(v.clone()).unwrap() };
+        for p in f["positives"].as_array().unwrap() {
+            let pt = mobile_shape_open(
+                shape_of(&p["shape"]),
+                strings(&p["aadFields"]),
+                serde_json::from_value(p["envelope"].clone()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(pt, p["plaintextHex"].as_str().unwrap());
+        }
+        for n in f["negatives"].as_array().unwrap() {
+            let err = mobile_shape_open(
+                shape_of(&n["shape"]),
+                strings(&n["aadFields"]),
+                serde_json::from_value(n["envelope"].clone()).unwrap(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code(), n["expect"].as_str().unwrap(), "{}", n["name"]);
+        }
+        mobile_lock();
     }
 }

@@ -109,7 +109,7 @@ describe('conversations route validation', () => {
         readerEnvelopes: [{
           pubkey: 'bad',
           enc: VALID_ENVELOPE.enc,
-          ct: 'key',
+          ct: '7c63ea2ebd1ba2247b45073ad34df5a434f0f6b5773c8671c4572dc899a02971ff9de896ee6992574dc9c73eacc5d6f8',
         }],
       })
       expect(res.status).toBe(400)

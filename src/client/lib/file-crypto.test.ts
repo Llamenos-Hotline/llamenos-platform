@@ -13,11 +13,10 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { gcm } from '@noble/ciphers/aes.js'
 import { bytesToHex, hexToBytes } from '@shared/encoding'
-import { LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
-import { contentAadHex } from '@shared/envelope-aad'
+import { shapeContentAadHexMock } from '../../../tests/mocks/hpke-mock'
 
 const wraps = vi.hoisted(() => ({
-  keys: [] as Array<{ keyHex: string; pubkey: string; label: string }>,
+  keys: [] as Array<{ keyHex: string; pubkey: string; shape: string }>,
 }))
 
 vi.mock('./platform', async importOriginal => {
@@ -26,11 +25,13 @@ vi.mock('./platform', async importOriginal => {
     ...actual,
     // No Tauri here: the HPKE half is stubbed, the AES-GCM half is the real one.
     resolveEncryptionPubkey: vi.fn(async (pubkey: string) => (pubkey.startsWith('sig-') ? `enc-${pubkey.slice(4)}` : pubkey)),
-    hpkeWrapKey: vi.fn(async (keyHex: string, pubkey: string, label: string) => {
-      wraps.keys.push({ keyHex, pubkey, label })
+    hpkeWrapKey: vi.fn(async (keyHex: string, pubkey: string, shape: string) => {
+      wraps.keys.push({ keyHex, pubkey, shape })
       return { enc: 'ab'.repeat(32), ct: 'cd'.repeat(48) }
     }),
-    unwrapFileKey: vi.fn(async () => wraps.keys.find(k => k.label === LABEL_FILE_KEY)!.keyHex),
+    // The crate's content AAD for the shape, as `shape_content_aad` returns it.
+    shapeContentAadHex: vi.fn(async (shape: Parameters<typeof shapeContentAadHexMock>[0]) => shapeContentAadHexMock(shape)),
+    unwrapFileKey: vi.fn(async () => wraps.keys.find(k => k.shape === 'file-key')!.keyHex),
   }
 })
 
@@ -55,9 +56,8 @@ beforeEach(() => {
 })
 
 describe('the file-content vectors', () => {
-  it('state the canonical file-label AAD', () => {
-    expect(vectors.label).toBe(LABEL_FILE_KEY)
-    expect(vectors.aadHex).toBe(contentAadHex(LABEL_FILE_KEY))
+  it('state the file shape\'s content AAD', () => {
+    expect(vectors.aadHex).toBe(shapeContentAadHexMock('file-key'))
   })
 
   it.each(['desktopCiphertextHex', 'crateCiphertextHex'] as const)(
@@ -72,7 +72,7 @@ describe('the file-content vectors', () => {
 
   it('are bound to the file label: the metadata label’s AAD does not open them', async () => {
     await expect(
-      aesGcmOpenBytes(hexToBytes(vectors.desktopCiphertextHex), vectors.keyHex, contentAadHex(LABEL_FILE_METADATA)),
+      aesGcmOpenBytes(hexToBytes(vectors.desktopCiphertextHex), vectors.keyHex, shapeContentAadHexMock('file-metadata-key')),
     ).rejects.toThrow()
   })
 })

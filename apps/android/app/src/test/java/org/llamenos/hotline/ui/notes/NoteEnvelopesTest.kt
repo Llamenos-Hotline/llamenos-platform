@@ -26,7 +26,8 @@ class NoteEnvelopesTest {
 
     private fun envelope(pubkey: String, tag: String) = NoteEnvelope(
         recipientPubkey = pubkey,
-        hpkeEnvelope = HpkeEnvelope(v = 3, labelId = 0, enc = "enc-$tag", ct = "ct-$tag"),
+        hpkeEnvelope = HpkeEnvelope(
+                enc = "enc-$tag", ct = "ct-$tag"),
     )
 
     // List/reply payloads use SharedNote's generated AuthorEnvelope and

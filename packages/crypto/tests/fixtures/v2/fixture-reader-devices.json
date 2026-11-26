@@ -1,0 +1,35 @@
+{
+  "description": "The readers of case-record-vectors.json and stored-record-vectors.json as PIN-encrypted device-key blobs (production Argon2id), keyed by X25519 pubkey. A client unlocks one with mobile_unlock and opens the fixture through its production readers.",
+  "devices": {
+    "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252": {
+      "argon2MCost": 65536,
+      "argon2PCost": 4,
+      "argon2TCost": 3,
+      "ciphertext": "d5de87ca3162ee99635847f983ee79f45da6e903d98f73dd407fd2713b9155995afca4bcf809ba9e36779ebd7738089c7969da38f5ea128a45e1e043adb2696eebc109157619e5c9bf36e44a583b9b05",
+      "kdfVersion": 2,
+      "nonce": "c0f0c06bf59725edbdbd6771",
+      "salt": "3ca4b3cda68f94619eb5365d3f0ea8d76ceb41b5a183b266a5648bde2302d9df",
+      "state": {
+        "deviceId": "fixture-volunteer",
+        "encryptionPubkeyHex": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
+        "signingPubkeyHex": "c210f947853bb3467aed025b9e53493512035a06476af87c67715f740670449b"
+      }
+    },
+    "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a": {
+      "argon2MCost": 65536,
+      "argon2PCost": 4,
+      "argon2TCost": 3,
+      "ciphertext": "f888039ce86b92c4c969738a63968c16cda9a496adb320a695dd7889cc8a76a5fb9e2847f1cb1d826cb09374da86fb4bc7e47859abb15858ed468938cd530db545de9a0c7bba028bc215d0df57b77cba",
+      "kdfVersion": 2,
+      "nonce": "3e26048198bf9f2cc642d03d",
+      "salt": "687433fd64c32681a1ddb9b21e653417a5b26df3d5a65bddaf75c0716f9b61e6",
+      "state": {
+        "deviceId": "fixture-admin",
+        "encryptionPubkeyHex": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
+        "signingPubkeyHex": "0fd41e2829cc163f27394283cfb666e30b1e8053a99d68ff9b75673b13969e1f"
+      }
+    }
+  },
+  "generator": "packages/crypto/src/vectors.rs (seeded ChaCha20; LLAMENOS_WRITE_VECTORS=1 cargo test --lib vectors)",
+  "pin": "24681357"
+}

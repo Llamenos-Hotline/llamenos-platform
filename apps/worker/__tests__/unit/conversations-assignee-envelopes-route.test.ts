@@ -25,7 +25,7 @@ beforeEach(() => {
 })
 
 const RECIPIENT = 'c'.repeat(64)
-const ENVELOPE = { pubkey: RECIPIENT, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }
+const ENVELOPE = { pubkey: RECIPIENT, enc: 'b'.repeat(64), ct: '6571c8af75c092f15b776b9c20db39f01a00d8e7b8b4e7cf94c4b9712b1b948956e8f4d0de793c074e59f628d64ef32a' }
 const BODY = JSON.stringify({ envelopes: [{ messageId: 'msg-1', envelope: ENVELOPE }] })
 
 function makeApp(opts: { permissions?: string[]; callerHubId?: string; convHubId?: string | null; added?: number } = {}) {

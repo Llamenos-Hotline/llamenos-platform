@@ -38,10 +38,9 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'create_auth_token_from_state',
     'create_nonceless_auth_token_from_state',
     // HPKE crypto (v3)
-    'hpke_seal',
-    'hpke_seal_key',
-    'hpke_open_from_state',
-    'hpke_open_key_from_state',
+    'shape_seal',
+    'shape_open_from_state',
+    'shape_content_aad',
     'seal_case_from_state',
     'open_case_from_state',
     // Ed25519 signing is purpose-bound (no generic signer); verification is public-key-only
@@ -69,8 +68,7 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'open_device_local_from_state',
     // Server event decryption
     'set_server_event_keys',
-    'decrypt_hub_event',
-    'decrypt_server_event',
+    'open_server_event',
     // SFrame voice E2EE
     'sframe_derive_key',
     // SAS emoji verification

@@ -66,58 +66,30 @@ final class MessageStoredRecordAADTests: XCTestCase {
     override func setUp() {
         super.setUp()
         CryptoService().lock()
-        mobileClearWakeKey()
     }
 
     override func tearDown() {
-        mobileClearWakeKey()
         CryptoService().lock()
         super.tearDown()
     }
 
-    private func canonicalContentAad() throws -> String { try mobileContentAadHex(label: CryptoLabels.LABEL_MESSAGE) }
-    private func canonicalKeyWrapAad() throws -> String { try mobileKeyWrapAadHex(label: CryptoLabels.LABEL_MESSAGE) }
-
-    private func ffiEnvelope(enc: String, ct: String) throws -> HpkeEnvelope {
-        HpkeEnvelope(
-            v: 3,
-            labelId: try mobileLabelToId(label: CryptoLabels.LABEL_MESSAGE),
-            enc: try mobileHexToBase64url(hexStr: enc),
-            ct: try mobileHexToBase64url(hexStr: ct)
-        )
+    private func wire(_ env: Fixture.Envelope) -> RecipientEnvelope {
+        RecipientEnvelope(ct: env.ct, enc: env.enc, pubkey: env.pubkey)
     }
 
-    /// Open `envelope` as `reader` (fixture reader loaded as the wake key), then
-    /// the content layer, each under the caller-chosen AAD.
-    private func openAsFixtureReader(
-        _ reader: Fixture.Reader,
-        encryptedContent: String,
-        envelope: (enc: String, ct: String),
-        keyWrapAadHex: String,
-        contentAadHex: String
-    ) throws -> String {
-        try mobileLoadWakeKey(secretHex: reader.x25519SecretHex)
-        let keyHex = try mobileHpkeOpenWithWakeKey(
-            envelope: try ffiEnvelope(enc: envelope.enc, ct: envelope.ct),
-            expectedLabel: CryptoLabels.LABEL_MESSAGE,
-            aadHex: keyWrapAadHex
-        )
-        let plaintextHex = try mobileSymmetricDecrypt(ciphertextHex: encryptedContent, keyHex: keyHex, aadHex: contentAadHex)
-        let bytes = try XCTUnwrap(Self.data(fromHex: plaintextHex))
-        return try XCTUnwrap(String(data: bytes, encoding: .utf8))
+    /// Open as `reader` — the fixture reader unlocked as this device — through the
+    /// production stored-record reader (`decryptMessage`, the message-key shape).
+    private func openAsFixtureReader(_ reader: Fixture.Reader, encryptedContent: String, envelope: RecipientEnvelope) throws -> String {
+        let service = CryptoService()
+        try unlockAsFixtureReader(service, x25519PubkeyHex: reader.x25519PubkeyHex)
+        return try service.decryptMessage(encryptedContent: encryptedContent, readerEnvelopes: [envelope])
     }
 
-    private static func data(fromHex hex: String) -> Data? {
-        guard hex.count % 2 == 0 else { return nil }
-        var data = Data(capacity: hex.count / 2)
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let next = hex.index(index, offsetBy: 2)
-            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
-            data.append(byte)
-            index = next
-        }
-        return data
+    /// Open as `reader` under the canonical (note) shape — label and `label:key-wrap`
+    /// AADs — which a stored record must never open under.
+    private func openAsCanonicalShape(_ reader: Fixture.Reader, encryptedContent: String, envelope: RecipientEnvelope) throws -> String {
+        try unlockAsFixtureReader(CryptoService(), x25519PubkeyHex: reader.x25519PubkeyHex)
+        return try mobileOpenSealedContent(shape: .noteKey, ciphertextHex: encryptedContent, envelope: HpkeEnvelope(enc: envelope.enc, ct: envelope.ct))
     }
 
     private static func hex(_ string: String) -> String {
@@ -140,17 +112,11 @@ final class MessageStoredRecordAADTests: XCTestCase {
         let f = try loadFixture()
         let rec = try messageRecord(f)
         for reader in f.readers {
-            let env = try XCTUnwrap(rec.readerEnvelopes.first { $0.pubkey == reader.x25519PubkeyHex })
-            let opened = try openAsFixtureReader(
-                reader, encryptedContent: rec.encryptedContent, envelope: (env.enc, env.ct),
-                keyWrapAadHex: f.aadHex.keyWrap, contentAadHex: f.aadHex.content
-            )
-            XCTAssertEqual(opened, rec.plaintext, "\(reader.name) cannot open the server's message")
-
-            XCTAssertThrowsError(try openAsFixtureReader(
-                reader, encryptedContent: rec.encryptedContent, envelope: (env.enc, env.ct),
-                keyWrapAadHex: try canonicalKeyWrapAad(), contentAadHex: try canonicalContentAad()
-            ), "\(reader.name) opened the server's message under the canonical AAD")
+            let env = wire(try XCTUnwrap(rec.readerEnvelopes.first { $0.pubkey == reader.x25519PubkeyHex }))
+            XCTAssertEqual(try openAsFixtureReader(reader, encryptedContent: rec.encryptedContent, envelope: env), rec.plaintext,
+                           "\(reader.name) cannot open the server's message")
+            XCTAssertThrowsError(try openAsCanonicalShape(reader, encryptedContent: rec.encryptedContent, envelope: env),
+                                 "\(reader.name) opened the server's message under the canonical AAD")
         }
     }
 
@@ -183,21 +149,11 @@ final class MessageStoredRecordAADTests: XCTestCase {
 
         for reader in f.readers {
             let env = try XCTUnwrap(sealed.envelopes.first { $0.pubkey == reader.x25519PubkeyHex })
-            let opened = try openAsFixtureReader(
-                reader, encryptedContent: sealed.encryptedContent, envelope: (env.enc, env.ct),
-                keyWrapAadHex: f.aadHex.keyWrap, contentAadHex: f.aadHex.content
-            )
+            let opened = try openAsFixtureReader(reader, encryptedContent: sealed.encryptedContent, envelope: env)
             XCTAssertEqual(opened, plaintext, "\(reader.name) cannot open what iOS sealed")
-
-            // …and not under the canonical AAD, on either layer.
-            let canonicalWrap = try canonicalKeyWrapAad()
-            let canonicalContent = try canonicalContentAad()
-            for (wrap, content) in [(canonicalWrap, canonicalContent), (canonicalWrap, f.aadHex.content), (f.aadHex.keyWrap, canonicalContent)] {
-                XCTAssertThrowsError(try openAsFixtureReader(
-                    reader, encryptedContent: sealed.encryptedContent, envelope: (env.enc, env.ct),
-                    keyWrapAadHex: wrap, contentAadHex: content
-                ), "iOS-sealed message opened with an AAD on a layer — iOS has re-introduced an AAD")
-            }
+            // …and not under the canonical AAD.
+            XCTAssertThrowsError(try openAsCanonicalShape(reader, encryptedContent: sealed.encryptedContent, envelope: env),
+                                 "iOS-sealed message opened under the canonical AAD — iOS has re-introduced an AAD")
         }
     }
 
@@ -223,10 +179,8 @@ final class MessageStoredRecordAADTests: XCTestCase {
         let devicePubkey = try XCTUnwrap(service.encryptionPubkeyHex)
         let plaintext = "caller: are you there? necesito ayuda"
 
-        let sealed = try sealByHand(
-            plaintext: plaintext, recipient: devicePubkey,
-            keyWrapAadHex: f.aadHex.keyWrap, contentAadHex: f.aadHex.content
-        )
+        XCTAssertEqual(f.aadHex.content, "")
+        let sealed = try sealByHand(plaintext: plaintext, recipient: devicePubkey, shape: .messageKey)
         XCTAssertEqual(
             try service.decryptMessage(encryptedContent: sealed.encryptedContent, readerEnvelopes: [sealed.envelope]),
             plaintext
@@ -241,31 +195,18 @@ final class MessageStoredRecordAADTests: XCTestCase {
         _ = try service.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
         let devicePubkey = try XCTUnwrap(service.encryptionPubkeyHex)
 
-        let sealed = try sealByHand(
-            plaintext: "sealed the pre-fix iOS way", recipient: devicePubkey,
-            keyWrapAadHex: try canonicalKeyWrapAad(), contentAadHex: try canonicalContentAad()
-        )
+        let sealed = try sealByHand(plaintext: "sealed the pre-fix iOS way", recipient: devicePubkey, shape: .noteKey)
         XCTAssertThrowsError(
             try service.decryptMessage(encryptedContent: sealed.encryptedContent, readerEnvelopes: [sealed.envelope])
         )
     }
 
-    private func sealByHand(
-        plaintext: String,
-        recipient: String,
-        keyWrapAadHex: String,
-        contentAadHex: String
-    ) throws -> (encryptedContent: String, envelope: RecipientEnvelope) {
-        let out = try mobileSymmetricEncrypt(plaintextHex: Self.hex(plaintext), aadHex: contentAadHex)
-        let sealedKey = try mobileHpkeSealKey(
-            keyHex: out[1], recipientPubkeyHex: recipient,
-            label: CryptoLabels.LABEL_MESSAGE, aadHex: keyWrapAadHex
-        )
-        let envelope = RecipientEnvelope(
-            ct: try mobileBase64urlToHex(b64: sealedKey.ct),
-            enc: try mobileBase64urlToHex(b64: sealedKey.enc),
-            pubkey: recipient
-        )
-        return (out[0], envelope)
+    /// Seal a record by shape primitives rather than `CryptoService`: the
+    /// message-key shape (the stored-record format) or the note-key shape (the
+    /// canonical AAD the old iOS bound).
+    private func sealByHand(plaintext: String, recipient: String, shape: Shape) throws -> (encryptedContent: String, envelope: RecipientEnvelope) {
+        let out = try mobileContentSeal(shape: shape, plaintextHex: Self.hex(plaintext))
+        let sealedKey = try mobileShapeSeal(shape: shape, recipientPubkeyHex: recipient, aadFields: [], plaintextHex: out[1])
+        return (out[0], RecipientEnvelope(ct: sealedKey.ct, enc: sealedKey.enc, pubkey: recipient))
     }
 }

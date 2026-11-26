@@ -44,7 +44,7 @@ function makeCaseRow(overrides: Partial<{
     assignedTo: [],
     blindIndexes: {},
     encryptedSummary: 'enc-summary',
-    summaryEnvelopes: [{ pubkey: 'pk-admin', enc: 'b'.repeat(64), ct: 'wk1' }],
+    summaryEnvelopes: [{ pubkey: 'pk-admin', enc: 'b'.repeat(64), ct: '38ca9bd310b7ec9b4e9bf72030f9a857d2647e9e26bd3cdcc220178a8786493d518a3c9605f5d23f2598eff87dfd26a6' }],
     encryptedFields: null,
     fieldEnvelopes: null,
     encryptedPii: null,
@@ -105,7 +105,7 @@ describe('CasesService — CRUD', () => {
         entityTypeId: 'et-incident',
         createdBy: 'pk-author',
         encryptedSummary: 'enc-summary',
-        summaryEnvelopes: [{ pubkey: 'pk-admin', enc: 'b'.repeat(64), ct: 'wk1' }],
+        summaryEnvelopes: [{ pubkey: 'pk-admin', enc: 'b'.repeat(64), ct: '38ca9bd310b7ec9b4e9bf72030f9a857d2647e9e26bd3cdcc220178a8786493d518a3c9605f5d23f2598eff87dfd26a6' }],
         statusHash: 'hash-open',
       })
 
@@ -142,7 +142,7 @@ describe('CasesService — CRUD', () => {
         entityTypeId: 'et-incident',
         createdBy: 'pk-author',
         encryptedSummary: 'enc',
-        summaryEnvelopes: [{ pubkey: 'pk-admin', enc: 'b'.repeat(64), ct: 'wk1' }],
+        summaryEnvelopes: [{ pubkey: 'pk-admin', enc: 'b'.repeat(64), ct: '38ca9bd310b7ec9b4e9bf72030f9a857d2647e9e26bd3cdcc220178a8786493d518a3c9605f5d23f2598eff87dfd26a6' }],
         statusHash: 'hash-open',
         contactLinks: [
           { contactId: 'contact-1', role: 'caller' },

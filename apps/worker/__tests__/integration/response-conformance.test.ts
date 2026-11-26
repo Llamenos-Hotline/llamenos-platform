@@ -301,10 +301,16 @@ describe('Auth Routes — response conformance', () => {
     }
 
     const { app, env } = buildApp('/auth', authRoutes, {
-      services: { identity: mockIdentity },
+      services: {
+        identity: mockIdentity,
+        hubs: { getHubs: vi.fn().mockResolvedValue({ hubs: [{ id: DEFAULT_HUB_ID, status: 'active' }] }) },
+      },
+      // GET /me hands out the relay-event keys (#2999), derived from SERVER_SECRET.
+      extraEnv: { SERVER_SECRET: 'a'.repeat(64) },
     })
 
     const result = await assertConformsToSchema(app, 'GET', '/auth/me', meResponseSchema, { env })
+    expect(Array.isArray(result.parsed.serverEventKeys)).toBe(true)
     expect(result.parsed.pubkey).toBe(MOCK_PUBKEY)
     expect(Array.isArray(result.parsed.roles)).toBe(true)
     expect(Array.isArray(result.parsed.permissions)).toBe(true)
@@ -566,7 +572,7 @@ describe('Notes Routes — response conformance', () => {
       body: {
         callId: 'call-1',
         encryptedContent: 'encrypted-data',
-        adminEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
+        adminEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }],
       },
       expectedStatus: 201,
       env,
@@ -590,7 +596,7 @@ describe('Notes Routes — response conformance', () => {
       noteId: mockNote.id,
       authorPubkey: MOCK_PUBKEY,
       encryptedContent: 'encrypted-reply-base64',
-      readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
+      readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }],
       createdAt: new Date(),
       cryptoFormat: CRYPTO_FORMAT_CURRENT,
     }
@@ -608,7 +614,7 @@ describe('Notes Routes — response conformance', () => {
     const result = await assertConformsToSchema(app, 'POST', `/notes/${mockNote.id}/replies`, noteReplyStoredResponseSchema, {
       body: {
         encryptedContent: 'encrypted-reply',
-        readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
+        readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }],
       },
       expectedStatus: 201,
       env,

@@ -1,33 +1,29 @@
-//! HPKE envelope encryption — RFC 9180 compliant.
+//! HPKE envelope encryption — RFC 9180, and the one envelope wire shape (D1, D2).
 //!
-//! Wire format (v3):
+//! Wire format (spec `2026-11-24-encryption-v2-wire-format.md` §1.2–§1.3):
 //! ```json
-//! {
-//!   "v": 3,
-//!   "labelId": <u8>,
-//!   "enc": "<base64url — 32-byte HPKE encapsulated key>",
-//!   "ct": "<base64url — AEAD ciphertext>"
-//! }
+//! { "enc": "<lowercase hex — HPKE encapsulated key>", "ct": "<lowercase hex — AEAD ciphertext>" }
 //! ```
+//!
+//! There is no `v` and no `labelId`. The label is a property of the *shape* of
+//! what is sealed (`crate::shape::Shape`), and the crate supplies it; no host
+//! names a label or an AAD. The label is bound as HPKE `info` on seal and on
+//! open, so an envelope opened under the wrong shape fails the AEAD with the
+//! same opaque `DecryptionFailed` as a wrong key — there is no separate,
+//! earlier label check to bypass or to leak through timing.
+//!
+//! Every byte string is **lowercase hex, length-checked**. Uppercase, base64url,
+//! odd lengths and wrong lengths are `InvalidFormat` at the boundary, never
+//! normalised (#1649).
 //!
 //! HPKE parameters:
 //! - Mode: Base (anonymous sender)
 //! - KEM: DHKEM(X25519, HKDF-SHA256) — KEM ID 0x0020
 //! - KDF: HKDF-SHA256 — KDF ID 0x0001
 //! - AEAD: AES-256-GCM — AEAD ID 0x0002
-//! - `info`: UTF-8 encoded label string (e.g., "llamenos:note-key")
-//! - `aad`: caller-provided (e.g., "{label}:{recordId}:{fieldName}")
-//!
-//! ## Label Enforcement (Albrecht Defense)
-//!
-//! Before HPKE open, the recipient MUST:
-//! 1. Parse envelope, check `v === 3`
-//! 2. Resolve `labelId` to a `CryptoLabel` constant
-//! 3. Compare resolved label against expected label
-//! 4. If mismatch → reject immediately (no HPKE call)
-//! 5. Pass label as HPKE `info` — any tampering fails decapsulation
+//! - `info`: UTF-8 label string, chosen by the shape
+//! - `aad`: built by the shape from its fields
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -37,15 +33,21 @@ use hpke::kem::X25519HkdfSha256;
 use hpke::{Deserializable, Kem as KemTrait, OpModeR, OpModeS, Serializable};
 
 use crate::errors::CryptoError;
-use crate::labels::{id_to_label, label_to_id};
+use crate::labels::label_to_id;
 
 // Type aliases for our HPKE suite
 type Aead = AesGcm256;
 type Kdf = HkdfSha256;
 type Kem = X25519HkdfSha256;
 
-/// HPKE envelope version for v3 (Ed25519/X25519 + HPKE)
-pub(crate) const ENVELOPE_VERSION: u8 = 3;
+/// The KEM id this suite registers in RFC 9180 (DHKEM(X25519, HKDF-SHA256)).
+pub const KEM_ID: u16 = 0x0020;
+/// Encapsulated key length under X25519.
+pub const ENC_LEN: usize = 32;
+/// AEAD tag length (AES-256-GCM).
+pub const TAG_LEN: usize = 16;
+/// `ct` of a 32-byte key wrap: key + tag.
+pub const KEY_WRAP_CT_LEN: usize = 32 + TAG_LEN;
 
 /// Bridge getrandom 0.2 to hpke's rand_core 0.9 interface.
 /// The hpke crate v0.13 uses rand_core 0.9, while the rest of this crate
@@ -69,137 +71,149 @@ impl hpke::rand_core::RngCore for OsRng09 {
 }
 impl hpke::rand_core::CryptoRng for OsRng09 {}
 
-/// HPKE v3 envelope — the wire format for all encrypted fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// The one HPKE envelope: `{enc, ct}`, both lowercase hex.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mobile", derive(uniffi::Record))]
 pub struct HpkeEnvelope {
-    /// Envelope version — must be 3
-    pub v: u8,
-    /// Numeric label ID mapping to a CryptoLabel constant
-    pub label_id: u8,
-    /// Base64url-encoded HPKE encapsulated key (32 bytes for X25519)
+    /// Lowercase hex: the HPKE encapsulated key (32 bytes under X25519).
     pub enc: String,
-    /// Base64url-encoded AEAD ciphertext
+    /// Lowercase hex: the AEAD ciphertext, tag included.
     pub ct: String,
 }
 
-/// Seal (encrypt) a plaintext for a recipient using HPKE.
+// ── Strict lowercase-hex decoding (D2) ───────────────────────────────
+
+/// True iff `s` is non-empty-or-empty lowercase hex of even length.
+pub fn is_lower_hex(s: &str) -> bool {
+    s.len().is_multiple_of(2)
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Decode `value` as exactly `n` bytes of lowercase hex. Anything else —
+/// uppercase, base64url, odd or wrong length — is `InvalidFormat`.
+pub fn decode_hex_exact(field: &str, value: &str, n: usize) -> Result<Vec<u8>, CryptoError> {
+    if value.len() != 2 * n || !is_lower_hex(value) {
+        return Err(CryptoError::InvalidFormat(format!(
+            "{field} must be {n} bytes of lowercase hex ({} characters)",
+            2 * n
+        )));
+    }
+    hex::decode(value).map_err(|e| CryptoError::InvalidFormat(format!("{field}: {e}")))
+}
+
+/// Decode `value` as at least `min` bytes of lowercase hex.
+pub fn decode_hex_min(field: &str, value: &str, min: usize) -> Result<Vec<u8>, CryptoError> {
+    if value.len() < 2 * min || !is_lower_hex(value) {
+        return Err(CryptoError::InvalidFormat(format!(
+            "{field} must be at least {min} bytes of lowercase hex"
+        )));
+    }
+    hex::decode(value).map_err(|e| CryptoError::InvalidFormat(format!("{field}: {e}")))
+}
+
+/// Decode a 32-byte X25519 public key (lowercase hex).
+fn decode_recipient_pk(pk_hex: &str) -> Result<<Kem as KemTrait>::PublicKey, CryptoError> {
+    let bytes = decode_hex_exact("recipient public key", pk_hex, 32)
+        .map_err(|_| CryptoError::InvalidPublicKey)?;
+    <Kem as KemTrait>::PublicKey::from_bytes(&bytes).map_err(|_| CryptoError::InvalidPublicKey)
+}
+
+// ── Seal / open (crate-internal: hosts reach these only through a Shape) ──
+
+/// Seal `plaintext` to `recipient_pubkey_hex` with HPKE `info = label`.
 ///
-/// - `plaintext`: the data to encrypt
-/// - `recipient_pubkey_hex`: X25519 public key of the recipient (64 hex chars)
-/// - `label`: domain separation label (e.g., "llamenos:note-key")
-/// - `aad`: additional authenticated data binding ciphertext to storage location
-pub fn hpke_seal(
+/// Crate-internal: the label and AAD are decided by `crate::shape`, or by a
+/// crate module that owns its format (PUK, audit, provisioning, backup).
+pub(crate) fn hpke_seal(
     plaintext: &[u8],
     recipient_pubkey_hex: &str,
     label: &str,
     aad: &[u8],
 ) -> Result<HpkeEnvelope, CryptoError> {
-    let label_id = label_to_id(label)
-        .ok_or_else(|| CryptoError::InvalidInput(format!("unknown crypto label: {label}")))?;
+    hpke_seal_with_rng(plaintext, recipient_pubkey_hex, label, aad, &mut OsRng09)
+}
 
-    let pk_bytes = hex::decode(recipient_pubkey_hex).map_err(CryptoError::HexError)?;
-    if pk_bytes.len() != 32 {
-        return Err(CryptoError::InvalidPublicKey);
+/// [`hpke_seal`] with an explicit RNG, so the cross-platform vectors can be
+/// generated from a fixed seed (D15). Production callers use [`OsRng09`].
+pub(crate) fn hpke_seal_with_rng<R>(
+    plaintext: &[u8],
+    recipient_pubkey_hex: &str,
+    label: &str,
+    aad: &[u8],
+    rng: &mut R,
+) -> Result<HpkeEnvelope, CryptoError>
+where
+    R: hpke::rand_core::CryptoRng + hpke::rand_core::RngCore,
+{
+    if label_to_id(label).is_none() {
+        return Err(CryptoError::InvalidInput(format!(
+            "unknown crypto label: {label}"
+        )));
     }
-
-    let recipient_pk = <Kem as KemTrait>::PublicKey::from_bytes(&pk_bytes)
-        .map_err(|_| CryptoError::InvalidPublicKey)?;
-
-    let mut rng = OsRng09;
+    let recipient_pk = decode_recipient_pk(recipient_pubkey_hex)?;
     let (enc, ciphertext) = hpke::single_shot_seal::<Aead, Kdf, Kem, _>(
         &OpModeS::Base,
         &recipient_pk,
-        label.as_bytes(), // info = label
+        label.as_bytes(),
         plaintext,
         aad,
-        &mut rng,
+        rng,
     )
     .map_err(|e| CryptoError::EncryptionFailed(format!("HPKE seal failed: {e:?}")))?;
 
-    let enc_bytes = enc.to_bytes();
-
     Ok(HpkeEnvelope {
-        v: ENVELOPE_VERSION,
-        label_id,
-        enc: URL_SAFE_NO_PAD.encode(enc_bytes),
-        ct: URL_SAFE_NO_PAD.encode(&ciphertext),
+        enc: hex::encode(enc.to_bytes()),
+        ct: hex::encode(ciphertext),
     })
 }
 
-/// Open (decrypt) an HPKE envelope.
+/// Open an envelope sealed by [`hpke_seal`] under `label`.
 ///
-/// - `envelope`: the HPKE envelope to decrypt
-/// - `recipient_secret_hex`: X25519 secret key of the recipient (64 hex chars)
-/// - `expected_label`: the label the caller expects (Albrecht defense)
-/// - `aad`: additional authenticated data (must match what was used during seal)
-pub fn hpke_open(
+/// Encoding faults are `InvalidFormat` (they are visible on the wire anyway);
+/// every failure past decoding — wrong label, key, AAD or tampered bytes — is
+/// the same opaque `DecryptionFailed`.
+pub(crate) fn hpke_open(
     envelope: &HpkeEnvelope,
     recipient_secret_hex: &str,
-    expected_label: &str,
+    label: &str,
     aad: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    // Step 1: Check version
-    if envelope.v != ENVELOPE_VERSION {
-        return Err(CryptoError::InvalidFormat(format!(
-            "unsupported HPKE envelope version: {} (expected {})",
-            envelope.v, ENVELOPE_VERSION
-        )));
-    }
-
-    // Steps 2-4: All failures after version check return the same opaque error
-    // (DecryptionFailed) to prevent timing side-channels that could reveal
-    // whether the label, key, or ciphertext was wrong.
-
-    // Step 2: Resolve labelId to label string
-    let resolved_label = id_to_label(envelope.label_id).ok_or(CryptoError::DecryptionFailed)?;
-
-    // Step 3: Albrecht defense — check resolved label matches expected
-    if resolved_label != expected_label {
-        return Err(CryptoError::DecryptionFailed);
-    }
-
-    // Step 4: Parse secret key
     let sk_bytes = Zeroizing::new(
-        hex::decode(recipient_secret_hex).map_err(|_| CryptoError::DecryptionFailed)?,
+        decode_hex_exact("recipient secret key", recipient_secret_hex, 32)
+            .map_err(|_| CryptoError::InvalidSecretKey)?,
     );
-    if sk_bytes.len() != 32 {
-        return Err(CryptoError::DecryptionFailed);
-    }
+    hpke_open_bytes(envelope, &sk_bytes, label, aad)
+}
 
-    let sk = <Kem as KemTrait>::PrivateKey::from_bytes(&sk_bytes)
+/// [`hpke_open`] with the secret as raw bytes.
+pub(crate) fn hpke_open_bytes(
+    envelope: &HpkeEnvelope,
+    recipient_secret: &[u8],
+    label: &str,
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let enc_bytes = decode_hex_exact("enc", &envelope.enc, ENC_LEN)?;
+    let ciphertext = decode_hex_min("ct", &envelope.ct, TAG_LEN)?;
+
+    let sk = <Kem as KemTrait>::PrivateKey::from_bytes(recipient_secret)
         .map_err(|_| CryptoError::DecryptionFailed)?;
-
-    // Step 5: Decode enc and ct from base64url
-    let enc_bytes = URL_SAFE_NO_PAD
-        .decode(&envelope.enc)
-        .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url enc: {e}")))?;
-    let ciphertext = URL_SAFE_NO_PAD
-        .decode(&envelope.ct)
-        .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url ct: {e}")))?;
-
     let encapped_key = <Kem as KemTrait>::EncappedKey::from_bytes(&enc_bytes)
-        .map_err(|_| CryptoError::InvalidEphemeralKey)?;
+        .map_err(|_| CryptoError::InvalidFormat("enc is not a valid X25519 point".into()))?;
 
-    // Step 6: HPKE open with label as info
-    let plaintext = hpke::single_shot_open::<Aead, Kdf, Kem>(
+    hpke::single_shot_open::<Aead, Kdf, Kem>(
         &OpModeR::Base,
         &sk,
         &encapped_key,
-        resolved_label.as_bytes(), // info = label
+        label.as_bytes(),
         &ciphertext,
         aad,
     )
-    .map_err(|_| CryptoError::DecryptionFailed)?;
-
-    Ok(plaintext)
+    .map_err(|_| CryptoError::DecryptionFailed)
 }
 
-/// Seal a 32-byte symmetric key for a recipient using HPKE.
-///
-/// Convenience wrapper around `hpke_seal` for the common case of wrapping keys.
-pub fn hpke_seal_key(
+/// Seal a 32-byte key. The `ct` is always [`KEY_WRAP_CT_LEN`] bytes.
+pub(crate) fn hpke_seal_key(
     key: &[u8; 32],
     recipient_pubkey_hex: &str,
     label: &str,
@@ -208,22 +222,21 @@ pub fn hpke_seal_key(
     hpke_seal(key, recipient_pubkey_hex, label, aad)
 }
 
-/// Open an HPKE envelope containing a 32-byte symmetric key.
-///
-/// Convenience wrapper around `hpke_open` that validates the decrypted length.
-/// Returns the key wrapped in `Zeroizing` so it is erased from memory on drop.
-pub fn hpke_open_key(
+/// Open a 32-byte key wrap. A `ct` of any length but [`KEY_WRAP_CT_LEN`] is
+/// `InvalidFormat` before HPKE runs.
+pub(crate) fn hpke_open_key(
     envelope: &HpkeEnvelope,
     recipient_secret_hex: &str,
-    expected_label: &str,
+    label: &str,
     aad: &[u8],
 ) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
-    let plaintext = Zeroizing::new(hpke_open(
-        envelope,
-        recipient_secret_hex,
-        expected_label,
-        aad,
-    )?);
+    decode_hex_exact("ct", &envelope.ct, KEY_WRAP_CT_LEN)?;
+    let plaintext = Zeroizing::new(hpke_open(envelope, recipient_secret_hex, label, aad)?);
+    to_key(&plaintext)
+}
+
+/// A decrypted key-wrap plaintext as a 32-byte key.
+pub(crate) fn to_key(plaintext: &[u8]) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     if plaintext.len() != 32 {
         return Err(CryptoError::InvalidFormat(format!(
             "expected 32-byte key, got {} bytes",
@@ -231,7 +244,7 @@ pub fn hpke_open_key(
         )));
     }
     let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&plaintext);
+    key.copy_from_slice(plaintext);
     Ok(key)
 }
 
@@ -246,6 +259,13 @@ pub fn generate_x25519_keypair() -> (Zeroizing<String>, String) {
     (sk_hex, pk_hex)
 }
 
+/// The X25519 public key of a 32-byte secret, as lowercase hex (vectors).
+#[cfg(test)]
+pub(crate) fn x25519_public_hex(secret: &[u8; 32]) -> String {
+    let sk = x25519_dalek::StaticSecret::from(*secret);
+    hex::encode(x25519_dalek::PublicKey::from(&sk).as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,224 +276,98 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_seal_open() {
+    fn roundtrip_seal_open_is_lowercase_hex() {
         let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"secret note content here";
-        let label = LABEL_NOTE_KEY;
-        let aad_str = format!("{LABEL_NOTE_KEY}:record-123:content");
-        let aad = aad_str.as_bytes();
-
-        let envelope = hpke_seal(plaintext, &pk_hex, label, aad).unwrap();
-        assert_eq!(envelope.v, 3);
-        assert_eq!(envelope.label_id, label_to_id(LABEL_NOTE_KEY).unwrap());
-
-        let decrypted = hpke_open(&envelope, &sk_hex, label, aad).unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn label_mismatch_rejected() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"test";
-        let aad = b"test-aad";
-
-        let envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-
-        // Try to open with wrong expected label — returns opaque DecryptionFailed
-        let result = hpke_open(&envelope, &sk_hex, LABEL_FILE_KEY, aad);
-        assert!(
-            matches!(result, Err(CryptoError::DecryptionFailed)),
-            "expected DecryptionFailed, got: {result:?}"
+        let aad = b"aad";
+        let envelope = hpke_seal(b"secret", &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
+        assert_eq!(envelope.enc.len(), 2 * ENC_LEN);
+        assert!(is_lower_hex(&envelope.enc) && is_lower_hex(&envelope.ct));
+        assert_eq!(
+            hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, aad).unwrap(),
+            b"secret"
         );
     }
 
     #[test]
-    fn wrong_key_fails() {
-        let (_sk_hex, pk_hex) = gen_keypair();
+    fn wrong_label_key_aad_and_tamper_are_all_decryption_failed() {
+        let (sk_hex, pk_hex) = gen_keypair();
         let (wrong_sk, _) = gen_keypair();
-        let plaintext = b"test";
-        let aad = b"test-aad";
-
-        let envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        let result = hpke_open(&envelope, &wrong_sk, LABEL_NOTE_KEY, aad);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn wrong_aad_fails() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"test";
-
-        let envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, b"correct-aad").unwrap();
-        let result = hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, b"wrong-aad");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn tampered_ciphertext_fails() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"test content";
-        let aad = b"test-aad";
-
-        let mut envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-
-        // Tamper with ciphertext
-        let mut ct_bytes = URL_SAFE_NO_PAD.decode(&envelope.ct).unwrap();
-        if !ct_bytes.is_empty() {
-            ct_bytes[0] ^= 0x01;
+        let envelope = hpke_seal(b"test", &pk_hex, LABEL_NOTE_KEY, b"aad").unwrap();
+        let mut tampered = envelope.clone();
+        let mut ct = hex::decode(&tampered.ct).unwrap();
+        ct[0] ^= 1;
+        tampered.ct = hex::encode(ct);
+        for result in [
+            hpke_open(&envelope, &sk_hex, LABEL_FILE_KEY, b"aad"),
+            hpke_open(&envelope, &wrong_sk, LABEL_NOTE_KEY, b"aad"),
+            hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, b"other"),
+            hpke_open(&tampered, &sk_hex, LABEL_NOTE_KEY, b"aad"),
+        ] {
+            assert!(
+                matches!(result, Err(CryptoError::DecryptionFailed)),
+                "{result:?}"
+            );
         }
-        envelope.ct = URL_SAFE_NO_PAD.encode(&ct_bytes);
-
-        let result = hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, aad);
-        assert!(result.is_err());
     }
 
     #[test]
-    fn version_check() {
+    fn encoding_faults_are_invalid_format_never_normalised() {
         let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"test";
-        let aad = b"aad";
-
-        let mut envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        envelope.v = 2; // wrong version
-
-        let result = hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, aad);
-        assert!(matches!(result, Err(CryptoError::InvalidFormat(_))));
+        let envelope = hpke_seal_key(&[7u8; 32], &pk_hex, LABEL_NOTE_KEY, b"a").unwrap();
+        let b64 = {
+            use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+            URL_SAFE_NO_PAD.encode(hex::decode(&envelope.enc).unwrap())
+        };
+        let cases = [
+            HpkeEnvelope {
+                enc: envelope.enc.to_uppercase(),
+                ct: envelope.ct.clone(),
+            },
+            HpkeEnvelope {
+                enc: envelope.enc.clone(),
+                ct: envelope.ct.to_uppercase(),
+            },
+            HpkeEnvelope {
+                enc: b64,
+                ct: envelope.ct.clone(),
+            },
+            HpkeEnvelope {
+                enc: envelope.enc.clone(),
+                ct: format!("{}00", envelope.ct),
+            },
+            HpkeEnvelope {
+                enc: envelope.enc[..62].into(),
+                ct: envelope.ct.clone(),
+            },
+        ];
+        for bad in cases {
+            let result = hpke_open_key(&bad, &sk_hex, LABEL_NOTE_KEY, b"a");
+            assert!(
+                matches!(result, Err(CryptoError::InvalidFormat(_))),
+                "{bad:?}: {result:?}"
+            );
+        }
+        assert!(hpke_open_key(&envelope, &sk_hex, LABEL_NOTE_KEY, b"a").is_ok());
     }
 
     #[test]
-    fn roundtrip_key_seal_open() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let mut key = [0u8; 32];
-        getrandom::getrandom(&mut key).unwrap();
-        let aad = b"items-key-wrap";
-
-        let envelope = hpke_seal_key(&key, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        let recovered = hpke_open_key(&envelope, &sk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        assert_eq!(key, *recovered);
+    fn key_wrap_ct_is_48_bytes() {
+        let (_sk, pk_hex) = gen_keypair();
+        let envelope = hpke_seal_key(&[1u8; 32], &pk_hex, LABEL_NOTE_KEY, b"").unwrap();
+        assert_eq!(envelope.ct.len(), 2 * KEY_WRAP_CT_LEN);
     }
 
     #[test]
-    fn enc_is_32_bytes() {
+    fn unknown_label_and_bad_pubkey_rejected() {
         let (_sk_hex, pk_hex) = gen_keypair();
-        let envelope = hpke_seal(b"test", &pk_hex, LABEL_NOTE_KEY, b"aad").unwrap();
-        let enc_bytes = URL_SAFE_NO_PAD.decode(&envelope.enc).unwrap();
-        assert_eq!(enc_bytes.len(), 32); // X25519 public key
-    }
-
-    #[test]
-    fn invalid_pubkey_rejected() {
-        let result = hpke_seal(b"test", "deadbeef", LABEL_NOTE_KEY, b"aad");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn unknown_label_rejected() {
-        let (_sk_hex, pk_hex) = gen_keypair();
-        let result = hpke_seal(b"test", &pk_hex, "unknown:label:not-in-registry", b"aad");
-        assert!(matches!(result, Err(CryptoError::InvalidInput(_))));
-    }
-
-    #[test]
-    fn seal_with_invalid_pubkey_hex_rejected() {
-        let result = hpke_seal(b"test", "not-hex!", LABEL_NOTE_KEY, b"aad");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn open_with_tampered_enc_fails() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"tamper enc test";
-        let aad = b"aad";
-
-        let mut envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        let mut enc_bytes = URL_SAFE_NO_PAD.decode(&envelope.enc).unwrap();
-        enc_bytes[0] ^= 0x01;
-        envelope.enc = URL_SAFE_NO_PAD.encode(&enc_bytes);
-
-        let result = hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, aad);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn open_with_wrong_version_fails() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"version test";
-        let aad = b"aad";
-
-        let mut envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        envelope.v = 99;
-
-        let result = hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, aad);
-        assert!(matches!(result, Err(CryptoError::InvalidFormat(_))));
-    }
-
-    #[test]
-    fn open_with_unknown_label_id_fails() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"label id test";
-        let aad = b"aad";
-
-        let mut envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        envelope.label_id = 255;
-
-        let result = hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, aad);
-        assert!(matches!(result, Err(CryptoError::DecryptionFailed)));
-    }
-
-    #[test]
-    fn all_decrypt_failures_return_same_error() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let (wrong_sk, _) = gen_keypair();
-        let envelope = hpke_seal(b"test", &pk_hex, LABEL_NOTE_KEY, b"aad").unwrap();
-
-        // Wrong label
-        let err1 = hpke_open(&envelope, &sk_hex, LABEL_FILE_KEY, b"aad");
-        // Unknown labelId
-        let mut bad_env = envelope.clone();
-        bad_env.label_id = 255;
-        let err2 = hpke_open(&bad_env, &sk_hex, LABEL_NOTE_KEY, b"aad");
-        // Wrong key
-        let err3 = hpke_open(&envelope, &wrong_sk, LABEL_NOTE_KEY, b"aad");
-
-        // All should be DecryptionFailed (not distinguishable)
-        assert!(matches!(err1, Err(CryptoError::DecryptionFailed)));
-        assert!(matches!(err2, Err(CryptoError::DecryptionFailed)));
-        assert!(matches!(err3, Err(CryptoError::DecryptionFailed)));
-    }
-
-    #[test]
-    fn hpke_seal_empty_plaintext() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = b"";
-        let aad = b"aad";
-
-        let envelope = hpke_seal(plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        let decrypted = hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn hpke_seal_large_plaintext() {
-        let (sk_hex, pk_hex) = gen_keypair();
-        let plaintext = vec![0xABu8; 10_000];
-        let aad = b"aad";
-
-        let envelope = hpke_seal(&plaintext, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        let decrypted = hpke_open(&envelope, &sk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn hpke_open_key_with_wrong_secret_fails() {
-        let (_sk_hex, pk_hex) = gen_keypair();
-        let (wrong_sk, _) = gen_keypair();
-        let mut key = [0u8; 32];
-        getrandom::getrandom(&mut key).unwrap();
-        let aad = b"key-wrap";
-
-        let envelope = hpke_seal_key(&key, &pk_hex, LABEL_NOTE_KEY, aad).unwrap();
-        let result = hpke_open_key(&envelope, &wrong_sk, LABEL_NOTE_KEY, aad);
-        assert!(result.is_err());
+        assert!(matches!(
+            hpke_seal(b"t", &pk_hex, "unknown:label", b""),
+            Err(CryptoError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            hpke_seal(b"t", &pk_hex.to_uppercase(), LABEL_NOTE_KEY, b""),
+            Err(CryptoError::InvalidPublicKey)
+        ));
+        assert!(hpke_seal(b"t", "deadbeef", LABEL_NOTE_KEY, b"").is_err());
     }
 }

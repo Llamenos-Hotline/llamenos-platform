@@ -1,5 +1,7 @@
 import {
-  hpkeSeal,
+  contentSeal,
+  shapeSeal,
+  type Shape,
   symmetricEncrypt,
   symmetricDecrypt,
   hkdfSha256,
@@ -10,7 +12,7 @@ import {
   banDigestBlindEvaluate,
 } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, LABEL_CALLER_NUMBER_SEAL, LABEL_CALL_RECORDING_SEAL } from '@shared/crypto-labels'
+import { LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, LABEL_CALLER_NUMBER_SEAL, LABEL_CALL_RECORDING_SEAL } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 import { assertNeverScope, hubScope, PLATFORM_SCOPE, type OwnerScope } from '@shared/owner-scope'
 
@@ -180,32 +182,23 @@ export function serverDecrypt(ciphertext: Uint8Array, label: string, serverSecre
 // --- Envelope-Pattern Encryption (Tier 3: E2EE) ---
 //
 // Server-sealed records use the stored-record format every reader opens
-// (`open_record_for_reader` in packages/crypto/src/encryption.rs):
-//   encryptedContent = hex(iv || AES-256-GCM(contentKey, plaintext) || tag), no AAD
-//   envelope = { pubkey, enc: hex(32), ct: hex(48) }, HPKE info = label, no AAD
-// No AAD, because client-sealed and server-sealed messages share a conversation
-// and carry no format marker — a reader cannot tell which AAD to supply. The
-// label is bound as HPKE `info`.
-
-const NO_AAD = new Uint8Array(0)
+// (`open_record_for_reader` in packages/crypto/src/encryption.rs). The crate's
+// shape API decides the label and AAD of both layers ('message-key' and
+// 'call-meta-key' carry none — client- and server-sealed messages share a
+// conversation with no format marker); nothing here names either.
 
 function sealForPubkeys(
   plaintext: string,
   pubkeys: string[],
-  label: string,
+  shape: Extract<Shape, 'message-key' | 'call-meta-key'>,
 ): { encryptedContent: string; envelopes: RecipientEnvelope[] } {
-  const contentKey = randomBytes(32)
-  const labelBytes = utf8ToBytes(label)
-  const encryptedContent = bytesToHex(symmetricEncrypt(contentKey, utf8ToBytes(plaintext), NO_AAD))
-  const envelopes = pubkeys.map((pk): RecipientEnvelope => {
-    // hpkeSeal output is enc(32) || ct+tag
-    const sealed = hpkeSeal(hexToBytes(pk), contentKey, labelBytes, NO_AAD)
-    return {
-      pubkey: pk,
-      enc: bytesToHex(sealed.subarray(0, 32)),
-      ct: bytesToHex(sealed.subarray(32)),
-    }
-  })
+  const { packed, key } = contentSeal(shape, utf8ToBytes(plaintext))
+  const envelopes = pubkeys.map((pk): RecipientEnvelope => ({
+    pubkey: pk,
+    ...shapeSeal(shape, hexToBytes(pk), [], key),
+  }))
+  key.fill(0)
+  const encryptedContent = bytesToHex(packed)
   return { encryptedContent, envelopes }
 }
 
@@ -223,7 +216,6 @@ function sealForPubkeys(
 export function encryptMessageForStorage(
   plaintext: string,
   readerPubkeys: string[],
-  label: string = LABEL_MESSAGE,
 ): { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] } {
   // A record with no envelopes is ciphertext nobody will ever open — the same
   // unreadable-forever outcome as sealing to an Ed25519 key (#1021/#1283), just
@@ -238,13 +230,13 @@ export function encryptMessageForStorage(
     )
   }
 
-  const { encryptedContent, envelopes } = sealForPubkeys(plaintext, readerPubkeys, label)
+  const { encryptedContent, envelopes } = sealForPubkeys(plaintext, readerPubkeys, 'message-key')
   return { encryptedContent, readerEnvelopes: envelopes }
 }
 
 /**
  * Encrypt call record metadata for history storage.
- * Same format as messages, under LABEL_CALL_META: a random per-record key
+ * Same format as messages, as the 'call-meta-key' shape: a random per-record key
  * wrapped via HPKE for each admin's X25519 pubkey.
  */
 export function encryptCallRecordForStorage(
@@ -261,7 +253,7 @@ export function encryptCallRecordForStorage(
       'is configured and/or an admin has a registered X25519 device key.'
     )
   }
-  const { encryptedContent, envelopes } = sealForPubkeys(JSON.stringify(metadata), adminPubkeys, LABEL_CALL_META)
+  const { encryptedContent, envelopes } = sealForPubkeys(JSON.stringify(metadata), adminPubkeys, 'call-meta-key')
   return { encryptedContent, adminEnvelopes: envelopes }
 }
 
@@ -269,7 +261,7 @@ export function encryptCallRecordForStorage(
 //
 // Byte-compatible with audit_key.rs so a future client binding can unwrap and
 // decrypt what the server wrote:
-//   key wrap : HPKE info = LABEL_AUDIT_USER_KEY_WRAP, aad = `${label}:${userPubkey}`
+//   key wrap : the crate's 'audit-user-key' shape, bound to the user's pubkey
 //   details  : AES-256-GCM, aad = `${LABEL_AUDIT_DETAILS}:${userPubkey}:${entryId}`,
 //              stored as "nonce_hex:ciphertext_hex"
 
@@ -286,16 +278,10 @@ export function wrapAuditKeyForAdmins(
   if (adminPubkeys.length === 0) {
     throw new Error('wrapAuditKeyForAdmins: at least one admin pubkey required')
   }
-  const aad = utf8ToBytes(`${LABEL_AUDIT_USER_KEY_WRAP}:${userPubkey}`)
-  const label = utf8ToBytes(LABEL_AUDIT_USER_KEY_WRAP)
-  return adminPubkeys.map((pk): RecipientEnvelope => {
-    const sealed = hpkeSeal(hexToBytes(pk), auditKey, label, aad)
-    return {
-      pubkey: pk,
-      enc: bytesToHex(sealed.subarray(0, 32)),
-      ct: bytesToHex(sealed.subarray(32)),
-    }
-  })
+  return adminPubkeys.map((pk): RecipientEnvelope => ({
+    pubkey: pk,
+    ...shapeSeal('audit-user-key', hexToBytes(pk), [userPubkey], auditKey),
+  }))
 }
 
 /** Encrypt audit entry details with the user's audit key. Returns "nonce_hex:ciphertext_hex". */
@@ -332,7 +318,7 @@ export function decryptAuditDetails(
  * Seal a per-user audit key for the server-held copy
  * (audit_user_keys.encrypted_key), which lets the server decrypt details for
  * admin reads. Hex-encoded. Sealed under LABEL_AUDIT_USER_KEY_SERVER_SEAL — not
- * the admin HPKE wrap's LABEL_AUDIT_USER_KEY_WRAP, which names a different
+ * the admin HPKE wrap ('audit-user-key' shape), which names a different
  * construction — with the user's pubkey bound as AAD (`label:userPubkey`), so a
  * row copied onto another user's slot fails to open.
  */

@@ -31,9 +31,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
-import { symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { contentOpen } from '@llamenos/crypto/ffi'
 import { hexToBytes } from '@shared/encoding'
-import { LABEL_CALL_META } from '@shared/crypto-labels'
 import * as schema from '../../db/schema'
 import { CallsService } from '../../services/calls'
 import { buildReaderPubkeys } from '../../lib/encryption-keys'
@@ -54,7 +53,6 @@ const RAW_CALLER = '+15551234567'
 const sealedFor = (callId: string) => sealCallerNumber(RAW_CALLER, callId, SERVER_KEK)
 
 /** Stored records seal with no AAD; the label is bound as the HPKE info. */
-const NO_AAD = new Uint8Array(0)
 
 /** An admin user with a registered device carrying an X25519 key. */
 async function seedAdmin(roles: string[] = []) {
@@ -180,9 +178,9 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     const envelopes = row!.adminEnvelopes as Array<{ pubkey: string; enc: string; ct: string }>
     const myEnvelope = envelopes.find((e) => e.pubkey === admin.pubkey)
     expect(myEnvelope).toBeTruthy()
-    const recordKey = openEnvelope(admin.secret, myEnvelope!, LABEL_CALL_META)
+    const recordKey = openEnvelope(admin.secret, myEnvelope!, 'call-meta-key')
     const plaintext = new TextDecoder().decode(
-      symmetricDecrypt(recordKey, hexToBytes(row!.encryptedContent), NO_AAD),
+      contentOpen('call-meta-key', recordKey, hexToBytes(row!.encryptedContent)),
     )
     const meta = JSON.parse(plaintext) as { answeredBy: string | null; callerNumber: string }
     expect(meta.answeredBy).toBe(volunteer)
@@ -209,9 +207,9 @@ describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
     expect(row!.status).toBe('unanswered')
     const envelopes = row!.adminEnvelopes as Array<{ pubkey: string; enc: string; ct: string }>
     expect(envelopes.length).toBeGreaterThan(0)
-    const recordKey = openEnvelope(admin.secret, envelopes[0]!, LABEL_CALL_META)
+    const recordKey = openEnvelope(admin.secret, envelopes[0]!, 'call-meta-key')
     const meta = JSON.parse(
-      new TextDecoder().decode(symmetricDecrypt(recordKey, hexToBytes(row!.encryptedContent), NO_AAD)),
+      new TextDecoder().decode(contentOpen('call-meta-key', recordKey, hexToBytes(row!.encryptedContent))),
     ) as { answeredBy: string | null }
     expect(meta.answeredBy).toBeNull()
   })

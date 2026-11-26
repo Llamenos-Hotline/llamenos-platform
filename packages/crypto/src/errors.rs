@@ -66,7 +66,35 @@ pub enum CryptoError {
     #[error("Future timestamp: message timestamp is ahead of current time")]
     FutureTimestamp,
 
+    /// An identifier outside the §2.1 profile (`^[0-9a-z][0-9a-z-]{0,63}$` or lowercase hex).
+    #[error("Invalid identifier: {0}")]
+    InvalidIdentifier(String),
+
+    /// No relay-event key is held for this hub and epoch.
+    #[error("No event key held for this hub and epoch")]
+    NoEventKey,
+
     /// The hub has no admin reader to seal to. See [`crate::readers`].
     #[error("No admin reader: the hub has no admin with a registered device and no escrow key, so nobody could read what is about to be written")]
     NoAdminReader,
+}
+
+impl CryptoError {
+    /// The closed rejection code a cross-platform vector names (spec §6.1).
+    /// Tests assert this code, never merely that something failed.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidFormat(_)
+            | Self::HexError(_)
+            | Self::InvalidCiphertext
+            | Self::InvalidNonce
+            | Self::InvalidEphemeralKey
+            | Self::InvalidPublicKey
+            | Self::InvalidSecretKey => "invalid_format",
+            Self::DecryptionFailed => "decryption_failed",
+            Self::InvalidIdentifier(_) => "invalid_id",
+            Self::NoEventKey => "no_event_key",
+            _ => "invalid_input",
+        }
+    }
 }

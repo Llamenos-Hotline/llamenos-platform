@@ -105,7 +105,7 @@ class WakeKeySteps : BaseSteps() {
     @When("I attempt to decrypt a wake payload with a malformed ephemeral key")
     fun iAttemptToDecryptAWakePayloadWithAMalformedEphemeralKey() {
         // Malformed HPKE envelope JSON — invalid enc field
-        val malformedEnvelope = """{"v":1,"labelId":60,"enc":"deadbeef","ct":"${"00".repeat(64)}"}"""
+        val malformedEnvelope = """{"enc":"deadbeef","ct":"${"00".repeat(64)}"}"""
         try {
             val result = runBlocking {
                 wakeKeyService.decryptWakePayload(malformedEnvelope)
@@ -119,7 +119,7 @@ class WakeKeySteps : BaseSteps() {
     @When("I attempt to decrypt a wake payload with truncated ciphertext")
     fun iAttemptToDecryptAWakePayloadWithTruncatedCiphertext() {
         // HPKE envelope with truncated ciphertext
-        val truncatedEnvelope = """{"v":1,"labelId":60,"enc":"${"aa".repeat(32)}","ct":"ff"}"""
+        val truncatedEnvelope = """{"enc":"${"aa".repeat(32)}","ct":"ff"}"""
         try {
             val result = runBlocking {
                 wakeKeyService.decryptWakePayload(truncatedEnvelope)
