@@ -32,6 +32,11 @@ const xwingHexSchema = z
 const ed25519SignatureHexSchema = z.string().regex(/^[0-9a-f]{128}$/, 'Must be a 64-byte Ed25519 signature in lowercase hex')
 /** The crypto_format a device's X-Wing key belongs to (D16). */
 export const DEVICE_KEM_FORMAT = 2
+/**
+ * Exactly `DEVICE_KEM_FORMAT`. A bounded integer, not `z.literal(2)`: a numeric
+ * literal becomes a numeric enum that the Swift/Kotlin codegen cannot name.
+ */
+const deviceKemFormatSchema = z.number().int().min(DEVICE_KEM_FORMAT).max(DEVICE_KEM_FORMAT)
 
 /**
  * Sequence number of the genesis link. Matches packages/crypto
@@ -84,7 +89,7 @@ export const sigchainDeviceAddPayloadSchema = z.object({
   deviceEncryptionPubkey: x25519HexSchema,
   /** The device's X-Wing key: what format-2 grants and headers are sealed to. */
   encryptionPubkey: xwingHexSchema,
-  format: z.literal(DEVICE_KEM_FORMAT),
+  format: deviceKemFormatSchema,
   /** Ed25519 by `devicePubkey` over L_DEVICE_POP ‖ 0x00 ‖ H(lp(user) ‖ lp(devicePubkey) ‖ lp(encryptionPubkey) ‖ u16be(format)). */
   pop: ed25519SignatureHexSchema,
 })
@@ -99,7 +104,7 @@ export type SigchainDeviceAddPayload = z.infer<typeof sigchainDeviceAddPayloadSc
 export const sigchainDeviceKemPayloadSchema = z.object({
   type: z.literal('device_kem'),
   devicePubkey: ed25519HexSchema,
-  format: z.literal(DEVICE_KEM_FORMAT),
+  format: deviceKemFormatSchema,
   encryptionPubkey: xwingHexSchema,
   /** Ed25519 by `devicePubkey` over L_DEVICE_POP ‖ 0x00 ‖ H(lp(user) ‖ lp(devicePubkey) ‖ lp(encryptionPubkey) ‖ u16be(format)). */
   pop: ed25519SignatureHexSchema,
