@@ -542,6 +542,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
     // untouched, and each unpins the client. Review finding on this PR.
     it.each<[string, (s: string) => string]>([
       ['the hostname guard around the pinner call is changed', (s) => s.replace('if (hostname != pinnedHostname) {', 'if (false) {')],
+      ['the hostname the pinner is applied to is derived differently', (s) => s.replace('CertificatePins.hostOf(url)', '"localhost"')],
       ['the configurePinning call site is removed', (s) => s.replace('            configurePinning(hostname)\n', '')],
       ['configurePinning grows a hash parameter again', (s) => s.replace('fun configurePinning(hostname: String)', 'fun configurePinning(hostname: String, hashes: List<String> = emptyList())')],
       ['the hostname memo is initialised as already pinned', (s) => s.replace('internal var pinnedHostname: String? = null', 'internal var pinnedHostname: String? = "app"')],

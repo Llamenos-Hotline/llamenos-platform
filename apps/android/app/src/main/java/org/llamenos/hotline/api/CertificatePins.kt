@@ -74,6 +74,17 @@ object CertificatePins {
     }
 
     /**
+     * The hostname a hub URL is pinned for. Lives here, beside the localhost
+     * exemption it feeds, so no line outside this file decides which host the
+     * pin set is applied to.
+     */
+    fun hostOf(url: String): String = try {
+        java.net.URI(url).host ?: url
+    } catch (_: Exception) {
+        url
+    }
+
+    /**
      * The pinner a client must use for [hostname]: none for local development
      * (`localhost` / `127.0.0.1`), the [DEFAULT_PIN_HASHES] set for every other host.
      * Callers cannot choose the hashes — that choice is the trust decision.

@@ -535,11 +535,7 @@ class ApiService @Inject constructor(
             ?: throw HubNotConfiguredException()
 
         // Extract hostname and configure pinning if needed
-        val hostname = try {
-            java.net.URI(url).host ?: url
-        } catch (_: Exception) {
-            url
-        }
+        val hostname = CertificatePins.hostOf(url)
         if (hostname != pinnedHostname) {
             configurePinning(hostname)
             pinnedHostname = hostname
