@@ -361,7 +361,8 @@ F5). The process that holds the keys only receives drafts of allowed types.
 
 ## 10. Contract surface and gates
 
-**Contract PR (one, per #2977 "How this ships"):**
+**One full-stack PR (per #2977 "How this ships"):** the contract below **and every client consumer**
+in the same PR. A contract bug found while adopting is fixed there.
 - the crate module (§8);
 - `packages/protocol` schemas: manifest core and private, the enrollment request, the intake write, the `intake` purpose, and the connector auth union;
 - the worker: `hub_connectors`, connector middleware and routes, the intake table and routes, the registry check, and quotas;
@@ -373,9 +374,12 @@ F5). The process that holds the keys only receives drafts of allowed types.
   - a chain with enroll → re-enroll → revoke and the expected item verdicts;
   - a server-substituted `intake` epoch key, which must be refused.
 
-**Then adoption, one PR per client:** the enrollment approval screen, the inbox, confirm/merge/discard,
-the revoked-connector flags, and the revoke dialog. Desktop goes first, then iOS and Android. None
-is dropped. Each follows when its client's v2 sealed store is in place.
+**Clients, in the same PR:** the enrollment approval screen, the inbox, confirm/merge/discard, the
+revoked-connector flags, and the revoke dialog, on desktop, iOS and Android. None is dropped. The PR
+follows #3025's D-A, which puts the v2 sealed store in place on every client. The build briefs on
+#2977 give the split (N-A, then N-E).
+
+*Revised 2026-11-25 by operator decision.* The original text said "Then adoption, one PR per client". C1–C11 are unchanged.
 
 **Stage 1 gate (principals):**
 - On real clients, a revoked connector's later items are refused, and nothing can be sealed to it, from each client's own chain.

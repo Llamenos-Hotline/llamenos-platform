@@ -164,7 +164,8 @@ The recovery link is wire D14: K-of-N approvals, a delay, and the emergency floo
 
 ## 9. Contract surface and gates
 
-**Contract PR (one: crate, protocol, worker and vectors):**
+**Full-stack PRs** (crate, protocol, worker, vectors, bindings **and every client**, in each PR; the
+split by dependency is in the briefs on #2975). The contract they carry:
 - the bundle schema with `anchors` and the X-Wing PUK wraps;
 - the claim body carrying the X-Wing key;
 - the self-grant rule in the grant verifier;
@@ -180,6 +181,9 @@ The recovery link is wire D14: K-of-N approvals, a delay, and the emergency floo
 - `device_kem`;
 - a refused reused key;
 - a removal that yields a new user-group epoch.
+
+*Revised 2026-11-25 by operator decision.* The original heading said "Contract PR (one: crate, protocol,
+worker and vectors)", with clients following. L1–L7 are unchanged.
 
 **Gates (#2975):**
 - **Stage 2:** a second device, linked end to end, reads data the first wrote, in every hub the user belongs to, **with no admin online**. A captured payload contains no private key and no seed, and putting one back turns the test red.
