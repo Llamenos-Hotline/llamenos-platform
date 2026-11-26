@@ -7,6 +7,7 @@ import { judge, selectForLane, LANE_LABEL_PREFIX, type Rejection } from './selec
 import type { ListResult, WorkItem } from './source.js'
 import { buildGateTrace } from './trace.js'
 import { fleetBranchFor, legacyFleetBranchFor } from './ci.js'
+import { BLOCKED_LABEL, NEEDS_HUMAN_LABEL } from './hold-labels.js'
 import {
   assessOpenPr, buildReentryPassedComment, buildVerificationFailedComment, latestMechanicalRejection,
   REENTRY_NOTE_PREFIX,
@@ -83,31 +84,37 @@ export interface SettleInput {
   pr?: string
   /**
    * G1: the ONE control-label write settle() still performs is `needs-human`
-   * — added when the fleet is leaving an open PR for a human to look at
-   * rather than something it will retry itself, so `judge()`'s existing veto
-   * (`select.ts`, `needs-human` is already in every lane's `vetoLabels`)
-   * keeps the item from being re-claimed on the next pass. An ordinary
-   * mechanical or review REJECTED is still retried up to
+   * — added when the fleet is leaving the item for a PERSON rather than
+   * something it will retry itself, so `judge()`'s existing veto
+   * (`select.ts`, `needs-human` is in every lane's `vetoLabels`) keeps the
+   * item from being re-claimed on the next pass.
+   *
+   * #1815: this is the ACT that person must take, not a boolean. settle()
+   * posts it on the issue beside the label, so `needs-human` can no longer
+   * appear without the question it is asking. `undefined` means no hand-off.
+   * Required (not optional) so every return path of `runLiveDispatch` decides
+   * it explicitly.
+   *
+   * An ordinary mechanical or review REJECTED is still retried up to
    * `MAX_ATTEMPTS_PER_ITEM` (the worker may simply fix it next attempt), so
-   * exactly three cases set this now: a worker-reported SUCCESS that could
-   * not be run through the pipeline at all (missing branch/worktree) — see
-   * the `else` branch in `runLiveDispatch` — a branch mismatch (issue #812:
-   * the work landed on a branch other than `fleet/<lane>/<item>`), whatever
-   * the worker claimed, and an `UNVERIFIED` outcome (issue #870: the
-   * review loop ended `UNREADABLE` — the fleet's own verification pipeline,
-   * not the worker's diff, could not reach a verdict). The first is the
-   * shape of issue #660/PR #662: a claimed success with an open, unverified
-   * PR is far more dangerous left agent-dispatchable than a routine
-   * rejection is. The third is the shape of issue #870: re-dispatching a
-   * brand new worker attempt against a branch that may already hold correct,
-   * finished work wastes a worker on a problem this fleet never actually
-   * diagnosed.
+   * exactly four cases set this: a worker-reported SUCCESS that could not be
+   * run through the pipeline at all (missing branch/worktree — issue
+   * #660/PR #662: a claimed success with an open, unverified PR is far more
+   * dangerous left agent-dispatchable than a routine rejection), a branch
+   * mismatch (issue #812: the work landed on a branch other than
+   * `fleet/<lane>/<item>`), an `UNVERIFIED` outcome (issue #870: the review
+   * loop ended `UNREADABLE`, so re-dispatching a brand new worker against a
+   * branch that may already hold finished work wastes a worker on a problem
+   * nobody diagnosed), and a worker `BLOCKED` that is not a routing slip.
    *
    * A PR that is verified, reviewed, and simply waiting — on a required
-   * check, or on a code owner's approval — is NOT flagged here: it is
-   * waiting on GitHub, which needs no label from this process to hold it.
+   * check, a code owner's approval, OR on being armed — is NOT handed off: it
+   * is waiting on GitHub and on queue-feed (the durable owner of arming,
+   * queue-feed.ts), and `findOpenPr` holds the item while its PR is open.
+   * The arm-failure hand-off that used to live here is what put a bare
+   * `needs-human` on #3029 on 2026-11-25, for a PR nobody needed to act on.
    */
-  needsHuman: boolean
+  humanAct: string | undefined
 }
 
 export interface TickDeps {
@@ -479,6 +486,19 @@ async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, r
  * 6. Exactly one terminal ledger row, whatever the outcome.
  * 7. `settle()` — unconditionally, even when something above threw.
  */
+/**
+ * #1815: what a worker's BLOCKED asks of a person. The fleet cannot tell
+ * "needs a credential" from "has to wait for #N" from a free-text note, so the
+ * act names both exits: `blocked` (sequenced — nobody needs to act) is the
+ * right home for the second, and the label is never left to imply the first.
+ */
+export function blockedHumanAct(note: string | undefined): string {
+  const said = note === undefined || note.trim() === '' ? '(the worker gave no reason)' : note.trim()
+  return `the dispatched worker reported BLOCKED: ${said.slice(0, 2000)}\n\n` +
+    `If it is waiting on other work, replace \`${NEEDS_HUMAN_LABEL}\` with \`${BLOCKED_LABEL}\` — nobody needs to ` +
+    'act. If it needs a credential, an account, provisioning or a decision, provide it and remove the label.'
+}
+
 async function runLiveDispatch(
   deps: TickDeps,
   item: WorkItem,
@@ -492,7 +512,7 @@ async function runLiveDispatch(
   let branch: string | undefined
   let pr: string | undefined
   let final: RunRecord
-  let needsHuman = false
+  let humanAct: string | undefined
   let threw = false
   /**
    * Set ONLY at the single arm site below. The disarm is keyed on this, not
@@ -523,7 +543,10 @@ async function runLiveDispatch(
       // arming), `needs-human` so it is not silently re-claimed, and the PR
       // told plainly that nothing verified it.
       const mismatch = result.branchMismatch
-      needsHuman = true
+      humanAct =
+        `review ${pr === undefined ? 'the work' : `PR ${pr}`} from scratch, or close it and re-dispatch this issue. ` +
+        `It landed on branch \`${mismatch}\`, not \`${fleetBranchFor(lane.id, item.id)}\`, so the fleet verified ` +
+        'nothing about it and armed nothing. Remove the label when done.'
       deps.log(
         `verify: item ${item.id} pr ${pr ?? '(none)'} REFUSED — branch-mismatch:${mismatch} ` +
         `(dispatched for ${fleetBranchFor(lane.id, item.id)}) — not verified, auto-merge not armed`,
@@ -621,16 +644,14 @@ async function runLiveDispatch(
           // had rejected the work, and three of those in a row would trip
           // `circuit.ts`'s consecutive-failure breaker over nothing but the
           // fleet's own plumbing (the exact incident this outcome exists to
-          // stop). `needsHuman: true`: a PR the fleet could not get a second
+          // stop). A `humanAct` hand-off: a PR the fleet could not get a second
           // opinion on should be looked at directly, not silently re-dispatched
           // as a brand new worker attempt against a branch that likely
           // already holds correct, finished work.
-          await deps.commentOnIssue(
-            item.id,
-            `The fleet could not get a verification verdict after ${loop.rounds} round(s) (${loop.finalVerdict}) — ` +
-            'this is a gap in the fleet\'s own verification, not a claim that the work is wrong. Needs a human look.',
-          )
-          needsHuman = true
+          humanAct =
+            `look at PR ${pr} directly. The fleet could not get a verification verdict after ${loop.rounds} ` +
+            `round(s) (${loop.finalVerdict}) — a gap in the fleet's own verification, not a claim that the work ` +
+            'is wrong. Merge it if it is sound, or close it; either way remove the label so the issue can move.'
           final = {
             ...base, outcome: 'UNVERIFIED', branch, pr,
             note: truncateNote(`rounds=${loop.rounds} ${buildGateTrace({
@@ -648,15 +669,21 @@ async function runLiveDispatch(
             armed = true
             deps.log(`auto-merge: armed on pr ${pr} — GitHub merges it when its required checks are green`)
           } catch (e) {
-            // Fail-closed: nothing merges, which is the safe direction. But
-            // the work is verified, reviewed and correct, and nobody asked
-            // GitHub to merge it — so without this the PR sits open forever
-            // with a log line as its only explanation. `needs-human` puts it
-            // in the digest's "waiting on a human" section, and the reason
-            // goes in the ledger note that section renders.
+            // Fail-closed: nothing merges, which is the safe direction. NO
+            // hand-off (#1815): the work is verified and reviewed, the PR is
+            // open (so `findOpenPr` holds the item), and queue-feed re-arms
+            // an unarmed green PR on its own pass. Nobody has an act to take,
+            // so `needs-human` here asked nothing — the #3029 false gate. The
+            // PR itself says why it is not armed, and the reason stays in the
+            // ledger note the digest's "waiting" section renders.
             armFailure = errorMessage(e)
-            needsHuman = true
-            deps.log(`auto-merge: could not arm on pr ${pr}: ${armFailure} — it will not merge unattended`)
+            deps.log(`auto-merge: could not arm on pr ${pr}: ${armFailure} — left for queue-feed to arm`)
+            await deps.commentOnPr(
+              pr,
+              'Verified and reviewed by the fleet, but auto-merge could not be armed: ' +
+              `${armFailure}. queue-feed re-evaluates and arms it on its own pass; nothing is needed from a ` +
+              'person unless it stays unarmed.',
+            )
           }
 
           // SUCCESS means the fleet finished ITS part — verified, reviewed,
@@ -711,7 +738,12 @@ async function runLiveDispatch(
         )
       }
       final = { ...base, outcome: 'SUCCESS', branch, pr, note: truncateNote(`${result.note ?? ''} | ${trace}`.trim()) }
-      needsHuman = true
+      humanAct = pr !== undefined
+        ? `review PR ${pr} from scratch: the worker reported success, but the fleet could not run its ` +
+          'verification pipeline on it (no scope check, no diff-targeted tests, no non-author review). ' +
+          'Merge or close it, then remove the label.'
+        : 'find the worker\'s output: it reported success but no PR, branch or worktree could be resolved, so ' +
+          'the fleet verified nothing. Remove the label to re-dispatch.'
     } else {
       // The worker itself did not reach a mergeable state (BLOCKED, FAILED,
       // TIMEOUT, QUOTA), recorded as-is.
@@ -743,7 +775,7 @@ async function runLiveDispatch(
           final = { ...final, outcome: 'MISROUTED', note: truncateNote(`${r.why} -> ${LANE_LABEL_PREFIX}${r.to}: ${r.paths.join(', ')}`) }
           deps.log(`item ${item.id} BLOCKED on another lane's paths — re-routing to ${r.to}: ${r.paths.join(', ')}`)
         } else {
-          needsHuman = true
+          humanAct = blockedHumanAct(result.note)
         }
       }
     }
@@ -777,7 +809,7 @@ async function runLiveDispatch(
   }
 
   try {
-    await deps.settle({ item, lane, outcome: final.outcome, worktree, branch, pr, needsHuman })
+    await deps.settle({ item, lane, outcome: final.outcome, worktree, branch, pr, humanAct })
   } catch (e) {
     // settle() failing must not abort the pass or hide the outcome already
     // recorded above — it is logged and the loop continues.

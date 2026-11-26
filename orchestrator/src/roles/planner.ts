@@ -2,6 +2,9 @@ import { LANE_IDS } from '../config.js'
 import type { WorkItem } from '../source.js'
 import type { RunRecord } from '../ledger.js'
 import type { EffortLevel } from '../engines.js'
+import {
+  AGENT_PROPOSED_COLOR, AGENT_PROPOSED_LABEL, BLOCKED_LABEL, DISPATCH_LABEL, HOLD_LABELS,
+} from '../hold-labels.js'
 
 /**
  * The capability the reference system (atlas-orchestrator, in the
@@ -49,15 +52,16 @@ export interface PlannerInput {
 }
 
 /**
- * A human must remove this label before an item enters the backlog any
- * lane can select from — every lane's `requireLabel` in config.ts LANES is
- * `agent-dispatchable`, a label this module never applies, so a proposed
- * issue is inert to every dispatch lane on creation regardless of what
- * else it carries. `needs-human` on top of that is belt-and-suspenders:
- * the label a human affirmatively removes to admit the work, not merely
- * the absence of one they'd have to add.
+ * The hold every proposed issue is created with (#1815). Every lane's
+ * `requireLabel` in config.ts LANES is `agent-dispatchable`, a label this
+ * module never applies, so a proposed issue is already inert to every lane;
+ * `agent-proposed` on top of that is the affirmative gate — a veto in every
+ * lane (hold-labels.ts) that a human removes to admit the work, and that no
+ * code in this fleet ever removes. It is NOT `needs-human`: a proposal asks a
+ * yes or no, not an act only a person can perform, and the two used to be
+ * indistinguishable (eleven M1 issues sat buried that way).
  */
-export const NEEDS_HUMAN_LABEL = 'needs-human'
+export { AGENT_PROPOSED_LABEL }
 export const LANE_LABEL_PREFIX = 'lane:'
 export const EFFORT_LABEL_PREFIX = 'effort:'
 
@@ -205,7 +209,7 @@ export async function proposeIssues(input: PlannerInput): Promise<ProposedIssue[
 
 /**
  * The ONLY sanctioned way to turn a `ProposedIssue` into `gh issue create`
- * argv. `needs-human` is appended to the label list UNCONDITIONALLY, on the
+ * argv. `agent-proposed` is appended to the label list UNCONDITIONALLY, on the
  * very last line, after any caller-supplied labels — there is no parameter
  * that can suppress it and no code path through this function that omits
  * it. A caller that "forgot" to add it gets it anyway, because the caller
@@ -220,18 +224,31 @@ export function buildIssueCreateArgs(issue: ProposedIssue): string[] {
     'issue', 'create',
     '--title', issue.title,
     '--body', `${issue.body}${dependsSection}\n\n${PROPOSAL_HOLD_NOTE}`,
-    '--label', [`${LANE_LABEL_PREFIX}${issue.lane}`, `${EFFORT_LABEL_PREFIX}${issue.effort}`, NEEDS_HUMAN_LABEL].join(','),
+    '--label', [`${LANE_LABEL_PREFIX}${issue.lane}`, `${EFFORT_LABEL_PREFIX}${issue.effort}`, AGENT_PROPOSED_LABEL].join(','),
   ]
 }
 
 /**
- * #1815: `needs-human` means a human must act, so a planner-created issue says
- * WHICH act. Without this, an agent proposal wearing the veto read exactly like
- * an issue blocked on credentials, and eleven ordinary M1 issues sat buried
- * because nobody reading them could see a question to answer. The act is a
- * yes/no on the proposal — and the planner can never take it itself.
+ * #1815: the issue body states the question the `agent-proposed` hold asks,
+ * so a reader can answer it without opening this source. Without it, an agent
+ * proposal read exactly like an issue blocked on credentials.
  */
 export const PROPOSAL_HOLD_NOTE =
-  `---\n**Why \`${NEEDS_HUMAN_LABEL}\`:** an agent (the fleet planner) proposed this issue. A human must ` +
-  `accept or reject the proposal: to accept, remove \`${NEEDS_HUMAN_LABEL}\` and add \`agent-dispatchable\`; to ` +
-  'reject, close it. The planner never does either itself, so an agent cannot propose work to itself and then do it.'
+  `---\n**Why \`${AGENT_PROPOSED_LABEL}\`:** an agent (the fleet planner) proposed this issue, and an agent ` +
+  'may not propose work to itself and then do it. This is a yes or no, not a blocker: to **accept**, remove ' +
+  `\`${AGENT_PROPOSED_LABEL}\` and add \`${DISPATCH_LABEL}\`; to **reject**, close it. If the work is sound but ` +
+  `must wait for other work, accept it and add \`${BLOCKED_LABEL}\` instead of \`${DISPATCH_LABEL}\`. The planner ` +
+  'never does any of these itself.'
+
+/**
+ * `gh label create` argv that makes sure `agent-proposed` exists, with the
+ * question it asks as its description (`--force` updates an existing label in
+ * place). `gh issue create --label` refuses a label the repo does not have, so
+ * `plan` runs this once before it creates anything; the description is what a
+ * reader sees when hovering the label.
+ */
+export function buildProposalLabelArgs(): string[] {
+  const hold = HOLD_LABELS.find((h) => h.name === AGENT_PROPOSED_LABEL)
+  if (hold === undefined) throw new Error(`${AGENT_PROPOSED_LABEL} is missing from HOLD_LABELS`)
+  return ['label', 'create', AGENT_PROPOSED_LABEL, '--force', '--color', AGENT_PROPOSED_COLOR, '--description', hold.asks]
+}

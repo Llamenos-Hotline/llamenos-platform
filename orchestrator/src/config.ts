@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { loadLaneScopes, type LaneScope } from './fragments.js'
 import { FLEET_DIR } from './paths.js'
 import type { Limits } from './circuit.js'
+import { DISPATCH_LABEL, VETO_LABELS } from './hold-labels.js'
 
 export type LaneMode = 'off' | 'shadow' | 'live'
 export type EngineId = 'claude' | 'opencode'
@@ -118,8 +119,9 @@ export const LANES: Lane[] = LANE_IDS.map((id) => ({
   mode: 'off',                       // DEFAULT only — real mode comes from readLaneModes()
   cap: 1,
   engine: 'claude',
-  requireLabel: 'agent-dispatchable',
-  vetoLabels: ['needs-human', 'needs-decision', 'blocked', 'needs-info'],
+  requireLabel: DISPATCH_LABEL,
+  // #1815: every hold label vetoes, `agent-proposed` included — see hold-labels.ts.
+  vetoLabels: [...VETO_LABELS],
   scope: { owned: [], notOwned: [] },
 }))
 
@@ -326,7 +328,7 @@ export async function loadGrantableLanes(
     mode: 'off',
     cap: 0,
     engine: 'claude',
-    requireLabel: 'agent-dispatchable',
+    requireLabel: DISPATCH_LABEL,
     vetoLabels: [],
     scope: grantableScope(scopes[id], SCOPE_ONLY_GRANT_PATHS[id]),
     scopeOnly: true,

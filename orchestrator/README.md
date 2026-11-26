@@ -704,24 +704,61 @@ lane parked work that was already diagnosed.
    to split. The grant comment at PR open names each lane as the reviewer of
    its own files.
 5. **Labels say what is true.** `lane:` is corrected by routing. `needs-human`
-   means **a human must act** — see below.
+   means **a human must act**, and an agent proposal is `agent-proposed` — see below.
 
-### What `needs-human` means (#1815)
+### What the hold labels mean (#1815)
 
-`needs-human` is a veto: every lane skips an issue carrying it. It is correct
-only when a person has to DO something no agent can: provide a credential or
-a vendor / app-store account, provision infrastructure, make a product or
-policy decision, sign off on a trust anchor, or look at a PR the fleet could
-not verify. The issue should say which act, with the recommended answer when
-there is one, so clearing it is a yes or no and not a re-investigation.
+`needs-human` used to carry two unrelated states — "an agent proposed this, say
+yes or no" and "a person must do something no agent can" — and nothing told
+them apart. Measured 2026-10-11, 11 of 20 `needs-human` issues were ordinary M1
+work (invite redemption, clock-in routing) that nobody could see a question on.
+Each state now has its own label. `orchestrator/src/hold-labels.ts` is the
+single source; every label below is a **veto** in every lane.
 
-The fleet itself adds it only for: a worker `BLOCKED` that is not a routing
-slip, a claimed success it could not verify, a branch mismatch, an
-`UNVERIFIED` review, and a verified PR whose auto-merge could not be armed. It
-never adds it for a misrouted item (that routes itself) or a wedged worktree
-(re-derived every pass). The planner (`llamenos-fleet plan`) attaches it to
-every issue it proposes, so an agent cannot propose work to itself and then do
-it; that is "a human must accept this proposal", and the issue body says so.
+| Label | State | What it asks | Who clears it |
+|---|---|---|---|
+| `agent-proposed` | an agent (the planner) proposed this issue | yes or no | a human: **accept** = remove it and add `agent-dispatchable`; **reject** = close the issue |
+| `needs-human` | a person must DO something no agent can | the act, posted on the issue under **Why `needs-human`:** | a human, once the act is done |
+| `blocked` | sequenced behind other work | nothing — it waits | whoever lands the blocker |
+| `needs-decision` / `needs-info` | a decision / missing information | stated on the issue | a human |
+
+The gate survives unchanged in strength: an agent must not propose work to
+itself and then do it. The planner (`llamenos-fleet plan`) attaches
+`agent-proposed` unconditionally (`buildIssueCreateArgs`, with no parameter
+that could suppress it), the issue body states the question and both answers,
+and the label's GitHub description says it too, so a reader can answer it
+without opening this source. No fleet code ever removes `agent-proposed` or
+adds `agent-dispatchable` — `tests/orchestrator/hold-labels.test.ts` scans the
+source for any label write that would.
+
+`needs-human` is correct only when a person has to act: provide a credential or
+a vendor / app-store account, provision infrastructure, sign off on a trust
+anchor, or look at a PR the fleet could not verify. The fleet writes it only
+through `settle()`, whose input is the **act** (`humanAct`), never a boolean:
+the reason is posted on the issue first, then the label is added (the label is
+still added if the comment fails — the veto is the safety property). It does so
+for exactly four outcomes: a worker `BLOCKED` that is not a routing slip (the
+act names both exits — swap to `blocked` if it is only sequenced), a claimed
+success it could not verify, a branch mismatch, and an `UNVERIFIED` review. A
+salvage that fails on the dispatch host also hands off, naming the worktree.
+
+It does **not** hand off for a misrouted item (that routes itself), a wedged
+worktree (re-derived every pass), or a verified PR whose auto-merge could not
+be armed. That last one is what put a bare `needs-human` on #3029 on
+2026-11-25. The PR was verified and reviewed, the open PR already holds the
+item (`findOpenPr`), and queue-feed re-arms an unarmed green PR on its own
+pass, so nobody had anything to do. The PR now gets a comment saying why it is
+unarmed, and the reason stays in the ledger note.
+
+**No label edit implies a hold.** Nothing in the fleet reacts to a label being
+removed. `needs-human` is written only as the result of a dispatch outcome,
+never as a function of which labels an issue carries. Dropping
+`agent-dispatchable` leaves an issue unclaimable, not human-gated. If an issue
+carries `agent-dispatchable` *and* a hold (the #1716 / #2925 shape), the hold
+wins, and the digest's human queue flags the contradiction on that line. The
+queue lists proposals and acts as separate groups, oldest first, with each
+issue's age, because what got eleven M1 issues buried was six weeks of
+silence.
 
 ### Ownership carve-outs, recorded so they stop being re-litigated (#1967)
 

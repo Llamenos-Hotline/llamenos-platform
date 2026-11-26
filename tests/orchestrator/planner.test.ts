@@ -19,10 +19,13 @@ vi.mock('node:fs', () => ({
 
 import {
   proposeIssues, buildIssueCreateArgs, parseProposals, toProposedIssue, PROPOSAL_HOLD_NOTE,
-  titleSimilarity, isNearDuplicate, NEEDS_HUMAN_LABEL, NEAR_DUPLICATE_THRESHOLD,
+  titleSimilarity, isNearDuplicate, AGENT_PROPOSED_LABEL, NEAR_DUPLICATE_THRESHOLD, buildProposalLabelArgs,
   type ProposedIssue, type PlannerInput,
 } from '../../orchestrator/src/roles/planner.js'
 import type { WorkItem } from '../../orchestrator/src/source.js'
+import { HOLD_LABELS, NEEDS_HUMAN_LABEL } from '../../orchestrator/src/hold-labels.js'
+import { LANES } from '../../orchestrator/src/config.js'
+import { judge } from '../../orchestrator/src/select.js'
 
 function item(id: string, title: string): WorkItem {
   return { id, title, body: 'x'.repeat(250), url: `https://example/${id}`, labels: [] }
@@ -81,7 +84,7 @@ describe('proposeIssues — the write boundary', () => {
   })
 })
 
-describe('needs-human is structurally unavoidable', () => {
+describe('agent-proposed is structurally unavoidable', () => {
   const issue: ProposedIssue = { title: 'Some title', body: 'Some body', lane: 'backend', effort: 'medium' }
 
   it('is present in the argv built for gh issue create', () => {
@@ -89,7 +92,7 @@ describe('needs-human is structurally unavoidable', () => {
     const labelIdx = args.indexOf('--label')
     expect(labelIdx).toBeGreaterThanOrEqual(0)
     const labels = (args[labelIdx + 1] ?? '').split(',')
-    expect(labels).toContain(NEEDS_HUMAN_LABEL)
+    expect(labels).toContain(AGENT_PROPOSED_LABEL)
   })
 
   it('is present even when the caller supplies no labels of its own — there is no parameter to omit it through', () => {
@@ -102,20 +105,20 @@ describe('needs-human is structurally unavoidable', () => {
     for (const args of [argsA, argsB]) {
       const labelIdx = args.indexOf('--label')
       const labels = (args[labelIdx + 1] ?? '').split(',')
-      expect(labels).toContain(NEEDS_HUMAN_LABEL)
+      expect(labels).toContain(AGENT_PROPOSED_LABEL)
     }
   })
 
-  it('mutation guard: a label list built without needs-human would fail this exact assertion', () => {
+  it('mutation guard: a label list built without agent-proposed would fail this exact assertion', () => {
     // Directly pins the property, not the absence of a string: the label
     // must be a MEMBER of the parsed label array, not merely substring-
     // present somewhere in the argv (which a title or body containing the
-    // literal text "needs-human" could satisfy without the label being
+    // literal text "agent-proposed" could satisfy without the label being
     // real).
     const args = buildIssueCreateArgs(issue)
     const labelIdx = args.indexOf('--label')
     const labels = (args[labelIdx + 1] ?? '').split(',')
-    expect(labels.filter((l) => l === NEEDS_HUMAN_LABEL)).toHaveLength(1)
+    expect(labels.filter((l) => l === AGENT_PROPOSED_LABEL)).toHaveLength(1)
   })
 })
 
@@ -181,12 +184,40 @@ describe('toProposedIssue', () => {
   })
 })
 
-describe('needs-human says which act a human must take (#1815)', () => {
-  it('the created issue body names the act: accept or reject the agent proposal', () => {
-    const args = buildIssueCreateArgs({ title: 'T', body: 'B', lane: 'backend', effort: 'low' })
+describe('a proposal is visibly answerable, and distinct from "a human must act" (#1815)', () => {
+  const issue: ProposedIssue = { title: 'T', body: 'B', lane: 'backend', effort: 'low' }
+  const labelsOf = (args: string[]): string[] => (args[args.indexOf('--label') + 1] ?? '').split(',')
+
+  it('the created issue body states the question and both answers', () => {
+    const args = buildIssueCreateArgs(issue)
     const body = args[args.indexOf('--body') + 1] ?? ''
     expect(body.startsWith('B')).toBe(true)
     expect(body).toContain(PROPOSAL_HOLD_NOTE)
-    expect(PROPOSAL_HOLD_NOTE).toContain('accept or reject the proposal')
+    expect(PROPOSAL_HOLD_NOTE).toContain(`remove \`${AGENT_PROPOSED_LABEL}\` and add \`agent-dispatchable\``)
+    expect(PROPOSAL_HOLD_NOTE).toContain('close it')
+    // Sequenced work has its own home; the note must not send it to needs-human.
+    expect(PROPOSAL_HOLD_NOTE).toContain('`blocked`')
+    expect(PROPOSAL_HOLD_NOTE).not.toContain(NEEDS_HUMAN_LABEL)
+  })
+
+  it('never carries needs-human or agent-dispatchable — a proposal is neither a blocker nor admitted work', () => {
+    const labels = labelsOf(buildIssueCreateArgs(issue))
+    expect(labels).not.toContain(NEEDS_HUMAN_LABEL)
+    expect(labels).not.toContain('agent-dispatchable')
+  })
+
+  it('stays undispatchable in every lane even after a human adds agent-dispatchable but forgets the hold', () => {
+    // The gate: an agent proposal is inert until a human REMOVES the hold.
+    const labels = [...labelsOf(buildIssueCreateArgs(issue)), 'agent-dispatchable']
+    const created = { id: '1', title: 'T', body: 'x'.repeat(250), url: 'u', labels }
+    for (const lane of LANES) expect(judge(created, labels, lane)).toEqual({ ok: false, reason: 'vetoed' })
+  })
+
+  it('ensures the label exists with the question it asks as its description', () => {
+    const args = buildProposalLabelArgs()
+    expect(args.slice(0, 4)).toEqual(['label', 'create', AGENT_PROPOSED_LABEL, '--force'])
+    const desc = args[args.indexOf('--description') + 1] ?? ''
+    expect(desc).toBe(HOLD_LABELS.find((h) => h.name === AGENT_PROPOSED_LABEL)?.asks)
+    expect(desc).toContain('agent-dispatchable')
   })
 })

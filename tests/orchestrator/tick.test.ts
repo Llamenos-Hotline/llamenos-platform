@@ -238,7 +238,7 @@ describe('tick', () => {
 
   // #1841/#1764: BLOCKED no longer spends the attempt budget, so the
   // `needs-human` hand-off is the only thing stopping an immediate
-  // re-dispatch into the same wall. Dropping `needsHuman = true` for BLOCKED
+  // re-dispatch into the same wall. Dropping the `humanAct` for BLOCKED
   // in tick.ts makes this fail.
   it('hands a BLOCKED outcome to a human instead of leaving it re-claimable', async () => {
     const d = deps({
@@ -246,7 +246,7 @@ describe('tick', () => {
       dispatch: vi.fn(async () => ({ outcome: 'BLOCKED' as const, note: 'path not owned' })),
     })
     await tick(d)
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'BLOCKED', needsHuman: true }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'BLOCKED', humanAct: expect.stringContaining('path not owned') }))
   })
 
   it('keeps dispatching an item whose only history is BLOCKED rows', async () => {

@@ -3,6 +3,9 @@ import { gh, ghJson } from './gh.js'
 import { DIGEST_ISSUE_FILE, FLEET_DIR, LAST_DIGEST_AT_FILE } from './paths.js'
 import type { WorkSink } from './sink.js'
 import type { RunRecord } from './ledger.js'
+import {
+  AGENT_PROPOSED_LABEL, DISPATCH_LABEL, HOLD_LABELS, NEEDS_HUMAN_LABEL, isContradicted,
+} from './hold-labels.js'
 
 /**
  * Issue #838: "the 18:00 digest ran on schedule and printed to the systemd
@@ -302,20 +305,23 @@ export function renderFleetPrsSection(prs: FleetPrWithState[]): string {
 // this fleet ever posts is not missing the queue the whole issue is about).
 // ---------------------------------------------------------------------------
 
-/** Matches `config.ts`'s per-lane `vetoLabels` (minus `blocked`, which is a
- *  Projects-column concept, not a "a human must decide" one) and issue
- *  #774's own title. Not imported from `config.ts` — that array is
- *  per-`Lane` and mutable-shaped; duplicating three literal strings here is
- *  less risk than reaching into lane config for a label list. */
-export const HUMAN_QUEUE_LABELS = ['needs-human', 'needs-decision', 'needs-info'] as const
+/** The hold labels that wait on a PERSON — every veto in hold-labels.ts
+ *  except `blocked`, which waits on other work, not on anyone. #1815 added
+ *  `agent-proposed`: a proposal waiting on a yes or no is the queue item a
+ *  human can clear fastest, and it used to hide inside `needs-human`. */
+export const HUMAN_QUEUE_LABELS = [AGENT_PROPOSED_LABEL, NEEDS_HUMAN_LABEL, 'needs-decision', 'needs-info'] as const
 
 const HUMAN_QUEUE_FETCH_LIMIT = 100
 const HUMAN_QUEUE_DISPLAY_LIMIT = 20
+const DAY_MS = 24 * 60 * 60_000
 
 export interface HumanQueueIssue {
   number: number
   title: string
   labels: string[]
+  /** ISO timestamp. #1815: the signal that matters is AGE — eleven M1
+   *  issues sat vetoed for six weeks because nothing said how long. */
+  createdAt: string
 }
 
 /** Comma-separated inside a single `--search label:...` clause is GitHub
@@ -324,28 +330,59 @@ export interface HumanQueueIssue {
  *  the same three labels passed to `--label`, which is AND/REST semantics
  *  and requires every listed label at once). */
 export async function defaultFetchHumanQueue(): Promise<HumanQueueIssue[] | undefined> {
-  const raw = await ghJson<{ number: number; title: string; labels: { name: string }[] }[]>([
+  const raw = await ghJson<{ number: number; title: string; labels: { name: string }[]; createdAt: string }[]>([
     'issue', 'list', '--state', 'open',
     '--search', `label:${HUMAN_QUEUE_LABELS.join(',')}`,
-    '--json', 'number,title,labels',
+    '--json', 'number,title,labels,createdAt',
     '--limit', String(HUMAN_QUEUE_FETCH_LIMIT),
   ])
-  return raw?.map((i) => ({ number: i.number, title: i.title, labels: i.labels.map((l) => l.name) }))
+  return raw?.map((i) => ({ number: i.number, title: i.title, labels: i.labels.map((l) => l.name), createdAt: i.createdAt }))
 }
 
-/** Pure. Caps the rendered list at `HUMAN_QUEUE_DISPLAY_LIMIT` items with a
- *  trailing `… and N more` — the queue observed while building this already
- *  runs past 30 open issues, and a digest comment that is mostly one long
- *  list is the same "stop reading before the last line" failure
- *  `computeBanner`'s own module comment (digest.ts) describes. */
-export function renderHumanQueueSection(issues: HumanQueueIssue[]): string {
-  if (issues.length === 0) return ['## Human queue (needs-*)', '  (none)'].join('\n')
-  const shown = issues.slice(0, HUMAN_QUEUE_DISPLAY_LIMIT)
-  const lines = shown.map((i) => {
-    const tags = i.labels.filter((l) => (HUMAN_QUEUE_LABELS as readonly string[]).includes(l))
-    return `- #${i.number} [${tags.join(',')}] ${i.title}`
-  })
-  const rest = issues.length - shown.length
-  if (rest > 0) lines.push(`… and ${rest} more`)
-  return ['## Human queue (needs-*)', ...lines].join('\n')
+function ageDays(createdAt: string, now: number): number | undefined {
+  const t = Date.parse(createdAt)
+  return Number.isNaN(t) ? undefined : Math.max(0, Math.floor((now - t) / DAY_MS))
+}
+
+function renderQueueLine(i: HumanQueueIssue, now: number): string {
+  const tags = i.labels.filter((l) => (HUMAN_QUEUE_LABELS as readonly string[]).includes(l))
+  const age = ageDays(i.createdAt, now)
+  const contradiction = isContradicted(i.labels)
+    ? ` — also \`${DISPATCH_LABEL}\`: reads as claimable, but the hold wins and no lane will take it`
+    : ''
+  return `- #${i.number} [${tags.join(',')}] ${i.title} (${age === undefined ? 'age unknown' : `${age}d old`})${contradiction}`
+}
+
+/**
+ * Pure. Two groups, because they ask different things (#1815): proposals
+ * want a yes or no, everything else wants an act. Oldest first inside each
+ * group, since an item parked for weeks is the finding. Capped at
+ * `HUMAN_QUEUE_DISPLAY_LIMIT` lines overall with a trailing `… and N more`
+ * — a digest comment that is mostly one long list is the same "stop reading
+ * before the last line" failure `computeBanner`'s own module comment
+ * (digest.ts) describes.
+ */
+export function renderHumanQueueSection(issues: HumanQueueIssue[], now: number = Date.now()): string {
+  if (issues.length === 0) return ['## Human queue', '  (none)'].join('\n')
+  const oldestFirst = (a: HumanQueueIssue, b: HumanQueueIssue): number =>
+    (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0) || a.number - b.number
+  const proposals = issues.filter((i) => i.labels.includes(AGENT_PROPOSED_LABEL)).sort(oldestFirst)
+  const acts = issues.filter((i) => !i.labels.includes(AGENT_PROPOSED_LABEL)).sort(oldestFirst)
+  const proposalAsk = HOLD_LABELS.find((h) => h.name === AGENT_PROPOSED_LABEL)?.asks ?? ''
+  const groups: { heading: string; items: HumanQueueIssue[] }[] = [
+    { heading: `### Proposals waiting on a yes or no (\`${AGENT_PROPOSED_LABEL}\`) — ${proposalAsk}`, items: proposals },
+    { heading: '### Waiting on a person to act (`needs-*`) — each issue says which act', items: acts },
+  ]
+  const out = ['## Human queue']
+  let shown = 0
+  for (const g of groups) {
+    if (g.items.length === 0) continue
+    const room = Math.max(0, HUMAN_QUEUE_DISPLAY_LIMIT - shown)
+    if (room === 0) break
+    out.push(g.heading, ...g.items.slice(0, room).map((i) => renderQueueLine(i, now)))
+    shown += Math.min(room, g.items.length)
+  }
+  const rest = issues.length - shown
+  if (rest > 0) out.push(`… and ${rest} more`)
+  return out.join('\n')
 }

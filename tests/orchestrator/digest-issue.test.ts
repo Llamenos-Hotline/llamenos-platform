@@ -292,22 +292,53 @@ describe('renderFleetPrsSection', () => {
 })
 
 describe('renderHumanQueueSection', () => {
+  const NOW = Date.parse('2026-11-25T00:00:00Z')
+  const daysAgo = (d: number): string => new Date(NOW - d * 24 * 60 * 60_000).toISOString()
+  const q = (number: number, labels: string[], age = 1) => ({ number, title: `issue ${number}`, labels, createdAt: daysAgo(age) })
+
   it('renders (none) for an empty queue', () => {
-    expect(renderHumanQueueSection([])).toContain('(none)')
+    expect(renderHumanQueueSection([], NOW)).toContain('(none)')
   })
 
   it('lists every item up to the display cap, one per line', () => {
-    const issues = Array.from({ length: 5 }, (_, i) => ({ number: i, title: `issue ${i}`, labels: ['needs-human'] }))
-    const out = renderHumanQueueSection(issues)
+    const issues = Array.from({ length: 5 }, (_, i) => q(i, ['needs-human']))
+    const out = renderHumanQueueSection(issues, NOW)
     for (const issue of issues) expect(out).toContain(`#${issue.number}`)
     expect(out).not.toContain('more')
   })
 
   it('truncates beyond 20 items with an "… and N more" trailer', () => {
-    const issues = Array.from({ length: 25 }, (_, i) => ({ number: i, title: `issue ${i}`, labels: [HUMAN_QUEUE_LABELS[0]] }))
-    const out = renderHumanQueueSection(issues)
+    const issues = Array.from({ length: 25 }, (_, i) => q(i, [HUMAN_QUEUE_LABELS[1]], 30 - i))
+    const out = renderHumanQueueSection(issues, NOW)
     expect(out).toContain('… and 5 more')
-    // The 21st..25th items themselves are not individually listed.
+    // Oldest first: the five newest (#20..#24) are the ones not listed.
     expect(out).not.toContain('#24 ')
+    expect(out).toContain('#0 ')
+  })
+
+  // #1815: the two states ask different things, so they are two groups.
+  it('separates proposals awaiting a yes/no from items waiting on an act, and says what each asks', () => {
+    const out = renderHumanQueueSection([q(1, ['needs-human']), q(2, ['agent-proposed', 'lane:backend'])], NOW)
+    const proposals = out.indexOf('### Proposals')
+    const acts = out.indexOf('### Waiting on a person')
+    expect(proposals).toBeGreaterThanOrEqual(0)
+    expect(acts).toBeGreaterThan(proposals)
+    expect(out.indexOf('#2 ')).toBeGreaterThan(proposals)
+    expect(out.indexOf('#2 ')).toBeLessThan(acts)
+    expect(out.indexOf('#1 ')).toBeGreaterThan(acts)
+    expect(out).toContain('add agent-dispatchable')
+  })
+
+  it('reports age, oldest first — an item parked for weeks is the finding', () => {
+    const out = renderHumanQueueSection([q(10, ['needs-human'], 2), q(11, ['needs-human'], 45)], NOW)
+    expect(out).toContain('45d old')
+    expect(out.indexOf('#11 ')).toBeLessThan(out.indexOf('#10 '))
+  })
+
+  // #2925 / #1716: dispatchable AND vetoed read as claimable.
+  it('flags an issue that carries agent-dispatchable and a hold', () => {
+    const out = renderHumanQueueSection([q(2925, ['agent-dispatchable', 'needs-human'])], NOW)
+    expect(out).toMatch(/#2925 .*also `agent-dispatchable`/)
+    expect(renderHumanQueueSection([q(1, ['needs-human'])], NOW)).not.toContain('also `agent-dispatchable`')
   })
 })

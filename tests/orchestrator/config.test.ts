@@ -77,6 +77,12 @@ describe('config', () => {
     expect(LANES.every((l) => l.vetoLabels.includes('needs-human'))).toBe(true)
   })
 
+  // #1815: the planner's proposal gate is its own label now, and must veto
+  // exactly as hard as needs-human did.
+  it('vetoes on agent-proposed everywhere', () => {
+    expect(LANES.every((l) => l.vetoLabels.includes('agent-proposed'))).toBe(true)
+  })
+
   // `deploy/` and `.github/workflows/` were removed from the never-write list
   // (they now rely on the impact gate instead — see config.ts's comment on
   // NEVER_WRITE_PATHS), so this asserts what actually remains: secrets and
