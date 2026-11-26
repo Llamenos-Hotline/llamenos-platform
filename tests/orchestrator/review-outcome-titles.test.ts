@@ -264,6 +264,9 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['the engine is not logged in', smokeFailed('engine-auth'), 'NO-VERDICT:engine-auth'],
   ['the engine or model id is misconfigured', smokeFailed('engine-misconfigured'), 'NO-VERDICT:engine-misconfigured'],
   ['the engine could not be run', smokeFailed('engine-unavailable'), 'NO-VERDICT:engine-unavailable'],
+  // #1508: the engine ran and ANSWERED, and the answer had no readable
+  // verdict. It used to share engine-unavailable's "could not be run".
+  ['the engine answered, but unreadably', smokeFailed('engine-unreadable'), 'NO-VERDICT:engine-unreadable'],
   // A PR whose BASE predates code the gate runs from the base checkout. It
   // used to be named `engine-misconfigured` (smoke fallback mismatch) or
   // `did-not-run` (a base-guard step failing) — both send the reader after an
@@ -534,6 +537,28 @@ describe('rail: an engine failure is named by its class, end to end', () => {
     const recorded = readFileSync(join(temp, 'fleet-review-engine-failure'), 'utf8').trim()
     expect(recorded).toBe('engine-quota')
     expect(reviewOutcomeToken(name(smokeFailed(recorded)).title)).toBe('NO-VERDICT:engine-quota')
+  })
+
+  // #1508, end to end: the engine ran and answered in prose, twice. The
+  // real smoke step must record engine-unreadable, and the naming step must
+  // turn it into its own token — never engine-unavailable's "could not be
+  // run", which is what sent #1508's reporter after quota and runner health
+  // for an engine that was answering.
+  it('an engine that answers without a readable verdict becomes NO-VERDICT:engine-unreadable, not engine-unavailable', () => {
+    const bin = mkdtempSync(join(work, 'bin-'))
+    writeFileSync(join(bin, 'claude'), '#!/usr/bin/env bash\ncat >/dev/null\necho "Yes, 2 + 2 is 4."\nexit 0\n')
+    chmodSync(join(bin, 'claude'), 0o755)
+    const temp = mkdtempSync(join(work, 'smoke-temp-'))
+    const r = runScript(step('fleet-review', SMOKE_STEP).run, { ...jobEnv('fleet-review'), RUNNER_TEMP: temp, FLEET_REVIEW_MODEL: 'sonnet', FLEET_REVIEW_PRIMARY: 'claude', FLEET_REVIEW_FALLBACK: 'off' }, {
+      path: `${bin}${delimiter}${process.env['PATH'] ?? ''}`,
+    })
+    expect(r.status, r.stdout + r.stderr).toBe(1)
+    expect(r.stdout).toContain('Yes, 2 + 2 is 4.')
+    const recorded = readFileSync(join(temp, 'fleet-review-engine-failure'), 'utf8').trim()
+    expect(recorded).toBe('engine-unreadable')
+    const title = name(smokeFailed(recorded)).title
+    expect(reviewOutcomeToken(title)).toBe('NO-VERDICT:engine-unreadable')
+    expect(title).not.toContain('could not be run')
   })
 
   // The incident (run 39063670637): a PR whose BASE predates
