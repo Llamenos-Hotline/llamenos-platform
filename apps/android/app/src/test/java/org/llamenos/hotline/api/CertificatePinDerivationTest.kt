@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
 
 /**
  * Regression test for #1593: the ISRG Root X2 SPKI pin was hand-transcribed
- * incorrectly in both `ApiService.ISRG_ROOT_X2_HASH` and the production
+ * incorrectly in both `CertificatePins.ISRG_ROOT_X2_HASH` and the production
  * `network_security_config.xml` `<pin-set>`. The wrong value
  * ("diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA=") shared a 29-character
  * prefix with the real digest ("diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=")
@@ -88,19 +88,19 @@ class CertificatePinDerivationTest {
 
         // Per-constant, so a failure names the root that was mistyped (#1593: a hand-transcribed
         // X2 digest shared a 29-character prefix with the real value).
-        assertEquals("sha256/${derived.getValue("ISRG Root X1")}", ApiService.ISRG_ROOT_X1_HASH)
-        assertEquals("sha256/${derived.getValue("ISRG Root X2")}", ApiService.ISRG_ROOT_X2_HASH)
-        assertEquals("sha256/${derived.getValue("ISRG Root YR")}", ApiService.ISRG_ROOT_YR_HASH)
-        assertEquals("sha256/${derived.getValue("ISRG Root YE")}", ApiService.ISRG_ROOT_YE_HASH)
+        assertEquals("sha256/${derived.getValue("ISRG Root X1")}", CertificatePins.ISRG_ROOT_X1_HASH)
+        assertEquals("sha256/${derived.getValue("ISRG Root X2")}", CertificatePins.ISRG_ROOT_X2_HASH)
+        assertEquals("sha256/${derived.getValue("ISRG Root YR")}", CertificatePins.ISRG_ROOT_YR_HASH)
+        assertEquals("sha256/${derived.getValue("ISRG Root YE")}", CertificatePins.ISRG_ROOT_YE_HASH)
 
         assertEquals(
             derived.values.map { "sha256/$it" }.toSet(),
-            ApiService.DEFAULT_PIN_HASHES.toSet(),
+            CertificatePins.DEFAULT_PIN_HASHES.toSet(),
             "DEFAULT_PIN_HASHES must be exactly the X1, X2, YR and YE roots (#2505)",
         )
         assertEquals(
-            ApiService.DEFAULT_PIN_HASHES.size,
-            ApiService.DEFAULT_PIN_HASHES.toSet().size,
+            CertificatePins.DEFAULT_PIN_HASHES.size,
+            CertificatePins.DEFAULT_PIN_HASHES.toSet().size,
             "DEFAULT_PIN_HASHES must not repeat a pin",
         )
     }
@@ -133,7 +133,7 @@ class CertificatePinDerivationTest {
         val xmlPins = (0 until pinNodes.length).map { "sha256/" + pinNodes.item(it).textContent.trim() }
 
         assertEquals(
-            ApiService.DEFAULT_PIN_HASHES.toSet(),
+            CertificatePins.DEFAULT_PIN_HASHES.toSet(),
             xmlPins.toSet(),
             "a pin enforced by one layer and not the other is a half-pinned release (#2505)",
         )

@@ -517,9 +517,9 @@ export interface TrustAnchorFile {
  */
 export const TRUST_ANCHOR_FILES: readonly TrustAnchorFile[] = [
   {
-    path: 'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt',
+    path: 'apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt',
     client: 'android',
-    anchors: 'the Android OkHttp CertificatePinner pin set (DEFAULT_PIN_HASHES) every API and relay connection is held to',
+    anchors: 'the Android OkHttp CertificatePinner pin set (DEFAULT_PIN_HASHES) and pinning policy every API and relay connection is held to',
   },
   {
     path: 'apps/android/app/src/main/res/xml/network_security_config.xml',

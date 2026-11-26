@@ -282,7 +282,7 @@ tests/orchestrator/                 @rhonda-rodododo
 # change even on a route the fleet gate does not judge. A wrong pin here
 # disconnects every installed client, and only an app-store release undoes it.
 # guards.test.ts fails if a registry entry is not owned here.
-apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt @rhonda-rodododo
+apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt @rhonda-rodododo
 apps/android/app/src/main/res/xml/network_security_config.xml @rhonda-rodododo
 apps/android/app/src/main/AndroidManifest.xml @rhonda-rodododo
 apps/ios/Sources/Services/CertificatePinning.swift @rhonda-rodododo

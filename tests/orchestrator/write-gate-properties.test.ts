@@ -241,7 +241,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
   it('registers the five files #2556 names, the iOS pin set, and the build files that choose what ships', () => {
     expect(TRUST_ANCHOR_FILES.map((a) => a.path).sort()).toEqual([
       'apps/android/app/src/main/AndroidManifest.xml',
-      'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt',
+      'apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt',
       'apps/android/app/src/main/res/xml/network_security_config.xml',
       'apps/desktop/src/api_config.rs',
       'apps/desktop/src/cert_pin.rs',
@@ -375,7 +375,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
 
     it('refuses REMOVING the pinner from a call site', async () => {
       const f = 'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt'
-      const before = 'client.newBuilder()\n    .certificatePinner(ApiService.buildPinner(host))\n    .build()\n'
+      const before = 'client.newBuilder()\n    .certificatePinner(CertificatePins.buildPinner(host))\n    .build()\n'
       const rep = await gate(judged({ [f]: before }, { [f]: 'client.newBuilder()\n    .build()\n' }))
       expect(rep.passed).toBe(false)
       expect(trustLine(rep)).toContain(f)
@@ -486,7 +486,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       const f = 'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt'
       const utf16 = (t: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(t, 'utf16le')])
       const rep = await gate(judged(
-        { [f]: utf16('client.newBuilder()\n.certificatePinner(ApiService.buildPinner(host))\n.build()\n') },
+        { [f]: utf16('client.newBuilder()\n.certificatePinner(CertificatePins.buildPinner(host))\n.build()\n') },
         { [f]: utf16('client.newBuilder()\n.build()\n') },
       ))
       expect(rep.passed).toBe(false)
@@ -495,7 +495,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
 
     it('does NOT hold an ordinary edit to a call-site file that leaves its trust lines alone', async () => {
       const f = 'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt'
-      const pinned = '    .certificatePinner(ApiService.buildPinner(host))\n'
+      const pinned = '    .certificatePinner(CertificatePins.buildPinner(host))\n'
       const rep = await gate(judged({ [f]: `val a = 1\n${pinned}` }, { [f]: `val a = 2\n${pinned}` }))
       expect(rep.reasons).toEqual([])
       expect(rep.trustAnchors).toBeUndefined()
@@ -505,6 +505,70 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       const f = 'apps/android/app/src/test/java/org/llamenos/hotline/api/CertificatePinnerTest.kt'
       const rep = await gate(judged({}, { [f]: `val p = CertificatePinner.Builder().add(host, ${PIN_B}).build()\n` }))
       expect(rep.reasons).toEqual([])
+    })
+  })
+
+  // #3057 — the gate fires on the ANCHOR, not on the file that happens to sit
+  // next to it. Both directions, against the REAL tracked sources: the second
+  // test matters more than the first, and the first is only worth having
+  // because the second exists.
+  describe('the Android pin set is held on its own, not through the HTTP surface (#3057)', () => {
+    const API = 'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt'
+    const PINS = 'apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt'
+    const real = (f: string) => readFileSync(join(process.cwd(), f), 'utf8')
+
+    it('a routine API addition to ApiService.kt demands no trust-anchor sign-off', async () => {
+      const base = real(API)
+      const added =
+        '\n    suspend fun getSigchain(): String = request("GET", "/api/sigchain")\n' +
+        '    suspend fun appendSigchainLink(body: String): String = request("POST", "/api/sigchain", body)\n'
+      const at = base.lastIndexOf('}')
+      const rep = await gate(judged({ [API]: base }, { [API]: base.slice(0, at) + added + base.slice(at) }))
+      expect(rep.reasons).toEqual([])
+      expect(rep.trustAnchors).toBeUndefined()
+      expect(rep.passed).toBe(true)
+    })
+
+    it('still holds a change to the lines where ApiService.kt applies the pinner', async () => {
+      const base = real(API)
+      expect(base).toContain('.certificatePinner(CertificatePins.pinnerFor(hostname, hashes))')
+      const head = base.replace('.certificatePinner(CertificatePins.pinnerFor(hostname, hashes))', '.certificatePinner(CertificatePinner.DEFAULT)')
+      const rep = await gate(judged({ [API]: base }, { [API]: head }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(API)
+    })
+
+    it('ApiService.kt carries no pin literal — the pin set lives only in CertificatePins.kt', () => {
+      expect(real(API)).not.toMatch(/sha256\/[A-Za-z0-9+/]{43}=/)
+      expect(real(API)).not.toContain('DEFAULT_PIN_HASHES =')
+      expect(real(PINS)).toMatch(/sha256\/[A-Za-z0-9+/]{43}=/)
+    })
+
+    it('changing ONE character of a real pin hash hard-fails, and no automated review clears it', async () => {
+      const base = real(PINS)
+      const pin = base.match(/"sha256\/([A-Za-z0-9+/]{43})="/)?.[0] as string
+      expect(pin, 'no pin literal found in CertificatePins.kt').toBeDefined()
+      const flipped = pin.replace(/"sha256\/(.)/, (_m, c: string) => `"sha256/${c === 'A' ? 'B' : 'A'}`)
+      expect(flipped).not.toBe(pin)
+      const r = judged({ [PINS]: base }, { [PINS]: base.replace(pin, flipped) })
+      for (const approvals of [undefined, [], [REVIEW_REQUEST_LOGIN], ['dependabot[bot]'], ['someone-else']] as const) {
+        const rep = await gate(r, async () => approvals)
+        expect(rep.passed, `cleared by ${JSON.stringify(approvals)}`).toBe(false)
+        expect(trustLine(rep)).toContain(`${PINS} (it is the Android OkHttp CertificatePinner pin set`)
+        expect(rep.trustAnchors?.files).toEqual([PINS])
+      }
+      const signed = await gate(r, approvedBy(OPERATOR))
+      expect(signed.passed).toBe(true)
+      expect(signed.trustAnchors).toEqual({ files: [PINS], approvedBy: [OPERATOR] })
+    })
+
+    it('an edit to the pinning policy (the localhost exemption) in CertificatePins.kt also hard-fails', async () => {
+      const base = real(PINS)
+      expect(base).toContain('hostname == "localhost"')
+      const head = base.replace('hostname == "localhost"', 'hostname.isNotEmpty()')
+      const rep = await gate(judged({ [PINS]: base }, { [PINS]: head }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(PINS)
     })
   })
 
@@ -522,7 +586,13 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
   // human decides which it is.
   const CALL_SITES: Record<string, string> = {
     'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt':
-      'applies ApiService.buildPinner (registered) to the relay WebSocket',
+      'applies CertificatePins.buildPinner (registered CertificatePins.kt) to the relay WebSocket',
+    // The Android client's whole HTTP surface. It holds no pin and no pinning
+    // policy (#3057) — only the lines that APPLY CertificatePins.pinnerFor to the
+    // OkHttp client, which the line-level trust signatures hold if they change.
+    // Registering it whole-file would demand a TLS sign-off for every API method.
+    'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt':
+      'applies CertificatePins.pinnerFor (registered CertificatePins.kt) to the shared OkHttp client',
     'apps/android/app/src/main/java/org/llamenos/hotline/telephony/LinphoneService.kt':
       'applies the SIP TLS trust anchor the hub publishes at runtime — nothing compiled in',
     'apps/ios/Sources/Services/APIService.swift':

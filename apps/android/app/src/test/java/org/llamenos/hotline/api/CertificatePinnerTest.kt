@@ -34,10 +34,10 @@ class CertificatePinnerTest {
         // Must have at least 2 distinct CA pins for backup (RFC 7469 §2.5 recommendation).
         // Pinning is now dynamic: certificatePinner starts as CertificatePinner.DEFAULT and
         // is built per-hostname via buildPinner(). Verify DEFAULT_PIN_HASHES directly.
-        val count = ApiService.DEFAULT_PIN_HASHES.size
+        val count = CertificatePins.DEFAULT_PIN_HASHES.size
         assertTrue(
             count >= 2,
-            "ApiService.DEFAULT_PIN_HASHES must have at least 2 pins (ISRG Root X1, X2, YR, YE). Found: $count"
+            "CertificatePins.DEFAULT_PIN_HASHES must have at least 2 pins (ISRG Root X1, X2, YR, YE). Found: $count"
         )
     }
 
@@ -45,7 +45,7 @@ class CertificatePinnerTest {
     fun `buildPinner returns pinner with default hashes for public hostname`() {
         // Verify buildPinner() applies all DEFAULT_PIN_HASHES to the given hostname.
         val hostname = "app.example.org"
-        val pinner = ApiService.buildPinner(hostname)
+        val pinner = CertificatePins.buildPinner(hostname)
         val pinCount = pinner.pins.size
         assertTrue(
             pinCount >= 2,
@@ -70,7 +70,7 @@ class CertificatePinnerTest {
     }
 
     private val legacyPinner: CertificatePinner =
-        ApiService.buildPinner(host, listOf(ApiService.ISRG_ROOT_X1_HASH, ApiService.ISRG_ROOT_X2_HASH))
+        CertificatePins.buildPinner(host, listOf(CertificatePins.ISRG_ROOT_X1_HASH, CertificatePins.ISRG_ROOT_X2_HASH))
 
     /** Leaf + YR1 + the self-signed Root YR: what the chain builder returns once YR is a trust anchor. */
     private val yrAnchored = arrayOf("le-chain-yr.pem", "isrg-root-yr.pem")
@@ -86,7 +86,7 @@ class CertificatePinnerTest {
 
     @Test
     fun `a chain anchored by any pinned root is accepted`() {
-        val pinner = ApiService.buildPinner(host)
+        val pinner = CertificatePins.buildPinner(host)
         for ((name, resources) in mapOf(
             "anchored at ISRG Root YR" to yrAnchored,
             "anchored at ISRG Root YE" to yeAnchored,
@@ -108,7 +108,7 @@ class CertificatePinnerTest {
         // A well-formed leaf for the right host, signed by a CA whose key is not pinned: what a
         // coerced or mis-issued certificate from another CA looks like. Adding roots to the pin
         // set must never turn into "accept any chain".
-        val pinner = ApiService.buildPinner(host)
+        val pinner = CertificatePins.buildPinner(host)
         assertFailsWith<SSLPeerUnverifiedException> {
             pinner.check(host, chain("unpinned-chain.pem"))
         }

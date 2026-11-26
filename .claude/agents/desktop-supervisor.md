@@ -128,7 +128,7 @@ enforced lists are `SECRET_PATH_PATTERNS` and `TRUST_ANCHOR_FILES` in
   PR and in your status `notes:`, and expect the gate to hold the PR — `fleet/review` reports
   `NO-VERDICT:sign-off-pending`, which is the hold, not a defect to fix. Never post the sign-off
   yourself — it is the operator's statement that they checked the values. Never incidentally:
-  - `apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt`
+  - `apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt`
   - `apps/android/app/src/main/res/xml/network_security_config.xml`
   - `apps/ios/Sources/Services/CertificatePinning.swift`
   - `apps/desktop/src/cert_pin.rs`
