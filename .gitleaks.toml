@@ -4,7 +4,10 @@
 [extend]
 useDefault = true
 
-[allowlist]
+# gitleaks (8.30.1, the CI pin) refuses the legacy singular `[allowlist]` beside `[[allowlists]]`,
+# so this global allowlist uses the array form. Contents unchanged; with no
+# `condition` it keeps the default OR semantics of the old table.
+[[allowlists]]
 description = "Documentation examples and development-only credential defaults"
 
 # Fake HMAC_SECRET in unit test — introduced in c840e6a7 before gitleaks:allow comment was added.
@@ -23,3 +26,47 @@ regexes = [
   # RustFS local dev default — mirrors docker-compose.dev.yml RUSTFS_*_KEY values
   '''(STORAGE|RUSTFS)_(ACCESS|SECRET)_KEY\s*[:=]\s*rustfsadmin''',
 ]
+
+# ---------------------------------------------------------------------------
+# Cross-platform crypto test vectors (#2974 stage 0, #3038).
+#
+# These are allowed HERE, by path + rule + key name, and NOT by fingerprint in
+# .gitleaksignore. A fingerprint pins `file:rule:line`, and the line is the one
+# the finding has in the diff of the commit that ADDED it. The merge queue
+# squashes the PR into one new commit, whose diff adds every line at its FINAL
+# position — so a value added at line 302 and pushed down to 319 by a later
+# commit is allowed on the PR and fires in the merge group (run 45743105209).
+# Neither commit-scoped nor commit-less fingerprints survive that; a
+# path + key allowance does, and survives rebases and regenerations too.
+#
+# Each allowance is AND-scoped: the exact file, the one rule that fires, and a
+# match that is precisely `<namedKey>": "<64 lowercase hex>"`. Any other key in
+# these files, any other rule, any other shape (PEM, base64, a token prefix)
+# and every other path is still scanned.
+#
+# Why each value is definitionally test material: both files are written by
+# packages/crypto/src/vectors.rs from a ChaCha20 RNG seeded with a fixed label
+# (`LLAMENOS_WRITE_VECTORS=1 cargo test --lib vectors`), and the same test
+# FAILS if the committed file differs from what the generator produces — so a
+# value in these files that is not seeded generator output cannot pass CI.
+# ---------------------------------------------------------------------------
+
+# hpke-wrap.json: the fixture recipient's X25519 secret. Every platform opens
+# the `positives` envelopes with it through its production decrypt path.
+[[allowlists]]
+description = "v2 HPKE vector: seeded fixture recipient secret (packages/crypto/src/vectors.rs)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^packages/crypto/tests/fixtures/v2/hpke-wrap\.json$''']
+regexTarget = "match"
+regexes = ['''^recipientSecretHex": "[0-9a-f]{64}"$''']
+
+# server-event.json: a throwaway SERVER_SECRET and the per-hub relay-event keys
+# HKDF-derived from it, so every platform derives and decrypts the same frames.
+[[allowlists]]
+description = "v2 relay-event vector: seeded SERVER_SECRET and its derived hub event keys (packages/crypto/src/vectors.rs)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^packages/crypto/tests/fixtures/v2/server-event\.json$''']
+regexTarget = "match"
+regexes = ['''^(serverSecretHex|keyHex)": "[0-9a-f]{64}"$''']
