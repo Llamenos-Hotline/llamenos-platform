@@ -29,6 +29,14 @@ vi.mock('@llamenos/crypto/ffi', () => ({
   ed25519Verify: (...args: unknown[]) => mockEd25519Verify(...args),
 }))
 
+// The recovery link's new device key is claimed for the user (#2496); the real
+// claim runs against Postgres in integration-bun/device-key-binding.test.ts.
+const mockClaimDeviceKeys = vi.fn().mockResolvedValue(undefined)
+vi.mock('../../lib/device-key-claims', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/device-key-claims')>()
+  return { ...actual, claimDeviceKeys: (...args: unknown[]) => mockClaimDeviceKeys(...args) }
+})
+
 const mockHexToBytes = vi.fn().mockImplementation((hex: string) =>
   new Uint8Array(hex.match(/.{2}/g)?.map((b) => parseInt(b, 16)) ?? []),
 )

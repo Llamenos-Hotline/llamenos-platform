@@ -9,7 +9,8 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { sigchainLinks, pukEnvelopes, mlsPendingMessages } from '../db/schema'
-import { ed25519Verify } from '@llamenos/crypto/ffi'
+import { claimDeviceKeys, deviceKeysNamedBy, DeviceKeyReusedError } from '../lib/device-key-claims'
+import { CryptoError, ed25519Verify, sigchainVerify, type SigchainLink } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { timingSafeCompare } from '../lib/timing-safe'
@@ -17,6 +18,7 @@ import {
   SIGCHAIN_GENESIS_SEQ,
   SIGCHAIN_PAYLOAD_TYPE_FOR_LINK,
   sigchainDeviceAddPayloadSchema,
+  sigchainDeviceKemPayloadSchema,
   sigchainDeviceRemovePayloadSchema,
   sigchainGenesisPayloadSchema,
   sigchainPukEpochPayloadSchema,
@@ -224,6 +226,40 @@ function toPukEnvelopeRecord(r: typeof pukEnvelopes.$inferSelect): PukEnvelopeRe
   }
 }
 
+/** A stored or candidate link in the crate's `SigchainLink` shape. */
+function toCrateLink(link: {
+  id: string
+  seqNo: number
+  prevHash: string | null
+  hash: string
+  signerDeviceId: string
+  signerPubkey: string
+  signature: string
+  timestamp: string
+  payload: unknown
+}): SigchainLink {
+  return {
+    id: link.id,
+    seq: link.seqNo,
+    prevHash: link.prevHash === '' ? null : link.prevHash,
+    entryHash: link.hash,
+    signerDeviceId: link.signerDeviceId,
+    signerPubkey: link.signerPubkey,
+    signature: link.signature,
+    timestamp: link.timestamp,
+    payloadJson: JSON.stringify(link.payload),
+  }
+}
+
+/**
+ * Link types whose acceptance needs the whole chain: they carry a possession
+ * signature (`pop`) and device-set rules (a device_kem's signer must be the
+ * active device it names; a device is added once). The server runs the crate's
+ * `verify_sigchain` over stored chain + candidate, so it accepts exactly what
+ * every client verifier accepts (#2496).
+ */
+const CHAIN_VERIFIED_LINK_TYPES = new Set(['device_add', 'device_kem'])
+
 /**
  * Validate hash-chain continuity and signature, then insert a sigchain link.
  * MUST be called with a transaction (`tx`) already holding the advisory lock
@@ -351,6 +387,33 @@ export async function appendValidatedSigchainLink(
     )
   }
 
+  if (CHAIN_VERIFIED_LINK_TYPES.has(link.linkType)) {
+    const stored = await tx
+      .select()
+      .from(sigchainLinks)
+      .where(eq(sigchainLinks.userPubkey, userPubkey))
+      .orderBy(asc(sigchainLinks.seqNo))
+    const chain = [
+      ...stored.map(r => toCrateLink(mapSigchainRow(r))),
+      toCrateLink({ id: 'candidate', ...link, prevHash: normalizedPrevHash, signerDeviceId, signerPubkey, timestamp }),
+    ]
+    try {
+      sigchainVerify(chain)
+    } catch (e) {
+      if (e instanceof CryptoError) {
+        throw new CryptoKeyError(`sigchain ${link.linkType} refused: ${e.message}`, 400, e.reason ?? undefined)
+      }
+      throw e
+    }
+  }
+
+  try {
+    await claimDeviceKeys(tx, userPubkey, deviceKeysNamedBy({ signerPubkey, payload: link.payload }))
+  } catch (e) {
+    if (e instanceof DeviceKeyReusedError) throw new CryptoKeyError(e.message, 409, 'key_reused')
+    throw e
+  }
+
   const [inserted] = await tx
     .insert(sigchainLinks)
     .values({
@@ -433,10 +496,17 @@ function validateLinkSemantics(userPubkey: string, link: AppendLink): void {
     throw new CryptoKeyError(`sigchain payload.type must be "${expectedType}" for a ${link.linkType} link`, 400)
   }
 
-  // Every generic link is verified against the user's identity key, so a
-  // signerPubkey naming any other key would record a link the Rust verifier
-  // (which checks against signerPubkey) could never accept.
-  if (link.signerPubkey.toLowerCase() !== userPubkey.toLowerCase()) {
+  if (link.linkType === 'device_kem') {
+    // Signed by the device itself (spec §5): its signer IS the device it names.
+    // Whether that device is active is the crate verifier's call (below).
+    const devicePubkey = (link.payload as { devicePubkey?: unknown }).devicePubkey
+    if (typeof devicePubkey !== 'string' || devicePubkey !== link.signerPubkey.toLowerCase()) {
+      throw new CryptoKeyError('a device_kem link must be signed by the device it names', 400)
+    }
+  } else if (link.signerPubkey.toLowerCase() !== userPubkey.toLowerCase()) {
+    // Every other generic link is verified against the user's identity key, so a
+    // signerPubkey naming any other key would record a link the Rust verifier
+    // (which checks against signerPubkey) could never accept.
     throw new CryptoKeyError('sigchain signerPubkey must be the user\'s identity key', 400)
   }
 
@@ -445,6 +515,7 @@ function validateLinkSemantics(userPubkey: string, link: AppendLink): void {
     device_add: sigchainDeviceAddPayloadSchema,
     device_remove: sigchainDeviceRemovePayloadSchema,
     puk_epoch: sigchainPukEpochPayloadSchema,
+    device_kem: sigchainDeviceKemPayloadSchema,
     key_rotate: null,
   }[link.linkType]
   if (payloadSchema) {
@@ -579,7 +650,13 @@ export class CryptoKeysService {
     validateLinkSemantics(userPubkey, link)
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sigchainLockKey(userPubkey)}))`)
-      return appendValidatedSigchainLink(tx, userPubkey, link)
+      return appendValidatedSigchainLink(
+        tx,
+        userPubkey,
+        link,
+        // A device_kem is the device's own statement, verified against its key.
+        link.linkType === 'device_kem' ? { verifySignatureAgainst: link.signerPubkey.toLowerCase() } : {},
+      )
     })
   }
 
@@ -742,6 +819,8 @@ export class CryptoKeyError extends Error {
   constructor(
     message: string,
     readonly status: 400 | 403 | 404 | 409 | 500 = 500,
+    /** The crate's closed rejection code, when packages/crypto refused the link. */
+    readonly code?: string,
   ) {
     super(message)
     this.name = 'CryptoKeyError'

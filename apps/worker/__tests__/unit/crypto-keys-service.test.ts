@@ -13,7 +13,22 @@ import type { SigchainLinkType } from '@protocol/schemas/sigchain'
 const mockEd25519Verify = vi.fn().mockReturnValue(true)
 vi.mock('@llamenos/crypto/ffi', () => ({
   ed25519Verify: (...args: unknown[]) => mockEd25519Verify(...args),
+  // device_add / device_kem are verified with the whole chain by the crate;
+  // that path runs under bun:ffi (integration-bun/device-key-binding.test.ts).
+  sigchainVerify: () => {
+    throw new Error('sigchainVerify needs the native crate')
+  },
+  CryptoError: class CryptoError extends Error {},
 }))
+
+// Device key claims (#2496) write to their own table; here they are a spy, and
+// what each append claims is asserted. The real claim runs against Postgres in
+// integration-bun/device-key-binding.test.ts.
+const mockClaimDeviceKeys = vi.fn().mockResolvedValue(undefined)
+vi.mock('../../lib/device-key-claims', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/device-key-claims')>()
+  return { ...actual, claimDeviceKeys: (...args: unknown[]) => mockClaimDeviceKeys(...args) }
+})
 
 const mockHexToBytes = vi.fn().mockImplementation((hex: string) =>
   new Uint8Array(hex.match(/.{2}/g)?.map(b => parseInt(b, 16)) ?? [])
@@ -139,6 +154,8 @@ const DEVICE_ADD_PAYLOAD = {
   devicePubkey: 'cc'.repeat(32),
   deviceEncryptionPubkey: 'dd'.repeat(32),
 }
+/** A continuity test's link: any type the crate need not verify with the chain. */
+const PUK_EPOCH_PAYLOAD = { type: 'puk_epoch', generation: 1, signPubkey: '11'.repeat(32), dhPubkey: '22'.repeat(32) }
 const TIMESTAMP = '2026-01-01T00:00:00Z'
 
 function makeLinkBody(overrides: {
@@ -360,8 +377,8 @@ describe('CryptoKeysService — Sigchain', () => {
 
       const body = makeLinkBody({
         seqNo: 2,
-        linkType: 'device_add',
-        payload: DEVICE_ADD_PAYLOAD,
+        linkType: 'puk_epoch',
+        payload: PUK_EPOCH_PAYLOAD,
         prevHash: 'aa'.repeat(32),
       })
 
@@ -414,8 +431,8 @@ describe('CryptoKeysService — Sigchain', () => {
 
       const body = makeLinkBody({
         seqNo: 5, // should be 2
-        linkType: 'device_add',
-        payload: DEVICE_ADD_PAYLOAD,
+        linkType: 'puk_epoch',
+        payload: PUK_EPOCH_PAYLOAD,
         prevHash: 'h1',
       })
 
@@ -449,8 +466,8 @@ describe('CryptoKeysService — Sigchain', () => {
 
       const body = makeLinkBody({
         seqNo: 2,
-        linkType: 'device_add',
-        payload: DEVICE_ADD_PAYLOAD,
+        linkType: 'puk_epoch',
+        payload: PUK_EPOCH_PAYLOAD,
         prevHash: 'wrong-hash', // should be 'h1'
       })
 
@@ -577,6 +594,80 @@ describe('CryptoKeysService — Sigchain', () => {
       })
       const svc = new CryptoKeysService(makeHeadDb([makeLink({ seqNo: 1, hash: 'h1' })]) as never)
       await expect(svc.appendSigchainLink(USER_PUBKEY, body)).resolves.toMatchObject({ seqNo: 2 })
+    })
+  })
+
+  describe('appendSigchainLink — device key binding (#2496)', () => {
+    function headDb(head: MockLink[]) {
+      return withTx({
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(head) }),
+            }),
+          }),
+        }),
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([makeLink({ seqNo: 1, hash: 'x' })]),
+          }),
+        }),
+      })
+    }
+    const XWING = 'ee'.repeat(1216)
+    const POP = 'ff'.repeat(64)
+
+    beforeEach(() => mockClaimDeviceKeys.mockReset().mockResolvedValue(undefined))
+
+    it('claims the genesis device\'s signing and X25519 keys for the user', async () => {
+      const body = makeLinkBody({ seqNo: 1, linkType: 'genesis', payload: GENESIS_PAYLOAD, prevHash: null })
+      await new CryptoKeysService(headDb([]) as never).appendSigchainLink(USER_PUBKEY, body)
+      expect(mockClaimDeviceKeys).toHaveBeenCalledTimes(1)
+      const [, user, claimed] = mockClaimDeviceKeys.mock.calls[0]
+      expect(user).toBe(USER_PUBKEY)
+      expect(claimed).toEqual([
+        { key: SIGNER_PUBKEY, kind: 'signing' },
+        { key: SIGNER_PUBKEY, kind: 'signing' },
+        { key: 'bb'.repeat(32), kind: 'encryption' },
+      ])
+    })
+
+    it('refuses a key another user holds with 409 key_reused, writing nothing', async () => {
+      const { DeviceKeyReusedError } = await import('../../lib/device-key-claims')
+      mockClaimDeviceKeys.mockRejectedValueOnce(new DeviceKeyReusedError())
+      const db = headDb([])
+      const body = makeLinkBody({ seqNo: 1, linkType: 'genesis', payload: GENESIS_PAYLOAD, prevHash: null })
+      const err = await new CryptoKeysService(db as never).appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect(err).toBeInstanceOf(CryptoKeyError)
+      expect((err as CryptoKeyError).status).toBe(409)
+      expect((err as CryptoKeyError).code).toBe('key_reused')
+      expect(db.insert).not.toHaveBeenCalled()
+    })
+
+    it('refuses a device_add without the new device\'s X-Wing key and pop', async () => {
+      const body = makeLinkBody({ seqNo: 2, linkType: 'device_add', payload: DEVICE_ADD_PAYLOAD, prevHash: 'h1' })
+      const err = await new CryptoKeysService(headDb([makeLink({ seqNo: 1, hash: 'h1' })]) as never)
+        .appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect((err as CryptoKeyError).status).toBe(400)
+      expect((err as CryptoKeyError).message).toContain('invalid device_add payload')
+    })
+
+    it('refuses a device_kem not signed by the device it names', async () => {
+      const payload = { type: 'device_kem', devicePubkey: 'cc'.repeat(32), format: 2, encryptionPubkey: XWING, pop: POP }
+      const body = makeLinkBody({ seqNo: 2, linkType: 'device_kem', payload, prevHash: 'h1' })
+      const err = await new CryptoKeysService(headDb([makeLink({ seqNo: 1, hash: 'h1' })]) as never)
+        .appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect((err as CryptoKeyError).status).toBe(400)
+      expect((err as CryptoKeyError).message).toContain('signed by the device it names')
+    })
+
+    it('refuses a device_kem for any format but 2', async () => {
+      const payload = { type: 'device_kem', devicePubkey: SIGNER_PUBKEY, format: 1, encryptionPubkey: XWING, pop: POP }
+      const body = makeLinkBody({ seqNo: 2, linkType: 'device_kem', payload, prevHash: 'h1' })
+      const err = await new CryptoKeysService(headDb([makeLink({ seqNo: 1, hash: 'h1' })]) as never)
+        .appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect((err as CryptoKeyError).status).toBe(400)
+      expect((err as CryptoKeyError).message).toContain('invalid device_kem payload')
     })
   })
 

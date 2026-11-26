@@ -40,6 +40,7 @@ import type {
   DeviceRecord,
 } from '../types'
 import { ServiceError } from './service-error'
+import { claimDeviceKeys, DeviceKeyReusedError } from '../lib/device-key-claims'
 import type { SampleIdentity } from '../lib/sample-identities'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
@@ -1592,6 +1593,20 @@ export class IdentityService {
         .limit(1)
 
       if (!user) throw new ServiceError(404, 'User not found')
+
+      // #2496: a device key belongs to ONE user. Registering a key another user
+      // holds (in their sigchain or their own device row) is refused, never
+      // overwritten or silently accepted — otherwise a member could register
+      // another user's X25519 key and match envelopes sealed to its owner.
+      try {
+        await claimDeviceKeys(tx, pubkey, [
+          ...(data.ed25519Pubkey ? [{ key: data.ed25519Pubkey, kind: 'signing' as const }] : []),
+          ...(data.x25519Pubkey ? [{ key: data.x25519Pubkey, kind: 'encryption' as const }] : []),
+        ])
+      } catch (e) {
+        if (e instanceof DeviceKeyReusedError) throw new ServiceError(e.status, e.message)
+        throw e
+      }
 
       const now = new Date()
       const allDevices = await tx

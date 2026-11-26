@@ -19,7 +19,7 @@ import '../../db/pg-array-patch'
 
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
@@ -49,7 +49,15 @@ function freshPubkey(): string {
   return `${(++pubkeyCounter).toString(16).padStart(2, '0')}`.repeat(32)
 }
 
-const HEX64 = 'ab'.repeat(32)
+/**
+ * This test's device key. A device key belongs to ONE user (#2496), so each
+ * test registers its own: a constant shared by every test's fresh user would
+ * be another user's key from the second test on.
+ */
+let HEX64 = ''
+beforeEach(() => {
+  HEX64 = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('')
+})
 
 beforeAll(async () => {
   const admin = postgres(DATABASE_URL, { max: 1 })

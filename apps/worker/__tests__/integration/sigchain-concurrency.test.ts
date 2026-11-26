@@ -85,6 +85,14 @@ const DDL = `
   CREATE UNIQUE INDEX sigchain_links_user_seq_idx
     ON ${TEST_SCHEMA}.sigchain_links (user_pubkey, seq_no);
 
+  -- Every append claims the device keys its link names (#2496).
+  CREATE TABLE ${TEST_SCHEMA}.device_key_claims (
+    key         TEXT PRIMARY KEY,
+    user_pubkey TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
   -- IdentityService.revokeDevice touches these in the same transaction as
   -- its sigchain append, so the revoke-vs-append race test needs them.
   CREATE TABLE ${TEST_SCHEMA}.devices (
@@ -180,9 +188,19 @@ function genesisPayload(deviceId = 'dev-1'): Record<string, unknown> {
   return { type: 'user_init', deviceId, devicePubkey: USER_PUBKEY, deviceEncryptionPubkey: 'bb'.repeat(32) }
 }
 
-/** A device_add payload authorising another device. */
+/**
+ * A device_add payload authorising another device. Only ever inserted as a stored
+ * row (`insertStoredLink`): appending a device_add is verified with the whole
+ * chain by the crate (pop and all, #2496), which this vitest tier's FFI mock does
+ * not imitate — that path is integration-bun/device-key-binding.test.ts.
+ */
 function deviceAddPayload(deviceId: string): Record<string, unknown> {
   return { type: 'device_add', deviceId, devicePubkey: 'cc'.repeat(32), deviceEncryptionPubkey: 'dd'.repeat(32) }
+}
+
+/** A rival writer's link at the chain head: any type the generic route appends without the crate. */
+function rivalPayload(tag: string): Record<string, unknown> {
+  return { type: 'key_rotate', tag }
 }
 
 /**
@@ -208,8 +226,18 @@ function buildLink(
     payload,
   )
   const signature = bytesToHex(ed25519Sign(identitySeed, hexToBytes(hash)))
-  const linkType: SigchainLinkType = payload.type === 'user_init' ? 'genesis' : 'device_add'
+  const linkType = (payload.type === 'user_init' ? 'genesis' : payload.type) as SigchainLinkType
   return { seqNo, linkType, payload, signature, prevHash, hash, signerDeviceId, signerPubkey, timestamp }
+}
+
+/** Store a link as a row, as a chain the server already holds would have it. */
+async function insertStoredLink(link: LinkInput): Promise<{ hash: string }> {
+  await testSql`
+    INSERT INTO sigchain_links (id, user_pubkey, seq_no, link_type, payload, signature, prev_hash, hash, signer_device_id, signer_pubkey, "timestamp")
+    VALUES (${crypto.randomUUID()}, ${USER_PUBKEY}, ${link.seqNo}, ${link.linkType}, ${JSON.stringify(link.payload)}::jsonb,
+            ${link.signature}, ${link.prevHash ?? ''}, ${link.hash}, ${link.signerDeviceId}, ${link.signerPubkey}, ${link.timestamp})
+  `
+  return { hash: link.hash }
 }
 
 beforeAll(async () => {
@@ -238,7 +266,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await testSql`TRUNCATE TABLE sigchain_links, puk_envelopes`
+  await testSql`TRUNCATE TABLE sigchain_links, puk_envelopes, device_key_claims`
 })
 
 describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)', () => {
@@ -252,7 +280,7 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
     // observed head (seqNo=2, prevHash=genesis.hash) — exactly what two
     // devices racing to add themselves would do.
     const attempts = Array.from({ length: CONCURRENCY }, (_, i) =>
-      buildLink(2, genesisLink.hash, deviceAddPayload(`new-device-${i}`)),
+      buildLink(2, genesisLink.hash, rivalPayload(`new-device-${i}`)),
     )
 
     const results = await Promise.allSettled(
@@ -296,7 +324,7 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
     for (let round = 0; round < 5; round++) {
       const nextSeqNo = round + 2
       const attempts = Array.from({ length: 4 }, (_, i) =>
-        buildLink(nextSeqNo, head.hash, deviceAddPayload(`round-${round}-writer-${i}`)),
+        buildLink(nextSeqNo, head.hash, rivalPayload(`round-${round}-writer-${i}`)),
       )
       const results = await Promise.allSettled(
         attempts.map((link) => service.appendSigchainLink(USER_PUBKEY, link)),
@@ -359,7 +387,7 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
       // Two competing appends — other devices racing to join at the same
       // seqNo — so each round has three concurrent writers at the head.
       const addLinks = [0, 1].map((i) =>
-        buildLink(nextSeqNo, prevHash, deviceAddPayload(`dev-r${round}-${i}`)),
+        buildLink(nextSeqNo, prevHash, rivalPayload(`dev-r${round}-${i}`)),
       )
 
       const [revokeResult, ...appendResults] = await Promise.allSettled([
@@ -414,7 +442,7 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
         })
       } else {
         expect(deviceRow).toBeDefined()
-        expect(persisted[persisted.length - 1].linkType).toBe('device_add')
+        expect(persisted[persisted.length - 1].linkType).toBe('key_rotate')
       }
     }
   })
@@ -425,7 +453,7 @@ describe('revoking a device removes its PUK envelopes and its authorisation (#10
 
   it('deletes the revoked device\'s envelopes and refuses new ones, though the revoke link names the registry id', async () => {
     const genesis = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload('dev-1')))
-    const added = await service.appendSigchainLink(USER_PUBKEY, buildLink(2, genesis.hash, deviceAddPayload('sig-dev-2')))
+    const added = await insertStoredLink(buildLink(2, genesis.hash, deviceAddPayload('sig-dev-2')))
     const device2Pubkey = 'cc'.repeat(32) // deviceAddPayload's devicePubkey
 
     // The push-registry row for the device being revoked — a DIFFERENT id from
@@ -468,7 +496,7 @@ describe('revoking a device removes its PUK envelopes and its authorisation (#10
 
   it('keeps the envelopes when the revoke link is rejected (transaction rolls back)', async () => {
     const genesis = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload('dev-1')))
-    await service.appendSigchainLink(USER_PUBKEY, buildLink(2, genesis.hash, deviceAddPayload('sig-dev-2')))
+    await insertStoredLink(buildLink(2, genesis.hash, deviceAddPayload('sig-dev-2')))
     const device2Pubkey = 'cc'.repeat(32)
     await testSql`
       INSERT INTO devices (id, pubkey, platform, ed25519_pubkey)
