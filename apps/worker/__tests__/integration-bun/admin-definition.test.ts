@@ -121,7 +121,7 @@ async function refusal(fn: () => Promise<unknown>): Promise<ServiceError> {
 }
 
 /** Only the sealing target varies; the guard sees `pubkey`s, never ciphertext. */
-const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(32) }))
+const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }))
 
 /** `escrow: null` models a deployment with no ADMIN_DECRYPTION_PUBKEY. */
 const guard = (hubId: string | undefined, envelopes: ReturnType<typeof sealedTo>, escrow: string | null = ESCROW) =>
@@ -356,7 +356,7 @@ describe('POST /api/hubs/:hubId/notes, end to end', () => {
       body: JSON.stringify({
         conversationId: f.conversationId,
         encryptedContent: 'ciphertext',
-        authorEnvelope: { enc: 'b'.repeat(64), ct: 'c'.repeat(32) },
+        authorEnvelope: { enc: 'b'.repeat(64), ct: 'c'.repeat(96) },
         adminEnvelopes,
       }),
     }, env)

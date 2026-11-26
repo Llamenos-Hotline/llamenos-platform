@@ -167,7 +167,7 @@ beforeAll(async () => {
     conversationId: ids.waitingSms,
     direction: 'inbound',
     encryptedContent: 'cafe',
-    readerEnvelopes: [{ pubkey: 'ab'.repeat(32), enc: 'cd'.repeat(32), ct: 'ef'.repeat(24) }],
+    readerEnvelopes: [{ pubkey: 'ab'.repeat(32), enc: 'cd'.repeat(32), ct: 'ef'.repeat(48) }],
     createdAt: new Date(Date.UTC(2026, 10, 1, 12, i)),
   })))
 })

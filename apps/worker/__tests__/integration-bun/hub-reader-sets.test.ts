@@ -107,7 +107,7 @@ async function refusal(fn: () => Promise<unknown> | unknown): Promise<ServiceErr
 /** The reader set as plain strings, so fixtures' unbranded keys compare against it. */
 const readersOf = async (hubId: string, purpose: ReaderPurpose): Promise<string[]> => identity.readersFor(hubId, purpose)
 
-const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(32) }))
+const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }))
 
 afterAll(async () => {
   if (createdHubs.length > 0) await db.delete(hubs).where(inArray(hubs.id, createdHubs))
