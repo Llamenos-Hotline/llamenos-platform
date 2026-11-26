@@ -37,6 +37,9 @@
  *   bun scripts/worktree-db.ts sweep [--drop] [--quiet] [--grace-hours N] [name...]
  *   bun scripts/worktree-db.ts resolve             machine-readable; used by the bash lib
  *   DATABASE_URL=... bun scripts/worktree-db.ts check-url   refuse a URL this worktree may not use
+ *   bun scripts/worktree-db.ts secure-shared [--quiet]       make the shared database read-only to `llamenos`
+ *   bun scripts/worktree-db.ts secure-shared --rotate-owner-password   primary only: new owner secret
+ *   bun scripts/worktree-db.ts check-boundary              prove it, from the database's side
  *
  * WHO MAY USE THE SHARED DATABASE (#2659). Two fleet workers reset the shared
  * `llamenos` database in one night, both told not to: a prohibition in a brief
@@ -53,15 +56,43 @@
  *                         that: the shared database is not reachable through any path this
  *                         repo provides, and `check-url` refuses an explicit URL naming it
  *
- * This cannot stop a process that types the shared connection string into `psql`
- * itself — Postgres sees one role and one password. It makes every sanctioned
- * path (dev server, BDD runner, migrations, the integration wrapper) land on the
- * worker's own database, so reaching the shared one takes a deliberate bypass
- * rather than an unset variable.
+ * That is a convention: it binds only the paths that honour it. The DATABASE
+ * enforces the boundary underneath it (#2705), with two roles on the dev cluster:
+ *
+ *   llamenos        the well-known role — PG_PASSWORD, the compose default, every
+ *                   documented and hand-typed URL. NOSUPERUSER, CREATEDB, member of
+ *                   pg_read_all_data and pg_signal_backend (so `DROP DATABASE ... WITH
+ *                   (FORCE)` on its own databases can end an autovacuum worker; it
+ *                   still cannot signal a superuser's session). Owns every worktree database and template, so
+ *                   it has full rights there; on the shared `llamenos` database it
+ *                   can only READ. A write, TRUNCATE, DDL, migration or DROP from it
+ *                   fails with "permission denied" / "must be owner" — whoever typed
+ *                   the URL, through whatever tool.
+ *   llamenos_owner  the cluster's bootstrap superuser, owner of `llamenos`. Its
+ *                   password is a random secret in the PRIMARY checkout's git dir
+ *                   (ownerSecretPath), never in .env (which every worktree symlinks)
+ *                   and never in any default. Only the primary checkout's resolver
+ *                   hands out a URL carrying it.
+ *
+ * `secure-shared` converts a cluster into that shape (idempotent; the launchers
+ * run it) and `check-boundary` proves it from the database's side. What it does
+ * NOT stop: a process that reads the primary's secret file, or `docker exec`s into
+ * the container (local socket connections there are trusted). Those are deliberate
+ * escalations, not a hand-typed URL or a bootstrap's default.
  */
 import { SQL } from 'bun'
-import { createHash } from 'node:crypto'
-import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 
 // ── Naming ───────────────────────────────────────────────────────────────────
@@ -450,18 +481,39 @@ export function isSharedDatabaseUrl(url: string): boolean {
   return isProtected(name)
 }
 
-export type SharedAccess = { ok: true } | { ok: false; reason: string }
+export type SharedAccess = { ok: true; note?: string } | { ok: false; reason: string }
+
+/** The role a URL authenticates as, or null when it names none. */
+function urlUser(url: string): string | null {
+  try {
+    const u = new URL(url)
+    return u.username ? decodeURIComponent(u.username) : null
+  } catch {
+    return null
+  }
+}
 
 /**
  * May a process in this worktree use `url`? Anything that is not the shared
  * dev database is fine. The message never contains the URL (it has a password).
+ *
+ * An allowed URL to the shared database that authenticates as anything but the
+ * owner role carries a `note`: on a secured dev cluster that connection is
+ * read-only (#2705), and a writer should hear so before its first INSERT fails.
  */
 export function checkSharedAccess(
   url: string,
   policy: WorktreePolicy,
   allowShared: string | undefined,
 ): SharedAccess {
-  if (!isSharedDatabaseUrl(url) || !policy.linked) return { ok: true }
+  if (!isSharedDatabaseUrl(url)) return { ok: true }
+  const readOnlyNote =
+    urlUser(url) === OWNER_ROLE
+      ? undefined
+      : `this URL reaches the SHARED dev database as role "${urlUser(url) ?? PG_USER}", which is READ-ONLY there ` +
+        `on a secured dev cluster (#2705): reads work; writes, DDL, migrations, resets and drops are refused by ` +
+        `the database.${policy.linked ? '' : ` The primary checkout's own URL uses "${OWNER_ROLE}": unset DATABASE_URL to get it.`}`
+  if (!policy.linked) return readOnlyNote ? { ok: true, note: readOnlyNote } : { ok: true }
   if (policy.fleet) {
     return {
       ok: false,
@@ -471,14 +523,24 @@ export function checkSharedAccess(
         'provision llamenos_wt_* for you) or run `bun scripts/worktree-db.ts ensure`.',
     }
   }
-  if (allowShared === '1') return { ok: true }
+  if (allowShared === '1') return readOnlyNote ? { ok: true, note: readOnlyNote } : { ok: true }
   return {
     ok: false,
     reason:
       'this is a linked worktree and the database is the SHARED dev database, which every other worktree and the ' +
       `operator also use. Unset DATABASE_URL to get this worktree's own database, or set ${ALLOW_SHARED_ENV}=1 to ` +
-      'use the shared one on purpose.',
+      'use the shared one on purpose — READ-ONLY: only the primary checkout may write it (#2705).',
   }
+}
+
+/**
+ * The role a URL to the SHARED database authenticates as, for a worktree that
+ * resolved to it. Only the primary checkout, and only once it holds the owner
+ * secret, gets the owner; everything else gets the well-known role, which a
+ * secured cluster makes read-only there. Pure — the table is a test.
+ */
+export function sharedDatabaseRole(policy: WorktreePolicy, ownerSecretPresent: boolean): string {
+  return !policy.linked && ownerSecretPresent ? OWNER_ROLE : PG_USER
 }
 
 // ── This worktree ────────────────────────────────────────────────────────────
@@ -491,6 +553,8 @@ interface Worktree {
   markerPath: string
   dbName: string
   policy: WorktreePolicy
+  /** Where the PRIMARY checkout keeps the owner role's password (see ownerSecretPath). */
+  ownerSecretPath: string
 }
 
 function git(root: string, args: string[]): string {
@@ -507,7 +571,18 @@ function currentWorktree(): Worktree {
   const branchResult = Bun.spawnSync(['git', '-C', root, 'symbolic-ref', '--short', '-q', 'HEAD'])
   const branch = branchResult.exitCode === 0 ? branchResult.stdout.toString().trim() || null : null
   const policy = worktreePolicy({ linked: gitDir !== commonDir, branch, dirName: basename(root) })
-  return { root, commonDir, markerPath, dbName: deriveDatabaseName(root), policy }
+  return { root, commonDir, markerPath, dbName: deriveDatabaseName(root), policy, ownerSecretPath: ownerSecretPath(commonDir) }
+}
+
+/**
+ * The owner role's password lives in the primary checkout's git dir — the common
+ * dir, which for the primary IS its git dir — so it is never tracked, never in the
+ * `.env` every worktree symlinks, and no sanctioned path in a linked worktree reads
+ * it. Linked worktrees compute the same path only to WRITE it, when they are the
+ * first to secure a fresh cluster (secureShared), so the primary inherits it.
+ */
+export function ownerSecretPath(commonDir: string): string {
+  return join(commonDir, OWNER_SECRET_FILE)
 }
 
 /** This worktree's database choice: its marker, overridden by its policy. */
@@ -573,12 +648,22 @@ function sqlState(err: unknown): string | undefined {
   return typeof e?.code === 'string' ? e.code : undefined
 }
 
-async function connect(root: string, database: string): Promise<SQL> {
+interface Credentials {
+  user: string
+  password: string
+}
+
+/** The well-known role, with PG_PASSWORD — what every worktree, and every hand-typed URL, connects as. */
+function wellKnown(root: string): Credentials {
+  return { user: PG_USER, password: pgPassword(root) }
+}
+
+async function connect(root: string, database: string, creds: Credentials = wellKnown(root)): Promise<SQL> {
   const sql = new SQL({
     hostname: PG_HOST,
     port: PG_PORT,
-    username: PG_USER,
-    password: pgPassword(root),
+    username: creds.user,
+    password: creds.password,
     database,
     max: 1,
     connectionTimeout: 10,
@@ -587,7 +672,7 @@ async function connect(root: string, database: string): Promise<SQL> {
     await sql.unsafe('SELECT 1')
   } catch (err) {
     await sql.close().catch(() => {})
-    if (sqlState(err) === '28P01') {
+    if (sqlState(err) === '28P01' && creds.user === PG_USER) {
       throw new Unreachable(
         `password authentication failed for role "${PG_USER}" at ${PG_HOST}:${PG_PORT}. ` +
           'PG_PASSWORD (environment, else .env, else the compose default) is not the password the dev ' +
@@ -595,6 +680,13 @@ async function connect(root: string, database: string): Promise<SQL> {
           'volume is first created. Set PG_PASSWORD in .env to the password that volume was created ' +
           "with (scripts/dev-bun.sh loads .env over the environment), or change the role's password " +
           `inside the container (ALTER ROLE ${PG_USER} PASSWORD ...).`,
+      )
+    }
+    if (sqlState(err) === '28P01') {
+      throw new Error(
+        `password authentication failed for role "${creds.user}" at ${PG_HOST}:${PG_PORT}: the secret in ` +
+          `${OWNER_SECRET_FILE} is not that role's password. From the primary checkout: ` +
+          'bun scripts/worktree-db.ts secure-shared --rotate-owner-password',
       )
     }
     throw new Unreachable(
@@ -847,6 +939,475 @@ async function ensureTemplate(sql: SQL, root: string, hash: string): Promise<str
   return name
 }
 
+// ── The shared database's boundary (#2705) ───────────────────────────────────
+
+/** Owns the shared database: the dev cluster's bootstrap superuser. Password: ownerSecretPath(). */
+export const OWNER_ROLE = 'llamenos_owner'
+/** File name, in the primary checkout's git dir, of the owner role's password. */
+export const OWNER_SECRET_FILE = 'llamenos-dev-db-owner'
+/**
+ * The `cluster_name` the dev Postgres runs with (deploy/docker/docker-compose.dev.yml).
+ * secure-shared only ever converts a cluster that names itself this: CI's service
+ * containers, the containerised stacks and a deployed database reached through a
+ * tunnel all listen on 5432 too, and each keeps its single role.
+ */
+export const DEV_CLUSTER_NAME = 'llamenos-dev'
+/** The signal-notifier sidecar's own database on the dev cluster (it used to write the shared one). */
+export const SIGNAL_NOTIFIER_DB = 'signal_notifier'
+/** Lives only for the length of a conversion: the bootstrap role cannot rename itself. */
+const CONVERSION_ROLE = 'llamenos_secure_tmp'
+const GUARD_SCHEMA = 'llamenos_dev_guard'
+const GUARD_TRIGGER = 'llamenos_dev_guard_login'
+/** Databases that stay the owner's. Every other database on the dev cluster belongs to the well-known role. */
+const OWNER_KEEPS = new Set([SHARED_DB, 'postgres', 'template0', 'template1'])
+/** check-boundary: the database does not enforce the boundary. */
+const EXIT_NOT_IN_FORCE = 5
+
+interface ClusterFacts {
+  cluster: string
+  /** The well-known role still has every right: the cluster has never been secured. */
+  wellKnownIsSuperuser: boolean
+  ownerExists: boolean
+  wellKnownReads: boolean
+}
+
+async function clusterFacts(sql: SQL): Promise<ClusterFacts> {
+  const [row] = (await sql.unsafe(
+    `SELECT current_setting('cluster_name') AS cluster,
+            coalesce((SELECT rolsuper FROM pg_roles WHERE rolname = $1), false) AS "wellKnownIsSuperuser",
+            EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $2) AS "ownerExists",
+            pg_has_role($1, 'pg_read_all_data', 'MEMBER') AS "wellKnownReads"`,
+    [PG_USER, OWNER_ROLE],
+  )) as ClusterFacts[]
+  return row
+}
+
+function readSecret(path: string): string | null {
+  try {
+    const secret = readFileSync(path, 'utf8').trim()
+    return secret === '' ? null : secret
+  } catch {
+    return null
+  }
+}
+
+/** A fresh random secret at `path`, mode 0600, written whole or not at all. */
+function writeSecret(path: string): string {
+  const secret = randomBytes(32).toString('hex')
+  const tmp = `${path}.${process.pid}.tmp`
+  writeFileSync(tmp, `${secret}\n`, { mode: 0o600 })
+  renameSync(tmp, path)
+  return secret
+}
+
+/**
+ * Hands every object a superuser-owned database holds to the well-known role.
+ * REASSIGN OWNED cannot do it: the old owner is the bootstrap superuser, whose
+ * system objects REASSIGN refuses to move. Members of an extension, and the
+ * sequences, indexes and row types that follow their table, move with it.
+ */
+const HANDOVER_SQL = `
+DO $handover$
+DECLARE
+  r record;
+  from_role oid := (SELECT oid FROM pg_roles WHERE rolname = '${OWNER_ROLE}');
+BEGIN
+  FOR r IN SELECT n.nspname FROM pg_namespace n
+           WHERE n.nspowner = from_role AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+  LOOP EXECUTE format('ALTER SCHEMA %I OWNER TO ${PG_USER}', r.nspname); END LOOP;
+  FOR r IN SELECT c.oid::regclass AS rel, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE c.relowner = from_role AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+             AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+             AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass
+                             AND d.objid = c.oid AND d.deptype IN ('a', 'i', 'e'))
+  LOOP
+    EXECUTE format(CASE r.relkind WHEN 'S' THEN 'ALTER SEQUENCE %s OWNER TO ${PG_USER}'
+                                  WHEN 'v' THEN 'ALTER VIEW %s OWNER TO ${PG_USER}'
+                                  WHEN 'm' THEN 'ALTER MATERIALIZED VIEW %s OWNER TO ${PG_USER}'
+                                  WHEN 'f' THEN 'ALTER FOREIGN TABLE %s OWNER TO ${PG_USER}'
+                                  ELSE 'ALTER TABLE %s OWNER TO ${PG_USER}' END, r.rel);
+  END LOOP;
+  FOR r IN SELECT t.oid::regtype AS typ FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+           WHERE t.typowner = from_role AND t.typtype IN ('b', 'c', 'd', 'e', 'm', 'r')
+             AND (t.typtype <> 'c' OR (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c')
+             AND t.typelem = 0 AND t.typcategory <> 'A'
+             AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+             AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_type'::regclass
+                             AND d.objid = t.oid AND d.deptype IN ('i', 'e'))
+  LOOP EXECUTE format('ALTER TYPE %s OWNER TO ${PG_USER}', r.typ); END LOOP;
+  FOR r IN SELECT p.oid::regprocedure AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE p.proowner = from_role AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+             AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass
+                             AND d.objid = p.oid AND d.deptype = 'e')
+  LOOP EXECUTE format('ALTER ROUTINE %s OWNER TO ${PG_USER}', r.fn); END LOOP;
+END
+$handover$`
+
+/**
+ * A NOTICE on every login to the shared database by a role that cannot write it,
+ * so the first thing a hand-typed `psql` prints says what the session may do and
+ * why — before a write fails with a bare "permission denied". (PostgreSQL 17 login
+ * event trigger; it only reads pg_roles, so it cannot fail a login.)
+ */
+const GUARD_SQL = `
+CREATE SCHEMA IF NOT EXISTS ${GUARD_SCHEMA};
+CREATE OR REPLACE FUNCTION ${GUARD_SCHEMA}.announce_read_only() RETURNS event_trigger
+LANGUAGE plpgsql AS $guard$
+BEGIN
+  IF NOT coalesce((SELECT rolsuper FROM pg_roles WHERE rolname = session_user), false) THEN
+    RAISE NOTICE 'connected to the SHARED dev database "%" as role "%", which is READ-ONLY here', current_database(), session_user
+      USING DETAIL = 'Writes, DDL, migrations, resets and drops are refused by the database (#2705). Only the primary checkout may change it.',
+            HINT = 'Use your worktree''s own database: unset DATABASE_URL (the dev server and test runners provision llamenos_wt_* for you).';
+  END IF;
+END
+$guard$;
+CREATE EVENT TRIGGER ${GUARD_TRIGGER} ON login EXECUTE FUNCTION ${GUARD_SCHEMA}.announce_read_only();`
+
+const ROLE_COMMENT =
+  'Well-known dev role (#2705): owns every worktree database; READ-ONLY on the shared llamenos database, ' +
+  'which only llamenos_owner (the primary checkout) may change.'
+
+/**
+ * Make the dev cluster enforce the boundary: the well-known role read-only on the
+ * shared database, the owner role holding it. Idempotent, and a no-op on any
+ * cluster that is not the dev one. Runs under the instance lock, so it never races
+ * an ensure or a sweep.
+ *
+ *   - Never secured (the well-known role is still the bootstrap superuser): any
+ *     checkout converts it — doing so only REMOVES rights from a credential every
+ *     worktree already holds. The owner secret is written to the primary checkout's
+ *     git dir first, so a conversion can never leave an owner nobody can log in as.
+ *   - Secured, primary checkout: heals drift with the owner credential (databases
+ *     still owned by the owner, the login notice, the well-known role's grants).
+ *   - Secured, linked worktree: never touches the owner credential; reports drift.
+ */
+async function secureShared(opts: { quiet: boolean }): Promise<void> {
+  let wt: Worktree
+  try {
+    wt = currentWorktree()
+  } catch (err) {
+    log(`cannot determine the worktree (${errorMessage(err)}) — nothing to secure from here`)
+    return
+  }
+  const say = (message: string) => {
+    if (!opts.quiet) log(message)
+  }
+  const sql = await connect(wt.root, 'postgres')
+  try {
+    await withInstanceLock(sql, async () => {
+      const facts = await clusterFacts(sql)
+      if (facts.cluster !== DEV_CLUSTER_NAME) {
+        say(`not the dev cluster (cluster_name ${JSON.stringify(facts.cluster)}, not "${DEV_CLUSTER_NAME}") — nothing to secure`)
+        return
+      }
+      if (facts.wellKnownIsSuperuser) {
+        const owner = await convert(wt, sql, facts)
+        await maintain(wt, owner, { quiet: false })
+        return
+      }
+      if (wt.policy.linked) {
+        await reportDrift(sql, facts)
+        say(`the shared "${SHARED_DB}" database is read-only to "${PG_USER}" (#2705)`)
+        return
+      }
+      const secret = readSecret(wt.ownerSecretPath)
+      if (!secret) {
+        log(
+          `WARNING: the dev cluster is secured (#2705) but this primary checkout holds no "${OWNER_ROLE}" ` +
+            `credential (${wt.ownerSecretPath}), so it is READ-ONLY on the shared "${SHARED_DB}" database too — ` +
+            `writes, resets and migrations there will be refused. Issue a new one: ` +
+            'bun scripts/worktree-db.ts secure-shared --rotate-owner-password',
+        )
+        return
+      }
+      await maintain(wt, { user: OWNER_ROLE, password: secret }, opts)
+    })
+  } finally {
+    await sql.close()
+  }
+}
+
+async function convert(wt: Worktree, sql: SQL, facts: ClusterFacts): Promise<Credentials> {
+  if (facts.ownerExists) {
+    throw new Error(
+      `"${PG_USER}" is a superuser but "${OWNER_ROLE}" also exists — not a state this tool creates (its conversion ` +
+        'is one transaction). Refusing to guess which role should own what; inspect it with ' +
+        `docker compose -f deploy/docker/docker-compose.dev.yml exec postgres psql -U ${OWNER_ROLE} -d postgres`,
+    )
+  }
+  log(`securing the dev cluster (#2705): "${PG_USER}" becomes read-only on the shared "${SHARED_DB}" database`)
+  // A secret already on disk is kept: a volume recreated with `down -v` gets the same owner password.
+  const secret = readSecret(wt.ownerSecretPath) ?? writeSecret(wt.ownerSecretPath)
+  const [{ pid: ourPid }] = (await sql.unsafe('SELECT pg_backend_pid() AS pid')) as { pid: number }[]
+
+  const tmpPassword = randomBytes(24).toString('hex')
+  await sql.unsafe(`DROP ROLE IF EXISTS ${ident(CONVERSION_ROLE)}`)
+  await sql.unsafe(`CREATE ROLE ${ident(CONVERSION_ROLE)} SUPERUSER LOGIN PASSWORD ${literal(tmpPassword)}`)
+  const tmp = await connect(wt.root, 'postgres', { user: CONVERSION_ROLE, password: tmpPassword })
+  try {
+    // One transaction: either the old role is the owner AND the new well-known role
+    // exists, or nothing changed. Sessions already open keep working throughout.
+    await tmp.begin(async (tx) => {
+      await tx.unsafe(`ALTER ROLE ${ident(PG_USER)} RENAME TO ${ident(OWNER_ROLE)}`)
+      await tx.unsafe(`ALTER ROLE ${ident(OWNER_ROLE)} PASSWORD ${literal(secret)}`)
+      await tx.unsafe(
+        `CREATE ROLE ${ident(PG_USER)} LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION NOBYPASSRLS ` +
+          `PASSWORD ${literal(pgPassword(wt.root))}`,
+      )
+      await tx.unsafe(`GRANT pg_read_all_data, pg_signal_backend TO ${ident(PG_USER)}`)
+      await tx.unsafe(`COMMENT ON ROLE ${ident(PG_USER)} IS ${literal(ROLE_COMMENT)}`)
+    })
+  } finally {
+    await tmp.close()
+  }
+  const owner: Credentials = { user: OWNER_ROLE, password: secret }
+  const admin = await connect(wt.root, 'postgres', owner)
+  try {
+    await admin.unsafe(`DROP ROLE ${ident(CONVERSION_ROLE)}`)
+    // Every other session opened before the rename was opened with the WELL-KNOWN
+    // credential and is now an owner session: a superuser connection held by a
+    // worktree's server. Ending them is what makes the boundary immediate rather
+    // than "once everything reconnects"; their pools reconnect as the new role.
+    const stale = (await admin.unsafe(
+      `SELECT pid FROM pg_stat_activity
+       WHERE usesysid = (SELECT oid FROM pg_roles WHERE rolname = $1) AND pid NOT IN (pg_backend_pid(), $2)`,
+      [OWNER_ROLE, ourPid],
+    )) as { pid: number }[]
+    for (const s of stale) await admin.unsafe('SELECT pg_terminate_backend($1)', [s.pid])
+    if (stale.length) log(`ended ${stale.length} session(s) opened with the old credential; they reconnect as "${PG_USER}"`)
+  } finally {
+    await admin.close()
+  }
+  log(`"${OWNER_ROLE}" now owns "${SHARED_DB}"; its password is in ${wt.ownerSecretPath} (primary checkout only)`)
+  return owner
+}
+
+/** Owner-credential upkeep: idempotent, and silent when there is nothing to do. */
+async function maintain(wt: Worktree, owner: Credentials, opts: { quiet: boolean }): Promise<void> {
+  const say = (message: string) => {
+    if (!opts.quiet) log(message)
+  }
+  const admin = await connect(wt.root, 'postgres', owner)
+  try {
+    const [role] = (await admin.unsafe(
+      `SELECT rolsuper, rolcreatedb, pg_has_role($1, 'pg_read_all_data', 'MEMBER') AS reads,
+              pg_has_role($1, 'pg_signal_backend', 'MEMBER') AS signals
+       FROM pg_roles WHERE rolname = $1`,
+      [PG_USER],
+    )) as { rolsuper: boolean; rolcreatedb: boolean; reads: boolean; signals: boolean }[]
+    if (!role) throw new Error(`role "${PG_USER}" does not exist on the dev cluster`)
+    if (role.rolsuper || !role.rolcreatedb || !role.reads || !role.signals) {
+      await admin.unsafe(`ALTER ROLE ${ident(PG_USER)} NOSUPERUSER CREATEDB`)
+      await admin.unsafe(`GRANT pg_read_all_data, pg_signal_backend TO ${ident(PG_USER)}`)
+      log(`restored "${PG_USER}": NOSUPERUSER CREATEDB, member of pg_read_all_data and pg_signal_backend`)
+    }
+
+    const dbs = (await admin.unsafe(
+      `SELECT datname, datistemplate, datallowconn, pg_get_userbyid(datdba) AS owner FROM pg_database ORDER BY datname`,
+    )) as { datname: string; datistemplate: boolean; datallowconn: boolean; owner: string }[]
+    for (const db of dbs) {
+      if (OWNER_KEEPS.has(db.datname) || db.owner === PG_USER) continue
+      if (db.datname.startsWith(TEMPLATE_PREFIX) || db.datname.startsWith(BUILD_PREFIX)) {
+        // Its objects belong to the owner, so every clone would too. Templates are a
+        // content-addressed cache: the next ensure rebuilds this one as the well-known role.
+        await admin.unsafe(`ALTER DATABASE ${ident(db.datname)} WITH IS_TEMPLATE false`)
+        await withoutSessions(admin, db.datname, `drop ${db.datname}`, () =>
+          admin.unsafe(`DROP DATABASE ${ident(db.datname)}`).then(() => {}),
+        )
+        log(`dropped template ${db.datname} (owned by "${db.owner}"); the next ensure rebuilds it`)
+        continue
+      }
+      if (db.datistemplate || !db.datallowconn) {
+        log(`WARNING: ${db.datname} is owned by "${db.owner}" but is a template or refuses connections — left alone`)
+        continue
+      }
+      try {
+        const inside = await connect(wt.root, db.datname, owner)
+        try {
+          await inside.unsafe(`SET lock_timeout = '10s'`)
+          await inside.unsafe(HANDOVER_SQL)
+        } finally {
+          await inside.close()
+        }
+        await admin.unsafe(`ALTER DATABASE ${ident(db.datname)} OWNER TO ${ident(PG_USER)}`)
+        log(`handed ${db.datname} and everything in it to "${PG_USER}" (was "${db.owner}")`)
+      } catch (err) {
+        log(`WARNING: could not hand ${db.datname} to "${PG_USER}": ${redact(errorMessage(err))} — re-run secure-shared`)
+      }
+    }
+    if (!dbs.some((d) => d.datname === SIGNAL_NOTIFIER_DB)) {
+      await admin.unsafe(`CREATE DATABASE ${ident(SIGNAL_NOTIFIER_DB)} OWNER ${ident(PG_USER)}`)
+      log(`created ${SIGNAL_NOTIFIER_DB} for the signal-notifier sidecar (it no longer writes the shared database)`)
+    }
+    if (!dbs.some((d) => d.datname === SHARED_DB)) {
+      say(`no "${SHARED_DB}" database yet — nothing to guard`)
+      return
+    }
+  } finally {
+    await admin.close()
+  }
+
+  const shared = await connect(wt.root, SHARED_DB, owner)
+  try {
+    const present = (await shared.unsafe('SELECT 1 FROM pg_event_trigger WHERE evtname = $1', [GUARD_TRIGGER])) as unknown[]
+    if (present.length === 0) {
+      await shared.unsafe(GUARD_SQL)
+      log(`installed the read-only login notice on "${SHARED_DB}"`)
+    }
+  } finally {
+    await shared.close()
+  }
+  say(
+    `the shared "${SHARED_DB}" database is read-only to "${PG_USER}"; ` +
+      (wt.policy.linked ? `only the primary checkout writes it, as "${OWNER_ROLE}"` : `this primary checkout writes it as "${OWNER_ROLE}"`),
+  )
+}
+
+/** Linked worktrees never hold the owner credential: say what only the primary can fix. */
+async function reportDrift(sql: SQL, facts: ClusterFacts): Promise<void> {
+  const held = (await sql.unsafe(
+    `SELECT datname FROM pg_database WHERE pg_get_userbyid(datdba) <> $1 ORDER BY datname`,
+    [PG_USER],
+  )) as { datname: string }[]
+  const names = held.map((d) => d.datname).filter((n) => !OWNER_KEEPS.has(n))
+  if (names.length || !facts.wellKnownReads) {
+    log(
+      `WARNING: the dev cluster needs upkeep only the primary checkout can do ` +
+        `(${names.length ? `owned by another role, so "${PG_USER}" cannot write them: ${names.join(', ')}` : `"${PG_USER}" lost pg_read_all_data`}). ` +
+        'From the primary checkout: bun scripts/worktree-db.ts secure-shared',
+    )
+  }
+}
+
+/**
+ * Primary only: a new owner secret, set through the container's local socket
+ * (the image trusts it), for a primary that lost its secret or never had it (the
+ * cluster was secured from another clone). Written to disk only once Postgres has
+ * accepted it.
+ */
+async function rotateOwnerPassword(): Promise<void> {
+  const wt = currentWorktree()
+  if (wt.policy.linked) {
+    log(`REFUSED: only the primary checkout holds the "${OWNER_ROLE}" credential`)
+    process.exit(EXIT_REFUSED)
+  }
+  const secret = randomBytes(32).toString('hex')
+  const compose = join(wt.root, 'deploy', 'docker', 'docker-compose.dev.yml')
+  const r = Bun.spawnSync(
+    ['docker', 'compose', '-p', 'llamenos-dev', '-f', compose, 'exec', '-T', 'postgres',
+      'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', OWNER_ROLE, '-d', 'postgres'],
+    { stdin: Buffer.from(`ALTER ROLE ${ident(OWNER_ROLE)} PASSWORD ${literal(secret)};\n`) },
+  )
+  if (r.exitCode !== 0) {
+    throw new Error(`could not set the "${OWNER_ROLE}" password in the dev Postgres container: ${r.stderr.toString().trim()}`)
+  }
+  const tmp = `${wt.ownerSecretPath}.${process.pid}.tmp`
+  writeFileSync(tmp, `${secret}\n`, { mode: 0o600 })
+  renameSync(tmp, wt.ownerSecretPath)
+  log(`new "${OWNER_ROLE}" password set and written to ${wt.ownerSecretPath}. Restart a running dev server to pick it up.`)
+}
+
+interface BoundaryCheck {
+  ok: boolean
+  what: string
+}
+
+/**
+ * Prove the boundary from the DATABASE's side, as the well-known role, with no
+ * wrapper in between — the path a hand-typed `psql` takes. Every probe that
+ * attempts a write runs inside a transaction that is rolled back and touches no
+ * row, so it is harmless even on a cluster where the boundary is missing.
+ */
+async function checkBoundary(): Promise<void> {
+  const root = realpathSync(join(import.meta.dir, '..'))
+  const checks: BoundaryCheck[] = []
+  const sql = await connect(root, 'postgres')
+  let facts: ClusterFacts
+  try {
+    facts = await clusterFacts(sql)
+    if (facts.cluster !== DEV_CLUSTER_NAME) {
+      console.log(`not the dev cluster (cluster_name ${JSON.stringify(facts.cluster)}) — no boundary is kept here`)
+      process.exit(EXIT_NOT_IN_FORCE)
+    }
+    const [db] = (await sql.unsafe(
+      `SELECT pg_get_userbyid(datdba) AS owner,
+              has_database_privilege($1, datname, 'CREATE') AS can_create,
+              pg_has_role($1, datdba, 'MEMBER') AS owner_member
+       FROM pg_database WHERE datname = $2`,
+      [PG_USER, SHARED_DB],
+    )) as { owner: string; can_create: boolean; owner_member: boolean }[]
+    if (!db) {
+      console.log(`no "${SHARED_DB}" database on the dev cluster — nothing to check`)
+      process.exit(EXIT_NOT_IN_FORCE)
+    }
+    checks.push({ ok: !facts.wellKnownIsSuperuser, what: `"${PG_USER}" is not a superuser` })
+    checks.push({
+      ok: !db.owner_member,
+      what: `"${PG_USER}" neither owns "${SHARED_DB}" nor is a member of its owner ("${db.owner}") — so DROP/ALTER DATABASE is refused`,
+    })
+    checks.push({ ok: !db.can_create, what: `"${PG_USER}" may not CREATE schemas in "${SHARED_DB}"` })
+  } finally {
+    await sql.close()
+  }
+
+  const shared = await connect(root, SHARED_DB)
+  try {
+    const [table] = (await shared.unsafe(
+      `SELECT format('%I.%I', schemaname, tablename) AS name FROM pg_tables
+       WHERE schemaname = 'public' ORDER BY tablename LIMIT 1`,
+    )) as { name: string }[]
+    if (table) {
+      const read = await shared.unsafe(`SELECT 1 FROM ${table.name} LIMIT 1`).then(
+        () => true,
+        () => false,
+      )
+      checks.push({ ok: read, what: `"${PG_USER}" can READ ${table.name}` })
+      checks.push(await refusedInRollback(shared, `DELETE FROM ${table.name} WHERE false`, `DELETE on ${table.name}`))
+    }
+    checks.push(await refusedInRollback(shared, 'CREATE TABLE public.llamenos_boundary_probe ()', 'CREATE TABLE in public'))
+  } finally {
+    await shared.close()
+  }
+
+  for (const c of checks) console.log(`  ${c.ok ? 'PASS' : 'FAIL'}  ${c.what}`)
+  if (checks.every((c) => c.ok)) {
+    console.log(`boundary in force: "${PG_USER}" is read-only on the shared "${SHARED_DB}" database`)
+    return
+  }
+  console.log('boundary NOT in force. Secure it: bun scripts/worktree-db.ts secure-shared')
+  process.exit(EXIT_NOT_IN_FORCE)
+}
+
+/**
+ * Two checkouts that start at once on a never-secured cluster: the second waits on
+ * the instance lock in a session the first's conversion then ends (it was opened
+ * with the old credential). Its retry finds the cluster secured.
+ */
+async function secureSharedRetrying(opts: { quiet: boolean }): Promise<void> {
+  try {
+    await secureShared(opts)
+  } catch (err) {
+    if (sqlState(err) !== '57P01') throw err
+    log('session ended by a concurrent conversion — retrying')
+    await secureShared(opts)
+  }
+}
+
+async function refusedInRollback(sql: SQL, statement: string, what: string): Promise<BoundaryCheck> {
+  let state: string | undefined
+  try {
+    await sql.begin(async (tx) => {
+      await tx.unsafe(statement)
+      throw new RollbackProbe()
+    })
+  } catch (err) {
+    state = err instanceof RollbackProbe ? 'allowed' : sqlState(err)
+  }
+  return { ok: state === '42501', what: `${what} is refused (${state === '42501' ? 'permission denied' : state ?? 'no error'})` }
+}
+
+class RollbackProbe extends Error {}
+
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 /**
@@ -953,25 +1514,30 @@ async function ensure(optIn: boolean): Promise<void> {
 
 /**
  * Machine-readable for scripts/lib/worktree-db.sh:
- * `<mode> <database> <user> <host> <port> <source>`. `source` is `marker`, `default`,
- * `policy` or `none`; anything but `marker` on an isolated worktree means the database
- * has not been provisioned for it yet, and the caller must run `ensure`.
+ * `<mode> <database> <user> <host> <port> <source>`. `user` is the owner role only
+ * for the primary checkout on the shared database, once it holds the owner secret
+ * (the shell then reads the password from that file); otherwise the well-known role.
+ * `source` is `marker`, `default`, `policy` or `none`; anything but `marker` on an
+ * isolated worktree means the database has not been provisioned for it yet, and the
+ * caller must run `ensure`.
  */
 function resolve(): void {
   let mode: Mode | 'unset' = 'unset'
   let source: ModeSource = 'none'
   let database = SHARED_DB
+  let user = PG_USER
   try {
     const wt = currentWorktree()
     const d = decide(wt)
     mode = d.mode
     source = d.source
     if (mode === 'isolated') database = wt.dbName
+    else user = sharedDatabaseRole(wt.policy, existsSync(wt.ownerSecretPath))
   } catch (err) {
     // Not inside a git worktree (e.g. an exported tarball): there is no marker to read.
     log(`cannot determine the worktree (${errorMessage(err)}) — treating it as not opted in`)
   }
-  console.log(`${mode} ${database} ${PG_USER} ${PG_HOST} ${PG_PORT} ${source}`)
+  console.log(`${mode} ${database} ${user} ${PG_HOST} ${PG_PORT} ${source}`)
 }
 
 /**
@@ -997,6 +1563,7 @@ function checkUrl(envName: string): void {
     log(`REFUSED: ${verdict.reason}`)
     process.exit(EXIT_REFUSED)
   }
+  if (verdict.note) log(`NOTE: ${verdict.note}`)
 }
 
 async function status(): Promise<void> {
@@ -1026,6 +1593,17 @@ async function status(): Promise<void> {
     const tpl = await findDb(sql, templateName(hash))
     console.log(
       `template  ${templateName(hash)}: ${tpl ? `present${tpl.datallowconn ? ' (NOT sealed — accepts connections)' : ', sealed'}` : 'not built yet'}`,
+    )
+    const facts = await clusterFacts(sql)
+    const owner = wt.policy.linked ? '' : `; owner credential ${existsSync(wt.ownerSecretPath) ? 'present' : 'ABSENT'} (${wt.ownerSecretPath})`
+    console.log(
+      `boundary  ${
+        facts.cluster !== DEV_CLUSTER_NAME
+          ? `not the dev cluster (cluster_name ${JSON.stringify(facts.cluster)})`
+          : facts.wellKnownIsSuperuser
+            ? `NOT in force — "${PG_USER}" is a superuser (bun scripts/worktree-db.ts secure-shared)`
+            : `"${PG_USER}" is read-only on "${SHARED_DB}" (prove it: bun scripts/worktree-db.ts check-boundary)`
+      }${owner}`,
     )
   } finally {
     await sql.close()
@@ -1190,6 +1768,9 @@ function usage(): never {
       `                                         drop databases of removed worktrees (default: dry run, ${DEFAULT_GRACE_HOURS}h grace)`,
       '  resolve                                machine-readable, for scripts/lib/worktree-db.sh',
       '  check-url [--env VAR]                  exit 4 if this worktree may not use the database in $VAR (default DATABASE_URL)',
+      '  secure-shared [--quiet]                make the shared database read-only to the well-known role (idempotent)',
+      '  secure-shared --rotate-owner-password  primary checkout only: issue a new owner credential',
+      '  check-boundary                         prove, as the well-known role, that the database enforces it (exit 5 if not)',
     ].join('\n'),
   )
   process.exit(2)
@@ -1213,6 +1794,11 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'status':
       return status()
+    case 'secure-shared':
+      if (flags.has('--rotate-owner-password')) return rotateOwnerPassword()
+      return secureSharedRetrying({ quiet: flags.has('--quiet') })
+    case 'check-boundary':
+      return checkBoundary()
     case 'ensure':
       return ensure(flags.has('--opt-in'))
     case 'use-isolated':

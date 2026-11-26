@@ -271,6 +271,18 @@ setup_worktree_database() {
     return 0
   fi
 
+  # Before anything else touches the instance: make the shared database read-only
+  # to the well-known role (#2705). Idempotent, and a no-op once done.
+  info "Checking the shared database's boundary..."
+  local src=0
+  bun scripts/worktree-db.ts secure-shared --quiet || src=$?
+  if [[ $src -eq 3 ]]; then
+    warn "Dev Postgres not usable (see above) — 'bun run dev:server' retries provisioning at start"
+    return 0
+  elif [[ $src -ne 0 ]]; then
+    warn "Could not secure the shared database (see above)"
+  fi
+
   info "Provisioning this worktree's PostgreSQL database..."
   local rc=0
   bun scripts/worktree-db.ts ensure --opt-in || rc=$?

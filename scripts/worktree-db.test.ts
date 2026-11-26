@@ -7,13 +7,17 @@
  *
  *   bun test scripts/worktree-db.test.ts
  */
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import {
+  OWNER_ROLE,
+  OWNER_SECRET_FILE,
   checkSharedAccess,
   classifyForSweep,
+  ownerSecretPath,
+  sharedDatabaseRole,
   decideMode,
   isSharedDatabaseUrl,
   worktreePolicy,
@@ -321,6 +325,20 @@ describe('checkSharedAccess', () => {
     expect(checkSharedAccess('postgresql://u:p@db.internal:5432/llamenos', FLEET, undefined).ok).toBe(true)
   })
 
+  // #2705: a URL that is ALLOWED onto the shared database is still read-only there
+  // unless it authenticates as the owner — and the caller hears so up front.
+  test('an allowed URL to the shared database says it is read-only unless it is the owner role', () => {
+    const primary = checkSharedAccess(SHARED_URL, PRIMARY, undefined)
+    expect(primary.ok && primary.note).toContain('READ-ONLY')
+    expect(primary.ok && primary.note).toContain(OWNER_ROLE)
+    const linked = checkSharedAccess(SHARED_URL, LINKED, '1')
+    expect(linked.ok && linked.note).toContain('READ-ONLY')
+    const owner = checkSharedAccess(`postgresql://${OWNER_ROLE}:s3cret@localhost:5432/llamenos`, PRIMARY, undefined)
+    expect(owner).toEqual({ ok: true })
+    expect(checkSharedAccess('postgresql://u:p@localhost:5432/llamenos_wt_a_0123456789', LINKED, undefined)).toEqual({ ok: true })
+    for (const v of [primary, linked]) expect(v.ok && v.note).not.toContain('s3cret')
+  })
+
   test('the refusal never repeats the connection string or its password', () => {
     for (const policy of [FLEET, LINKED]) {
       const v = checkSharedAccess(SHARED_URL, policy, undefined)
@@ -330,6 +348,24 @@ describe('checkSharedAccess', () => {
         expect(v.reason).not.toContain('postgresql://')
       }
     }
+  })
+})
+
+// #2705: which role the resolver hands out for the shared database.
+describe('sharedDatabaseRole', () => {
+  test('only the primary checkout, and only once it holds the owner secret, gets the owner role', () => {
+    expect(sharedDatabaseRole(PRIMARY, true)).toBe(OWNER_ROLE)
+    expect(sharedDatabaseRole(PRIMARY, false)).toBe('llamenos')
+    // A linked worktree sees the same common dir, so the file is "present" for it too.
+    for (const policy of [LINKED, FLEET]) {
+      expect(sharedDatabaseRole(policy, true)).toBe('llamenos')
+      expect(sharedDatabaseRole(policy, false)).toBe('llamenos')
+    }
+  })
+
+  test('the owner secret lives in the git common dir — never .env, which every worktree symlinks', () => {
+    expect(ownerSecretPath('/repo/.git')).toBe(`/repo/.git/${OWNER_SECRET_FILE}`)
+    expect(OWNER_SECRET_FILE).not.toContain('.env')
   })
 })
 
@@ -430,6 +466,57 @@ describe('a worker-shaped process cannot reach the shared database', () => {
     expect(sh(['bun', 'scripts/worktree-db.ts', 'check-url'], linked, { ...SHARED, LLAMENOS_ALLOW_SHARED_DB: '1' }).code).toBe(0)
     expect(sh(['bun', 'scripts/worktree-db.ts', 'check-url'], primary, SHARED).code).toBe(0)
     expect(sh(['bun', 'scripts/worktree-db.ts', 'check-url'], fleet, { DATABASE_URL: 'postgresql://u:p@localhost:5432/llamenos_wt_x_0123456789' }).code).toBe(0)
+  })
+
+  // #2705. The owner secret sits in the git common dir every worktree of this repo can
+  // see, so what is asserted is that no sanctioned path in a linked worktree hands it out.
+  // PG_PASSWORD is deliberately wrong: secure-shared (which export runs first) must fail to
+  // authenticate — or find no Postgres — and so can never touch a real cluster from here.
+  describe('with the owner credential present', () => {
+    const secretFile = join(primary, '.git', OWNER_SECRET_FILE)
+    const OWNER_SECRET = 'owner-secret-not-real-0123456789abcdef'
+    const NO_PG = { PG_PASSWORD: `wrong-${process.pid}-not-a-password` }
+    beforeAll(() => writeFileSync(secretFile, `${OWNER_SECRET}\n`, { mode: 0o600 }))
+    afterAll(() => rmSync(secretFile, { force: true }))
+
+    test('resolve hands the owner role to the primary checkout only', () => {
+      expect(sh(['bun', 'scripts/worktree-db.ts', 'resolve'], primary).out.trim()).toBe(
+        `unset llamenos ${OWNER_ROLE} localhost 5432 none`,
+      )
+      for (const wt of [fleet, linked]) {
+        const [, , user] = sh(['bun', 'scripts/worktree-db.ts', 'resolve'], wt).out.trim().split(' ')
+        expect(user).toBe('llamenos')
+      }
+    })
+
+    test("the primary checkout's own URL authenticates as the owner, with the secret from its git dir", () => {
+      const r = exportWith(primary, '', NO_PG)
+      expect(r.code).toBe(0)
+      expect(r.out).toContain(`EXPORTED=postgresql://${OWNER_ROLE}:${OWNER_SECRET}@localhost:5432/llamenos`)
+      expect(r.err).not.toContain(OWNER_SECRET)
+    })
+
+    test('a linked worktree that chose the shared database gets the read-only role, never the secret', () => {
+      const allow = { ...NO_PG, LLAMENOS_ALLOW_SHARED_DB: '1' }
+      expect(sh(['bun', 'scripts/worktree-db.ts', 'use-shared'], linked, allow).code).toBe(0)
+      try {
+        const r = exportWith(linked, '', allow)
+        expect(r.code).toBe(0)
+        expect(r.out).toContain('EXPORTED=postgresql://llamenos:')
+        expect(r.out).not.toContain(OWNER_SECRET)
+        expect(r.err).toContain('READ-ONLY')
+      } finally {
+        const marker = sh(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'llamenos-worktree-db'], linked).out.trim()
+        rmSync(marker, { force: true })
+      }
+    })
+
+    test('--shared (the containerised stack) uses that stack\'s one role, never the owner', () => {
+      const r = exportWith(primary, '--shared', NO_PG)
+      expect(r.code).toBe(0)
+      expect(r.out).toContain('EXPORTED=postgresql://llamenos:')
+      expect(r.out).not.toContain(OWNER_SECRET)
+    })
   })
 
   test('the primary checkout still gets the shared database, as before', () => {

@@ -386,6 +386,25 @@ try {
   lockHeld = true
   console.log('[migrate] Advisory lock acquired')
 
+  // Say so plainly when this role may not migrate this database at all, rather
+  // than failing on the ledger's CREATE TABLE with a bare "permission denied".
+  // On the dev cluster this is the boundary working (#2705): the shared database
+  // is read-only to every checkout but the primary.
+  const [{ role, database, can_create: canCreate }] = (await sql.unsafe(
+    `SELECT current_user AS role, current_database() AS database,
+            has_schema_privilege('public', 'CREATE') AS can_create`,
+  )) as { role: string; database: string; can_create: boolean }[]
+  if (!canCreate) {
+    console.error(
+      `[migrate] REFUSED by the database: role "${role}" may not create objects in schema public of ` +
+        `"${database}", so it cannot migrate it. On the local dev cluster the shared "llamenos" database ` +
+        'is read-only to every checkout except the primary (#2705) — migrate your own instead: ' +
+        'unset DATABASE_URL and run `bun run db:migrate`.',
+    )
+    // The session's end releases the advisory lock.
+    process.exit(1)
+  }
+
   const [{ ledger_exists: ledgerExisted, schema_exists: schemaExisted }] = (await sql.unsafe(
     `SELECT to_regclass('public.${LEDGER_TABLE}') IS NOT NULL AS ledger_exists,
             to_regclass('public.${SCHEMA_SENTINEL_TABLE}') IS NOT NULL AS schema_exists`,

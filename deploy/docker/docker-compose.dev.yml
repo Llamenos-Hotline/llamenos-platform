@@ -23,8 +23,23 @@
 name: llamenos-dev
 
 services:
+  # ONE Postgres for every checkout: the shared `llamenos` database plus one
+  # llamenos_wt_* database per worktree (scripts/worktree-db.ts).
+  #
+  # The role below is created as the bootstrap superuser, and the first launcher
+  # run converts it (`bun scripts/worktree-db.ts secure-shared`, #2705):
+  #   llamenos        the well-known role (PG_PASSWORD) — owns every worktree
+  #                   database, READ-ONLY on the shared `llamenos` database,
+  #                   enforced by Postgres whoever types the URL
+  #   llamenos_owner  the renamed bootstrap superuser, owner of `llamenos`; its
+  #                   password lives only in the primary checkout's git dir
+  # cluster_name marks this as the dev cluster: secure-shared converts nothing
+  # else (CI's service containers and the containerised stacks keep one role).
+  # Overridable only so a stack that merges this file (scripts/test-integration-full.sh)
+  # can say it is not the dev cluster.
   postgres:
     image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2c7fff18fbab954df8f277c1dbf4c70124af  # pinned 2026-05-18
+    command: ["postgres", "-c", "cluster_name=${LLAMENOS_PG_CLUSTER_NAME:-llamenos-dev}"]
     ports:
       - "5432:5432"
     environment:
@@ -87,7 +102,11 @@ services:
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-dev-notifier-key}
       - NOTIFIER_API_KEY_PREVIOUS=${NOTIFIER_API_KEY_PREVIOUS:-}
       - NOTIFIER_TOKEN_SECRET=${NOTIFIER_TOKEN_SECRET:-dev-token-secret}
-      - DATABASE_URL=postgres://llamenos:${PG_PASSWORD:-dev}@postgres:5432/llamenos?sslmode=disable
+      # Its own database, not the shared app one: the well-known role is read-only
+      # there on the dev cluster (#2705), and this sidecar writes its own tables.
+      # `bun scripts/worktree-db.ts secure-shared` (run by `bun run dev:server`)
+      # creates it. A stack that is not the dev cluster names its own.
+      - DATABASE_URL=postgres://llamenos:${PG_PASSWORD:-dev}@postgres:5432/${SIGNAL_NOTIFIER_DATABASE:-signal_notifier}?sslmode=disable
       - SIGNAL_BRIDGE_URL=http://signal-cli:8080
       - SIGNAL_BRIDGE_API_KEY=${SIGNAL_BRIDGE_API_KEY:-}
       - SIGNAL_REGISTERED_NUMBER=${SIGNAL_REGISTERED_NUMBER:-}
