@@ -64,6 +64,7 @@ export type ReportTypeDefinition = z.infer<typeof reportTypeDefinitionSchema>
 export const cmsReportTypeListResponseSchema = z.object({
   reportTypes: z.array(reportTypeDefinitionSchema),
 })
+export type CmsReportTypeListResponse = z.infer<typeof cmsReportTypeListResponseSchema>
 
 // --- Input schemas for CRUD ---
 
@@ -94,6 +95,7 @@ export const createCmsReportTypeBodySchema = z.object({
   templateId: z.string().optional(),
   templateVersion: z.string().optional(),
 })
+export type CreateCmsReportTypeBody = z.input<typeof createCmsReportTypeBodySchema>
 
 export const updateCmsReportTypeBodySchema = z.object({
   label: z.string().min(1).max(200).optional(),
@@ -119,3 +121,4 @@ export const updateCmsReportTypeBodySchema = z.object({
 
   isArchived: z.boolean().optional(),
 })
+export type UpdateCmsReportTypeBody = z.input<typeof updateCmsReportTypeBodySchema>

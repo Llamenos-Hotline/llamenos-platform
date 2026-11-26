@@ -34,7 +34,7 @@ export type User = z.infer<typeof userAdminResponseSchema>
 // --- List/wrapper response schemas ---
 
 export const userListResponseSchema = z.object({
-  users: z.array(userResponseSchema),
+  users: z.array(userAdminResponseSchema),
 })
 export type UserListResponse = z.infer<typeof userListResponseSchema>
 
@@ -64,10 +64,11 @@ export const memberDirectoryResponseSchema = z.object({
 export type MemberDirectoryResponse = z.infer<typeof memberDirectoryResponseSchema>
 
 /**
- * The non-admin member shape — no `phone`. `GET /users` and `GET /users/:id` (via
- * `createEntityRouter`'s `itemResponseSchema`) both validate against `userResponseSchema`,
- * NOT `userAdminResponseSchema` (`User`, below) — see ll-api-schema-binding's binding
- * report for where the client used to conflate the two.
+ * The user shape WITHOUT `phone` and the admin-only channel fields. Phone numbers are
+ * admin-only (CLAUDE.md role matrix): every `/users` route is gated on `users:read` and
+ * answers `userAdminResponseSchema` (`User`, above), including `phone`. This narrower
+ * shape is the base `userAdminResponseSchema` extends, for a surface that must not carry a
+ * phone number.
  */
 export type UserResponse = z.infer<typeof userResponseSchema>
 

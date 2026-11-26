@@ -1,7 +1,7 @@
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
 import { request, ApiError } from './client'
-import type { RecoveryGroupInfo } from '@protocol/schemas'
+import type { RecoveryGroupInfo, OkResponse, RecoveryCancelResponse, RecoveryContributeResponse, RecoveryListSessionsResponse, RecoverySessionStatusResponse } from '@protocol/schemas'
 import type {
   MyShareEnvelopeResponse,
   RecoveryGroupEnrollBody,
@@ -11,33 +11,6 @@ import type {
 } from '@protocol/schemas/recovery-group'
 
 // ── Recovery Group ─────────────────────────────────────────────────────
-
-export interface RecoverySessionInfo {
-  sessionId: string
-  hubId: string
-  userPubkey: string
-  newDevicePubkey: string
-  signalVerified: boolean
-  status: 'pending' | 'verified' | 'active' | 'completed' | 'expired' | 'cancelled'
-  expiresAt: string
-  completedAt: string | null
-  cancelledAt: string | null
-  cancelledBy: string | null
-  emergencyOverride: {
-    justification: string
-    approverPubkey: string
-    approverSignature: string
-  } | null
-  createdAt: string
-  contributionCount: number
-  threshold: number
-  contributions: Array<{
-    contributorPubkey: string
-    encryptedShare: string
-    contributorSignature: string
-    contributedAt: string
-  }>
-}
 
 /**
  * The hub's recovery group, or `null` when none is enrolled (the server's 404).
@@ -53,8 +26,8 @@ export async function getRecoveryGroup(hubId: string): Promise<RecoveryGroupInfo
   }
 }
 
-export async function enrollRecoveryGroup(body: RecoveryGroupEnrollBody): Promise<void> {
-  await request('/recovery-group/enroll', {
+export async function enrollRecoveryGroup(body: RecoveryGroupEnrollBody) {
+  return request<OkResponse>('/recovery-group/enroll', {
     method: 'POST',
     body: JSON.stringify(body),
   })
@@ -92,27 +65,34 @@ export async function submitLivenessProof(body: ShareLivenessProof): Promise<Sha
   })
 }
 
-export async function getRecoverySessions(hubId: string): Promise<RecoverySessionInfo[]> {
-  return request<RecoverySessionInfo[]>(`/recovery-group/sessions?hubId=${hubId}`)
+/**
+ * Every recovery session of a hub, each with its full status. The list route answers a
+ * summary row per session (no contributions, threshold or override), and the approval
+ * screen needs all of those, so each row is completed from the per-session route — which
+ * is also where the server decides when a contributed share may be released.
+ */
+export async function getRecoverySessions(hubId: string) {
+  const summaries = await request<RecoveryListSessionsResponse>(`/recovery-group/sessions?hubId=${hubId}`)
+  return Promise.all(summaries.map((s) => getRecoverySession(s.sessionId)))
 }
 
-export async function getRecoverySession(sessionId: string): Promise<RecoverySessionInfo> {
-  return request<RecoverySessionInfo>(`/recovery-group/session/${sessionId}`)
+export async function getRecoverySession(sessionId: string) {
+  return request<RecoverySessionStatusResponse>(`/recovery-group/session/${sessionId}`)
 }
 
 export async function contributeShare(
   sessionId: string,
   encryptedShare: string,
   contributorSignature: string,
-): Promise<{ ok: boolean; status: string; contributionCount: number }> {
+): Promise<RecoveryContributeResponse> {
   return request(`/recovery-group/session/${sessionId}/contribute`, {
     method: 'POST',
     body: JSON.stringify({ encryptedShare, contributorSignature }),
   })
 }
 
-export async function cancelRecoverySession(sessionId: string): Promise<void> {
-  await request(`/recovery-group/session/${sessionId}/cancel`, { method: 'POST' })
+export async function cancelRecoverySession(sessionId: string) {
+  return request<RecoveryCancelResponse>(`/recovery-group/session/${sessionId}/cancel`, { method: 'POST' })
 }
 
 export async function initiateRecovery(

@@ -47,16 +47,19 @@ export const callPresenceResponseSchema = z.object({
     status: z.enum(['available', 'on-call', 'online']),
   })),
 })
+export type CallPresenceResponse = z.infer<typeof callPresenceResponseSchema>
 
 // --- List/wrapper response schemas ---
 
 export const activeCallsResponseSchema = z.object({
   calls: z.array(callRecordResponseSchema),
 })
+export type ActiveCallsResponse = z.infer<typeof activeCallsResponseSchema>
 
 export const todayCountResponseSchema = z.object({
   count: z.number(),
 })
+export type TodayCountResponse = z.infer<typeof todayCountResponseSchema>
 
 export const callerContactSummarySchema = z.object({
   id: z.string(),
@@ -78,11 +81,13 @@ export const callerIdentifyResponseSchema = z.object({
 export const callActionResponseSchema = z.object({
   call: callRecordResponseSchema,
 })
+export type CallActionResponse = z.infer<typeof callActionResponseSchema>
 
 export const banCallResponseSchema = z.object({
   banned: z.boolean(),
   hungUp: z.boolean(),
 })
+export type BanCallResponse = z.infer<typeof banCallResponseSchema>
 
 /**
  * What part of the hub's call history a `GET /calls/history` page was drawn
@@ -116,6 +121,7 @@ export const callHistoryResponseSchema = z.object({
   ...paginatedMeta,
   access: callHistoryAccessSchema,
 })
+export type CallHistoryResponse = z.infer<typeof callHistoryResponseSchema>
 
 // --- Volunteer access window (#1342) ---
 

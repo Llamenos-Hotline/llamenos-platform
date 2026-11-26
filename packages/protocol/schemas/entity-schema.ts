@@ -284,6 +284,7 @@ export const updateEntityTypeBodySchema = z.object({
   requiredSpecializations: z.array(z.string().max(100)).max(20).optional(),
   notifyContactsOnStatusChange: z.boolean().optional(),
 })
+export type UpdateEntityTypeBody = z.input<typeof updateEntityTypeBodySchema>
 
 export const createRelationshipTypeBodySchema = z.object({
   hubId: z.string().optional().default(''),
@@ -326,6 +327,7 @@ export const caseNumberBodySchema = z.object({
 export const entityTypeListResponseSchema = z.object({
   entityTypes: z.array(entityTypeDefinitionSchema),
 })
+export type EntityTypeListResponse = z.infer<typeof entityTypeListResponseSchema>
 
 export const relationshipTypeListResponseSchema = z.object({
   relationshipTypes: z.array(relationshipTypeDefinitionSchema),
@@ -355,6 +357,7 @@ export const templateListResponseSchema = z.object({
   templates: z.array(templateSummarySchema),
   appliedTemplateIds: z.array(z.string()),
 })
+export type TemplateListResponse = z.infer<typeof templateListResponseSchema>
 
 export const templateApplyResponseSchema = z.object({
   applied: z.boolean(),
@@ -364,6 +367,7 @@ export const templateApplyResponseSchema = z.object({
   reportTypes: z.number(),
   suggestedRoles: z.array(z.string()).optional(),
 })
+export type TemplateApplyResponse = z.infer<typeof templateApplyResponseSchema>
 
 export const templateUpdateItemSchema = z.object({
   entityTypeId: z.string(),
@@ -379,6 +383,7 @@ export const templateUpdatesResponseSchema = z.object({
 export const enabledResponseSchema = z.object({
   enabled: z.boolean(),
 })
+export type EnabledResponse = z.infer<typeof enabledResponseSchema>
 
 // --- Entity field file value (EP06-A2) ---
 

@@ -1,5 +1,4 @@
 import { Hono } from 'hono'
-import { z } from 'zod'
 import { describeRoute, resolver } from 'hono-openapi'
 import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
@@ -12,7 +11,7 @@ import {
   createContactBodySchema,
   updateContactBodySchema,
   listContactsQuerySchema,
-  contactCaseLinkSchema,
+  contactCaseListResponseSchema,
   contactEnvelopeRecipientsResponseSchema,
 } from '@protocol/schemas/contacts-v2'
 import {
@@ -44,12 +43,6 @@ import {
   bulkCreateContactBodySchema,
   bulkCreateContactResponseSchema,
 } from '@protocol/schemas/contact-bulk'
-
-// Wrapper for the cases response. contactCaseLinkSchema (the per-link shape the
-// client types as ContactCaseLink) lives in @protocol/schemas.
-const contactCaseListResponseSchema = z.object({
-  cases: z.array(contactCaseLinkSchema),
-})
 
 /**
  * The sealed tiers a contact write carries: the summary and the PII are opened

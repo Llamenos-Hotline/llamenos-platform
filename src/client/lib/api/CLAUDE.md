@@ -8,7 +8,7 @@ already fully described by Zod schemas in `packages/protocol/schemas/`.
 **Derive types. Never hand-write them.**
 
 `packages/protocol/schemas/` is the single source of truth for every request
-body and every response shape in this directory. It exports **547 schemas**.
+body and every response shape in this directory. It exports hundreds of schemas.
 If you are typing a request or a response here, the type already exists —
 import it, or infer it from the schema. Writing the shape out by hand is the
 defect this file exists to prevent, and it is not a style preference: a
@@ -48,17 +48,22 @@ internally consistent — it simply is not the server's type. There is no
 feedback until something fails at runtime, or silently returns a field the UI
 never reads.
 
-These are real, current examples from this directory, not hypotheticals:
+These drifts were real, and the binding report found and fixed each one (the list is
+illustrative, not exhaustive):
 
-- `createUser` accepts **4 fields**. `createUserBodySchema` defines **10** —
-  `teamId`, `supervisorPubkey`, `specializations`, `maxCaseAssignments` and
-  more are unreachable from the client, with no compile error to say so.
-- `listUsers` is typed `{ users: User[] }`, where `User` is
-  `userAdminResponseSchema` (it has `phone`). The route actually returns
-  `userListResponseSchema`, whose members are `userResponseSchema` — **no
-  `phone`**. The client over-claims a field the endpoint does not send.
-- Across this directory: **352 exported functions, 263 inline object types,
-  and only 21 imports from `@protocol/schemas`.**
+- `createUser` accepted **4 fields** where `createUserBodySchema` defines **10**.
+- `listUsers` was typed with `User` (which has `phone`) while the route declared a member
+  shape without it. Phone numbers are admin-only, and every `/users` route is gated on
+  `users:read`, so the routes now declare `userAdminResponseSchema` and the types agree.
+- The retention screen PATCHed `{ category, retentionDays }` to a route that validates
+  `{ settings: [...] }`; the blast settings screen edited `optOutFooter` and
+  `rateLimitPerSecond`, which the validator stripped, so they were never saved.
+
+`bun scripts/api-schema-binding/bind-report.ts --check` is the ratchet: it fails on any
+UNBOUND (hand-written) or MISMATCHED (wrong protocol type) shape, or a stale
+`scripts/api-schema-binding/report.md`, and it runs in CI as part of the repo-level bun
+tests (`bind-report.test.ts`). Fix a finding by importing the protocol type — if the
+server's declared schema is what is wrong, fix the schema, not the client.
 
 ## Before you add or edit a function here
 

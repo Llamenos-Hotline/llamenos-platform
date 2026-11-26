@@ -1,7 +1,7 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, activeHubPath, hubPath } from './client'
 import type { CreateShiftBody, FallbackGroup } from '@protocol/schemas/shifts'
-import type { Shift, ShiftStatus } from '@protocol/schemas'
+import type { Shift, ShiftStatus, CreateShiftJoinRequestBody, OkResponse, ShiftJoinRequestListResponse, ShiftJoinRequestResponse, ShiftListResponse, UpdateShiftBody } from '@protocol/schemas'
 import type { CreateShiftOverrideBody, ShiftOverride, ShiftOverrideListResponse } from '@protocol/schemas/shift-override'
 import type { AvailabilityBlock, AvailabilityBlockListResponse, CreateAvailabilityBlockBody } from '@protocol/schemas/shift-availability'
 
@@ -26,7 +26,7 @@ export async function getMyShiftStatusIn(hubId: string) {
 // --- Shifts (admin only) ---
 
 export async function listShifts() {
-  return request<{ shifts: Shift[] }>(activeHubPath('/shifts'))
+  return request<ShiftListResponse>(activeHubPath('/shifts'))
 }
 
 export async function createShift(data: CreateShiftBody) {
@@ -36,7 +36,7 @@ export async function createShift(data: CreateShiftBody) {
   })
 }
 
-export async function updateShift(id: string, data: Partial<Shift>) {
+export async function updateShift(id: string, data: UpdateShiftBody) {
   return request<Shift>(activeHubPath(`/shifts/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(data),
@@ -46,7 +46,7 @@ export async function updateShift(id: string, data: Partial<Shift>) {
 /** Delete a shift. Requires the admin's confirmation of exactly this shift (#2575). */
 export async function deleteShift(id: string, confirmed: DeletionConfirmed) {
   DeletionConfirmed.require(confirmed, 'shift', id)
-  return request<{ ok: true }>(activeHubPath(`/shifts/${id}`), { method: 'DELETE' })
+  return request<OkResponse>(activeHubPath(`/shifts/${id}`), { method: 'DELETE' })
 }
 
 export async function getFallbackGroup() {
@@ -63,11 +63,11 @@ export async function setFallbackGroup(volunteers: string[]) {
 // --- Shift Clock-in / Clock-out / Heartbeat ---
 
 export async function clockIn() {
-  return request<{ ok: true }>(activeHubPath('/shifts/clock-in'), { method: 'POST' })
+  return request<OkResponse>(activeHubPath('/shifts/clock-in'), { method: 'POST' })
 }
 
 export async function clockOut() {
-  return request<{ ok: true }>(activeHubPath('/shifts/clock-out'), { method: 'POST' })
+  return request<OkResponse>(activeHubPath('/shifts/clock-out'), { method: 'POST' })
 }
 
 /**
@@ -77,7 +77,7 @@ export async function clockOut() {
  * axiom). Answers 404 when the user is not (or is no longer) clocked in there.
  */
 export async function sendHeartbeat(hubId: string) {
-  return request<{ ok: true }>(hubPath(hubId, '/shifts/heartbeat'), { method: 'POST' })
+  return request<OkResponse>(hubPath(hubId, '/shifts/heartbeat'), { method: 'POST' })
 }
 
 export async function listActiveShifts() {
@@ -102,7 +102,7 @@ export async function createShiftOverride(data: CreateShiftOverrideBody) {
 /** Delete a shift override. Requires the admin's confirmation of exactly this override (#2575). */
 export async function deleteShiftOverride(id: string, confirmed: DeletionConfirmed) {
   DeletionConfirmed.require(confirmed, 'shiftOverride', id)
-  return request<{ ok: true }>(activeHubPath(`/shifts/overrides/${id}`), { method: 'DELETE' })
+  return request<OkResponse>(activeHubPath(`/shifts/overrides/${id}`), { method: 'DELETE' })
 }
 
 // --- Availability Blocks ---
@@ -125,31 +125,31 @@ export async function createAvailabilityBlock(data: CreateAvailabilityBlockBody)
 }
 
 export async function deleteAvailabilityBlock(id: string) {
-  return request<{ ok: true }>(activeHubPath(`/shifts/availability/${id}`), { method: 'DELETE' })
+  return request<OkResponse>(activeHubPath(`/shifts/availability/${id}`), { method: 'DELETE' })
 }
 
 // --- Shift Requests ---
 
 export async function listShiftRequests() {
-  return request<{ requests: Array<{ id: string; hubId: string; shiftId: string; userPubkey: string; type: string; status: string; reviewedBy: string | null; reviewedAt: string | null; createdAt: string }> }>(activeHubPath('/shifts/requests'))
+  return request<ShiftJoinRequestListResponse>(activeHubPath('/shifts/requests'))
 }
 
-export async function createShiftRequest(data: { shiftId: string; type: 'join' | 'leave' }) {
-  return request<{ id: string; hubId: string; shiftId: string; userPubkey: string; type: string; status: string; reviewedBy: string | null; reviewedAt: string | null; createdAt: string }>(activeHubPath('/shifts/requests'), {
+export async function createShiftRequest(data: CreateShiftJoinRequestBody) {
+  return request<ShiftJoinRequestResponse>(activeHubPath('/shifts/requests'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
 export async function approveShiftRequest(id: string) {
-  return request<{ id: string; hubId: string; shiftId: string; userPubkey: string; type: string; status: string; reviewedBy: string | null; reviewedAt: string | null; createdAt: string }>(activeHubPath(`/shifts/requests/${id}/approve`), {
+  return request<ShiftJoinRequestResponse>(activeHubPath(`/shifts/requests/${id}/approve`), {
     method: 'POST',
     body: JSON.stringify({ status: 'approved' }),
   })
 }
 
 export async function rejectShiftRequest(id: string) {
-  return request<{ id: string; hubId: string; shiftId: string; userPubkey: string; type: string; status: string; reviewedBy: string | null; reviewedAt: string | null; createdAt: string }>(activeHubPath(`/shifts/requests/${id}/reject`), {
+  return request<ShiftJoinRequestResponse>(activeHubPath(`/shifts/requests/${id}/reject`), {
     method: 'POST',
     body: JSON.stringify({ status: 'denied' }),
   })

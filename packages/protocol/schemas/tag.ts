@@ -18,10 +18,12 @@ export type TagResponse = z.infer<typeof tagResponseSchema>
 export const tagListResponseSchema = z.object({
   tags: z.array(tagResponseSchema),
 })
+export type TagListResponse = z.infer<typeof tagListResponseSchema>
 
 export const tagDeleteResponseSchema = z.object({
   removedFromContacts: z.number(),
 })
+export type TagDeleteResponse = z.infer<typeof tagDeleteResponseSchema>
 
 // --- Input schemas ---
 
@@ -33,7 +35,7 @@ export const createTagBodySchema = z.object({
   encryptedCategory: z.string().optional(),
 })
 
-export type CreateTagBody = z.infer<typeof createTagBodySchema>
+export type CreateTagBody = z.input<typeof createTagBodySchema>
 
 export const updateTagBodySchema = z.object({
   encryptedLabel: z.string().min(1).optional(),

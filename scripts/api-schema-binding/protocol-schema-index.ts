@@ -1,7 +1,7 @@
 /**
  * protocol-schema-index.ts — deterministic index over `packages/protocol/schemas/**`:
  *
- *  - which PascalCase `export type X = z.infer<typeof someSchema>` aliases exist
+ *  - which PascalCase `export type X = z.infer|input|output<typeof someSchema>` aliases exist
  *    for a given Zod schema identifier (there can be zero, one, or more)
  *  - a best-effort structural field list for a schema identifier, by resolving
  *    `z.object({...})` / `.extend({...})` / `.pick({...})` / `.omit({...})` /
@@ -23,12 +23,15 @@ interface SchemaFile {
   sf: ts.SourceFile
 }
 
-function schemaFiles(): SchemaFile[] {
-  return readdirSync(SCHEMAS_DIR, { withFileTypes: true })
-    .filter(e => e.isFile() && e.name.endsWith('.ts'))
-    .map(e => {
-      const file = join(SCHEMAS_DIR, e.name)
-      return { file, sf: parseFile(file) }
+function schemaFiles(dir: string = SCHEMAS_DIR): SchemaFile[] {
+  // Recurse: `schemas/provider-setup/` is re-exported from the barrel (`export * from './provider-setup'`)
+  // and holds routes' schemas, so a top-level-only scan reported them as having no declaring file.
+  return readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap(e => {
+      const file = join(dir, e.name)
+      if (e.isDirectory()) return schemaFiles(file)
+      return e.isFile() && e.name.endsWith('.ts') ? [{ file, sf: parseFile(file) }] : []
     })
 }
 
@@ -55,7 +58,9 @@ export function buildProtocolSchemaIndex(): ProtocolSchemaIndex {
         if (ts.isTypeReferenceNode(t) && t.typeArguments?.[0]) {
           const typeNameText = t.typeName.getText(sf)
           const arg = t.typeArguments[0]
-          if (typeNameText === 'z.infer' && ts.isTypeQueryNode(arg) && ts.isIdentifier(arg.exprName)) {
+          // `z.input` is the right alias for a REQUEST body (defaulted fields stay optional for
+          // the sender); `z.infer`/`z.output` for a response. All three bind a type to its schema.
+          if (['z.infer', 'z.input', 'z.output'].includes(typeNameText) && ts.isTypeQueryNode(arg) && ts.isIdentifier(arg.exprName)) {
             const schemaIdent = arg.exprName.text
             const list = typeAliasesBySchema.get(schemaIdent) ?? []
             list.push(stmt.name.text)

@@ -1,5 +1,6 @@
 import { request, hp } from './client'
 import type { TelephonyProviderConfig } from '@shared/types'
+import type { OkResponse, TelephonyProvider, TelephonyStatusResponse, WebrtcTokenResponse } from '@protocol/schemas'
 
 export type { TelephonyProviderConfig, TelephonyProviderType } from '@shared/types'
 
@@ -17,7 +18,7 @@ export async function updateTelephonyProvider(config: TelephonyProviderConfig) {
     if (v != null && v !== '') credentials[k] = String(v)
   }
 
-  await request<{ ok: true }>(hp('/provider-setup/configure'), {
+  await request<OkResponse>(hp('/provider-setup/configure'), {
     method: 'POST',
     body: JSON.stringify({
       provider: type,
@@ -30,8 +31,8 @@ export async function updateTelephonyProvider(config: TelephonyProviderConfig) {
   return config
 }
 
-export async function testTelephonyProvider(config: Partial<TelephonyProviderConfig> & { type: string }) {
-  return request<{ ok: true }>(hp('/settings/telephony-provider/test'), {
+export async function testTelephonyProvider(config: TelephonyProvider) {
+  return request<OkResponse>(hp('/settings/telephony-provider/test'), {
     method: 'POST',
     body: JSON.stringify(config),
   })
@@ -40,9 +41,9 @@ export async function testTelephonyProvider(config: Partial<TelephonyProviderCon
 // --- WebRTC Token ---
 
 export async function getWebRtcToken() {
-  return request<{ token: string; provider: string; identity: string }>('/telephony/webrtc-token')
+  return request<WebrtcTokenResponse>('/telephony/webrtc-token')
 }
 
 export async function getWebRtcStatus() {
-  return request<{ available: boolean; provider: string | null }>('/telephony/webrtc-status')
+  return request<TelephonyStatusResponse>('/telephony/webrtc-status')
 }

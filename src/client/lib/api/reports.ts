@@ -1,14 +1,11 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, activeHubPath } from './client'
-import type { Conversation, ConversationMessage } from '@protocol/schemas'
+import type { Conversation, ConversationMessage, MessageListResponse, Report, CreateReportBody, CreateReportTypeBody, OkResponse, ReportCategoriesResponse, ReportFilesResponse, ReportListResponse, ReportMessageBody, ReportTypeListResponse, ReportTypeResponse, UpdateReportBody, UpdateReportTypeBody } from '@protocol/schemas'
 
 /** Narrowing of ConversationMessage conversionStatus enum from conversationResponseSchema */
 export type ConversionStatus = NonNullable<NonNullable<Conversation['metadata']>['conversionStatus']>
 
-/** Narrowing of Conversation where metadata is required and type is 'report' */
-export type Report = Conversation & {
-  metadata: NonNullable<Conversation['metadata']> & { type: 'report' }
-}
+export type { Report }
 
 // --- Reports ---
 
@@ -18,16 +15,10 @@ export async function listReports(params?: { status?: string; category?: string;
   if (params?.category) qs.set('category', params.category)
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ conversations: Report[]; total: number }>(activeHubPath(`/reports?${qs}`))
+  return request<ReportListResponse>(activeHubPath(`/reports?${qs}`))
 }
 
-export async function createReport(data: {
-  title: string
-  category?: string
-  reportTypeId?: string
-  encryptedContent: string
-  readerEnvelopes: import('@shared/types').RecipientEnvelope[]
-}) {
+export async function createReport(data: CreateReportBody) {
   return request<Report>(activeHubPath('/reports'), {
     method: 'POST',
     body: JSON.stringify(data),
@@ -42,14 +33,10 @@ export async function getReportMessages(id: string, params?: { page?: number; li
   const qs = new URLSearchParams()
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ messages: ConversationMessage[]; total: number }>(activeHubPath(`/reports/${id}/messages?${qs}`))
+  return request<MessageListResponse>(activeHubPath(`/reports/${id}/messages?${qs}`))
 }
 
-export async function sendReportMessage(id: string, data: {
-  encryptedContent: string
-  readerEnvelopes: import('@shared/types').RecipientEnvelope[]
-  attachmentIds?: string[]
-}) {
+export async function sendReportMessage(id: string, data: ReportMessageBody) {
   return request<ConversationMessage>(activeHubPath(`/reports/${id}/messages`), {
     method: 'POST',
     body: JSON.stringify(data),
@@ -63,7 +50,7 @@ export async function assignReport(id: string, assignedTo: string) {
   })
 }
 
-export async function updateReport(id: string, data: { status?: string }) {
+export async function updateReport(id: string, data: UpdateReportBody) {
   return request<Report>(activeHubPath(`/reports/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(data),
@@ -71,36 +58,30 @@ export async function updateReport(id: string, data: { status?: string }) {
 }
 
 export async function getReportCategories() {
-  return request<{ categories: string[] }>(activeHubPath('/reports/categories'))
+  return request<ReportCategoriesResponse>(activeHubPath('/reports/categories'))
 }
 
 // --- Report Types ---
 
 export async function getReportTypes() {
-  return request<{ reportTypes: import('@shared/types').ReportType[] }>(activeHubPath('/reports/types'))
+  return request<ReportTypeListResponse>(activeHubPath('/reports/types'))
 }
 
 // The admin report-type vocabulary is deployment-wide: it exists only at the
 // unscoped `/settings/report-types`, never under a hub (#2367).
 export async function getReportTypesAdmin() {
-  return request<{ reportTypes: import('@shared/types').ReportType[] }>('/settings/report-types')
+  return request<ReportTypeListResponse>('/settings/report-types')
 }
 
-export async function createReportType(data: {
-  name: string
-  description?: string
-  icon?: string
-  fields?: import('@shared/types').CustomFieldDefinition[]
-  isDefault?: boolean
-}) {
-  return request<import('@shared/types').ReportType>('/settings/report-types', {
+export async function createReportType(data: CreateReportTypeBody) {
+  return request<ReportTypeResponse>('/settings/report-types', {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
-export async function updateReportType(id: string, data: Partial<import('@shared/types').ReportType>) {
-  return request<import('@shared/types').ReportType>(`/settings/report-types/${id}`, {
+export async function updateReportType(id: string, data: UpdateReportTypeBody) {
+  return request<ReportTypeResponse>(`/settings/report-types/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
@@ -109,11 +90,11 @@ export async function updateReportType(id: string, data: Partial<import('@shared
 /** Archive a report type. Requires the admin's confirmation of exactly this type (#2575). */
 export async function archiveReportType(id: string, confirmed: DeletionConfirmed) {
   DeletionConfirmed.require(confirmed, 'reportCategory', id)
-  return request<{ ok: boolean }>(`/settings/report-types/${id}`, {
+  return request<OkResponse>(`/settings/report-types/${id}`, {
     method: 'DELETE',
   })
 }
 
 export async function getReportFiles(id: string) {
-  return request<import('@protocol/schemas').ReportFilesResponse>(activeHubPath(`/reports/${id}/files`))
+  return request<ReportFilesResponse>(activeHubPath(`/reports/${id}/files`))
 }

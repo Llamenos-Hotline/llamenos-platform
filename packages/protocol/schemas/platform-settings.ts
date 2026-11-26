@@ -45,7 +45,9 @@ export const updatePlatformSettingsBodySchema = z.object({
   erasurePlatformFloor: forPatch(erasurePlatformFloorSchema).optional(),
   retentionPurge: forPatch(retentionPurgeScheduleSchema).optional(),
 })
+export type UpdatePlatformSettingsBody = z.input<typeof updatePlatformSettingsBodySchema>
 
 export const platformSettingsResponseSchema = z.object({
   settings: platformSettingsSchema,
 })
+export type PlatformSettingsResponse = z.infer<typeof platformSettingsResponseSchema>

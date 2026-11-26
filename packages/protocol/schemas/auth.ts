@@ -7,6 +7,7 @@ export const loginResponseSchema = z.object({
   ok: z.boolean(),
   roles: z.array(z.string()),
 })
+export type LoginResponse = z.infer<typeof loginResponseSchema>
 
 /**
  * One relay-event key (spec D9, #2999): it opens the frames of `hubId` for one
@@ -70,6 +71,7 @@ export const profileUpdateBodySchema = z.object({
   callPreference: z.enum(['phone', 'browser', 'both']).optional(),
   specializations: z.array(z.string().max(100)).optional(), // Epic 340
 })
+export type ProfileUpdateBody = z.input<typeof profileUpdateBodySchema>
 
 export const availabilityBodySchema = z.object({
   onBreak: z.boolean(),

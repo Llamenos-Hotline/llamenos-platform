@@ -19,10 +19,10 @@ import {
   submitA2pBrand,
   submitA2pCampaign,
   skipA2p,
-  type A2pRegistration,
   type BrandInfo,
   type CampaignInfo,
 } from '@/lib/api'
+import type { A2pRegistrationState } from '@protocol/schemas'
 
 interface A2pRegistrationPanelProps {
   hubId: string
@@ -40,7 +40,7 @@ const USE_CASES = [
 export function A2pRegistrationPanel({ hubId }: A2pRegistrationPanelProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const [registration, setRegistration] = useState<A2pRegistration | null>(null)
+  const [registration, setRegistration] = useState<A2pRegistrationState | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [showBrandForm, setShowBrandForm] = useState(false)

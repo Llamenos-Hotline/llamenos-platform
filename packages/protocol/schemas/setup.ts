@@ -5,11 +5,13 @@ import { z } from 'zod'
 export const setupStateResponseSchema = z.object({
   setupCompleted: z.boolean(),
 })
+export type SetupStateResponse = z.infer<typeof setupStateResponseSchema>
 
 export const connectionTestResponseSchema = z.object({
   ok: z.boolean(),
   error: z.string().optional(),
 })
+export type ConnectionTestResponse = z.infer<typeof connectionTestResponseSchema>
 
 // --- Input schemas ---
 
@@ -17,11 +19,13 @@ export const testSignalBodySchema = z.object({
   bridgeUrl: z.string().min(1, 'Bridge URL is required'),
   bridgeApiKey: z.string().optional(),
 })
+export type TestSignalBody = z.input<typeof testSignalBodySchema>
 
 export const testWhatsAppBodySchema = z.object({
   phoneNumberId: z.string().min(1, 'Phone Number ID is required'),
   accessToken: z.string().min(1, 'Access Token is required'),
 })
+export type TestWhatsAppBody = z.input<typeof testWhatsAppBodySchema>
 
 // --- Signal Registration ---
 
@@ -32,6 +36,7 @@ export const signalRegisterBodySchema = z.object({
   useVoice: z.boolean().optional().default(false),
   captcha: z.string().optional(),
 })
+export type SignalRegisterBody = z.input<typeof signalRegisterBodySchema>
 
 export const signalVerifyBodySchema = z.object({
   bridgeUrl: z.string().min(1, 'Bridge URL is required'),
@@ -39,12 +44,14 @@ export const signalVerifyBodySchema = z.object({
   phoneNumber: z.string().min(1, 'Phone number is required'),
   verificationCode: z.string().min(1, 'Verification code is required'),
 })
+export type SignalVerifyBody = z.input<typeof signalVerifyBodySchema>
 
 export const signalUnregisterBodySchema = z.object({
   bridgeUrl: z.string().min(1, 'Bridge URL is required'),
   bridgeApiKey: z.string().min(1, 'Bridge API key is required'),
   registeredNumber: z.string().min(1, 'Registered number is required'),
 })
+export type SignalUnregisterBody = z.input<typeof signalUnregisterBodySchema>
 
 export const signalRegistrationResponseSchema = z.object({
   step: z.enum(['idle', 'pending_verification', 'verified', 'failed']),

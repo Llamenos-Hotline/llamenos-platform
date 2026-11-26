@@ -7,18 +7,13 @@ import {
   type BanDigestEvaluateResponse,
   type SearchBansEvaluateResponse,
   type SearchBansResponse,
-  type BulkBanResponse,
+  type PlatformBulkBanResponse,
 } from '@protocol/schemas/bans'
 import type { OkResponse } from '@protocol/schemas/common'
 import type {
-  ErasureRequest,
   MyErasureRequestResponse,
-  ErasureConfig,
-  EnvelopeRevocationJob,
-  RetentionSetting,
-  RetentionPlatformFloor,
   PlatformBanListResponse,
-  PlatformSettings,
+  EnvelopeRevocationJobListResponse, ErasureConfigResponse, ErasureRequestListResponse, ErasureRequestResponse, PlatformSettingsResponse, RetentionFloorsResponse, RetentionSettingsResponse, UpdateErasureConfigBody, UpdatePlatformSettingsBody, UpdateRetentionBody, UpdateRetentionFloorsBody,
 } from '@protocol/schemas'
 
 // --- EP08: Erasure, Retention, Bans, Platform Settings ---
@@ -30,39 +25,39 @@ export async function getMyErasureRequest() {
 }
 
 export async function createMyErasureRequest() {
-  return request<{ request: ErasureRequest }>(hp('/erasure/me'), { method: 'POST' })
+  return request<ErasureRequestResponse>(hp('/erasure/me'), { method: 'POST' })
 }
 
 export async function cancelMyErasureRequest() {
-  return request<{ ok: true }>(hp('/erasure/me'), { method: 'DELETE' })
+  return request<OkResponse>(hp('/erasure/me'), { method: 'DELETE' })
 }
 
 export async function listErasureRequests(params?: { status?: string }) {
   const qs = new URLSearchParams()
   if (params?.status) qs.set('status', params.status)
   const query = qs.toString()
-  return request<{ requests: ErasureRequest[] }>(hp(`/erasure/requests${query ? `?${query}` : ''}`))
+  return request<ErasureRequestListResponse>(hp(`/erasure/requests${query ? `?${query}` : ''}`))
 }
 
 export async function adminEraseUser(userId: string, justification: string) {
-  return request<{ ok: true }>(hp(`/erasure/${userId}`), {
+  return request<OkResponse>(hp(`/erasure/${userId}`), {
     method: 'POST',
     body: JSON.stringify({ justification }),
   })
 }
 
 export async function remoteWipeDevice(userId: string, devicePubkey: string) {
-  return request<{ ok: true }>(hp(`/erasure/${userId}/wipe-device/${encodeURIComponent(devicePubkey)}`), {
+  return request<OkResponse>(hp(`/erasure/${userId}/wipe-device/${encodeURIComponent(devicePubkey)}`), {
     method: 'POST',
   })
 }
 
 export async function getErasureConfig() {
-  return request<{ config: ErasureConfig }>(hp('/erasure/config'))
+  return request<ErasureConfigResponse>(hp('/erasure/config'))
 }
 
-export async function updateErasureConfig(data: { delayHours?: number; emergencyOverrideEnabled?: boolean }) {
-  return request<{ config: ErasureConfig }>(hp('/erasure/config'), {
+export async function updateErasureConfig(data: UpdateErasureConfigBody) {
+  return request<ErasureConfigResponse>(hp('/erasure/config'), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
@@ -72,28 +67,28 @@ export async function listEnvelopeRevocationJobs(params?: { userId?: string }) {
   const qs = new URLSearchParams()
   if (params?.userId) qs.set('userId', params.userId)
   const query = qs.toString()
-  return request<{ jobs: EnvelopeRevocationJob[] }>(hp(`/erasure/envelope-revocation-jobs${query ? `?${query}` : ''}`))
+  return request<EnvelopeRevocationJobListResponse>(hp(`/erasure/envelope-revocation-jobs${query ? `?${query}` : ''}`))
 }
 
 // --- Retention ---
 
 export async function getRetentionSettings() {
-  return request<{ settings: RetentionSetting[] }>(hp('/retention'))
+  return request<RetentionSettingsResponse>(hp('/retention'))
 }
 
-export async function updateRetentionSettings(data: { category: string; retentionDays: number }) {
-  return request<{ setting: RetentionSetting }>(hp('/retention'), {
+export async function updateRetentionSettings(data: UpdateRetentionBody) {
+  return request<RetentionSettingsResponse>(hp('/retention'), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
 }
 
 export async function getRetentionPlatformFloors() {
-  return request<{ floors: RetentionPlatformFloor[] }>('/retention/platform-floors')
+  return request<RetentionFloorsResponse>('/retention/platform-floors')
 }
 
-export async function updateRetentionPlatformFloor(data: { category: string; minRetentionDays: number }) {
-  return request<{ floor: RetentionPlatformFloor }>('/retention/platform-floors', {
+export async function updateRetentionPlatformFloor(data: UpdateRetentionFloorsBody) {
+  return request<RetentionFloorsResponse>('/retention/platform-floors', {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
@@ -174,17 +169,17 @@ export async function createPlatformBan(data: PlatformBanEntry) {
 /** Lift a platform ban. Requires the admin's confirmation of exactly this ban (#2575). */
 export async function deletePlatformBan(id: string, confirmed: DeletionConfirmed) {
   DeletionConfirmed.require(confirmed, 'platformBan', id)
-  return request<{ ok: true }>(`/admin/bans/${id}`, { method: 'DELETE' })
+  return request<OkResponse>(`/admin/bans/${id}`, { method: 'DELETE' })
 }
 
 /** Dismiss a platform ban that had to be re-entered, once its number is banned again (#2829). */
 export async function dismissPlatformBanReentry(id: string) {
-  return request<{ ok: true }>(`/admin/bans/reentries/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  return request<OkResponse>(`/admin/bans/reentries/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export async function bulkImportPlatformBans(data: PlatformBanBulkEntry) {
   const phoneHashes = await platformBanDigests(data.phones)
-  return request<BulkBanResponse>('/admin/bans/bulk', {
+  return request<PlatformBulkBanResponse>('/admin/bans/bulk', {
     method: 'POST',
     body: JSON.stringify({ phoneHashes, reason: data.reason }),
   })
@@ -220,11 +215,11 @@ export async function promoteHubBan(banId: string, sourceHubId: string, phone: s
 // --- Platform Settings ---
 
 export async function getPlatformSettings() {
-  return request<{ settings: PlatformSettings }>('/settings/platform')
+  return request<PlatformSettingsResponse>('/settings/platform')
 }
 
-export async function updatePlatformSettings(data: Partial<PlatformSettings>) {
-  return request<{ settings: PlatformSettings }>('/settings/platform', {
+export async function updatePlatformSettings(data: UpdatePlatformSettingsBody) {
+  return request<PlatformSettingsResponse>('/settings/platform', {
     method: 'PATCH',
     body: JSON.stringify(data),
   })

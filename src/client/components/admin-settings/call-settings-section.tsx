@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { updateCallSettings, type CallSettings } from '@/lib/api'
+import { updateCallSettings } from '@/lib/api'
+import type { CallSettingsResponse } from '@protocol/schemas'
 import { SettingsSection } from '@/components/settings-section'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
@@ -8,8 +9,8 @@ import { PhoneForwarded } from 'lucide-react'
 
 interface Props {
   hubId: string
-  settings: CallSettings
-  onChange: (settings: CallSettings) => void
+  settings: CallSettingsResponse
+  onChange: (settings: CallSettingsResponse) => void
   expanded: boolean
   onToggle: (open: boolean) => void
   statusSummary?: string

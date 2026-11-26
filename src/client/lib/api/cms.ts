@@ -1,6 +1,7 @@
 import { request, hp } from './client'
 import type { CreateEntityTypeBody, TemplateSummary } from '@protocol/schemas/entity-schema'
-import type { EntityTypeDefinition, EntityFieldDefinition, EnumOption, EntityCategory } from '@shared/types'
+import type { EntityTypeDefinition, EntityFieldDefinition, EnumOption, EntityCategory } from '@protocol/schemas'
+import type { EnabledResponse, EntityTemplateCustomizeBody, EntityTypeListResponse, OkResponse, TemplateApplyResponse, TemplateListResponse, UpdateEntityTypeBody } from '@protocol/schemas'
 
 export type { EntityTypeDefinition, EntityFieldDefinition, EnumOption, EntityCategory }
 export type { CreateEntityTypeBody }
@@ -9,18 +10,18 @@ export type { TemplateSummary }
 // --- Case Management (CMS) ---
 
 export async function getCaseManagementEnabled() {
-  return request<{ enabled: boolean }>(hp('/settings/cms/case-management'))
+  return request<EnabledResponse>(hp('/settings/cms/case-management'))
 }
 
 export async function setCaseManagementEnabled(enabled: boolean) {
-  return request<{ enabled: boolean }>(hp('/settings/cms/case-management'), {
+  return request<EnabledResponse>(hp('/settings/cms/case-management'), {
     method: 'PUT',
     body: JSON.stringify({ enabled }),
   })
 }
 
 export async function listEntityTypes() {
-  return request<{ entityTypes: EntityTypeDefinition[] }>(hp('/settings/cms/entity-types'))
+  return request<EntityTypeListResponse>(hp('/settings/cms/entity-types'))
 }
 
 export async function createEntityType(body: CreateEntityTypeBody) {
@@ -30,7 +31,7 @@ export async function createEntityType(body: CreateEntityTypeBody) {
   })
 }
 
-export async function updateEntityType(id: string, body: Partial<CreateEntityTypeBody> & { isArchived?: boolean }) {
+export async function updateEntityType(id: string, body: UpdateEntityTypeBody) {
   return request<EntityTypeDefinition>(hp(`/settings/cms/entity-types/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(body),
@@ -39,7 +40,7 @@ export async function updateEntityType(id: string, body: Partial<CreateEntityTyp
 
 export async function customizeEntityType(
   id: string,
-  body: import('@protocol/schemas/entity-schema').EntityTemplateCustomizeBody,
+  body: EntityTemplateCustomizeBody,
 ) {
   return request<EntityTypeDefinition>(hp(`/settings/cms/entity-types/${id}/customize`), {
     method: 'PATCH',
@@ -48,17 +49,17 @@ export async function customizeEntityType(
 }
 
 export async function deleteEntityType(id: string) {
-  return request<{ ok: boolean }>(hp(`/settings/cms/entity-types/${id}`), {
+  return request<OkResponse>(hp(`/settings/cms/entity-types/${id}`), {
     method: 'DELETE',
   })
 }
 
 export async function listTemplates() {
-  return request<{ templates: TemplateSummary[]; appliedTemplateIds?: string[] }>(hp('/settings/cms/templates'))
+  return request<TemplateListResponse>(hp('/settings/cms/templates'))
 }
 
 export async function applyTemplate(templateId: string) {
-  return request<{ applied: boolean; entityTypes: number }>(hp('/settings/cms/templates/apply'), {
+  return request<TemplateApplyResponse>(hp('/settings/cms/templates/apply'), {
     method: 'POST',
     body: JSON.stringify({ templateId }),
     headers: { 'Content-Type': 'application/json' },
@@ -83,11 +84,11 @@ export async function getTemplateDetails(templateId: string) {
 // different response shapes. Preserved as-is from the original api.ts —
 // this split is a mechanical move, not a behavior change or cleanup.
 
-export async function listEntityTemplates(): Promise<{ templates: TemplateSummary[]; appliedTemplateIds: string[] }> {
+export async function listEntityTemplates(): Promise<TemplateListResponse> {
   return request('/settings/cms/templates')
 }
 
-export async function applyEntityTemplate(templateId: string): Promise<{ applied: boolean; entityTypeId: string }> {
+export async function applyEntityTemplate(templateId: string): Promise<TemplateApplyResponse> {
   return request('/settings/cms/templates/apply', {
     method: 'POST',
     body: JSON.stringify({ templateId }),

@@ -19,6 +19,7 @@ export type TeamResponse = z.infer<typeof teamResponseSchema>
 export const teamListResponseSchema = z.object({
   teams: z.array(teamResponseSchema),
 })
+export type TeamListResponse = z.infer<typeof teamListResponseSchema>
 
 export const teamMemberResponseSchema = z.object({
   teamId: z.string(),
@@ -32,6 +33,7 @@ export type TeamMemberResponse = z.infer<typeof teamMemberResponseSchema>
 export const teamMemberListResponseSchema = z.object({
   members: z.array(teamMemberResponseSchema),
 })
+export type TeamMemberListResponse = z.infer<typeof teamMemberListResponseSchema>
 
 export const contactTeamAssignmentResponseSchema = z.object({
   id: z.string(),
@@ -47,6 +49,7 @@ export type ContactTeamAssignmentResponse = z.infer<typeof contactTeamAssignment
 export const contactTeamAssignmentListResponseSchema = z.object({
   assignments: z.array(contactTeamAssignmentResponseSchema),
 })
+export type ContactTeamAssignmentListResponse = z.infer<typeof contactTeamAssignmentListResponseSchema>
 
 // --- Input schemas ---
 

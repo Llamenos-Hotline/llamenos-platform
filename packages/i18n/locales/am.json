@@ -1879,7 +1879,8 @@
     "noActivity": "ምንም ተግባር አልተመዘገበም",
     "noChannels": "መልዕክት የለም",
     "noShifts": "ለምንም ፈረቃ አልተመደበም",
-    "selectChannels": "ቻናሎች ይምረጡ"
+    "selectChannels": "ቻናሎች ይምረጡ",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "ንቁ",
@@ -2962,7 +2963,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "email": "ኢሜይል",
       "phone": "ስልክ",

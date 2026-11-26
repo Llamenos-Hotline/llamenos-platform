@@ -29,3 +29,18 @@ export const signalRegistrationStateSchema = z.object({
   updatedAt: z.string(),
 })
 export type SignalRegistration = z.infer<typeof signalRegistrationStateSchema>
+
+export const signalRegisterRequestSchema = z.object({
+  bridgeUrl: z.string(),
+  phoneNumber: z.string(),
+  method: z.enum(['sms', 'voice']).optional().default('sms'),
+  hubId: z.string().optional(),
+})
+export type SignalRegisterRequest = z.input<typeof signalRegisterRequestSchema>
+
+export const signalVerifyRequestSchema = z.object({
+  registrationId: z.string(),
+  code: z.string().regex(/^\d{3,8}$/),
+  hubId: z.string().optional(),
+})
+export type SignalVerifyRequest = z.input<typeof signalVerifyRequestSchema>

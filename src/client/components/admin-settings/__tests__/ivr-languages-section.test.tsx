@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
-import type { IvrLanguageSettings } from '@/lib/api'
+import type { IvrLanguageSettings } from '@protocol/schemas'
 
 const toasts: { message: string; type?: string }[] = []
 const saved: string[][] = []

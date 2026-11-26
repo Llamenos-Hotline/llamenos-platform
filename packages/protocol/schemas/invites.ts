@@ -44,6 +44,7 @@ export const inviteValidationResponseSchema = z.object({
 export const inviteListResponseSchema = z.object({
   invites: z.array(inviteResponseSchema),
 })
+export type InviteListResponse = z.infer<typeof inviteListResponseSchema>
 
 // --- Input schemas ---
 

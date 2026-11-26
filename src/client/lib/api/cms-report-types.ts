@@ -1,59 +1,28 @@
 import { request, hp } from './client'
 import type { ReportTypeDefinition } from '@protocol/schemas/report-types'
-import type { EntityFieldDefinition, EnumOption } from '@shared/types'
+import type {  } from '@shared/types'
+import type { CmsReportTypeListResponse, CreateCmsReportTypeBody, OkResponse, UpdateCmsReportTypeBody } from '@protocol/schemas'
 
 export type { ReportTypeDefinition }
 
 // --- CMS Report Type Definitions (Epic 343) ---
 
 export async function listCmsReportTypes() {
-  return request<{ reportTypes: ReportTypeDefinition[] }>(hp('/settings/cms/report-types'))
+  return request<CmsReportTypeListResponse>(hp('/settings/cms/report-types'))
 }
 
 export async function getCmsReportType(id: string) {
   return request<ReportTypeDefinition>(hp(`/settings/cms/report-types/${id}`))
 }
 
-export async function createCmsReportType(body: {
-  name: string
-  label: string
-  labelPlural: string
-  description?: string
-  icon?: string
-  color?: string
-  fields?: Array<Partial<EntityFieldDefinition> & { supportAudioInput?: boolean }>
-  statuses: EnumOption[]
-  defaultStatus: string
-  closedStatuses?: string[]
-  numberPrefix?: string
-  numberingEnabled?: boolean
-  allowFileAttachments?: boolean
-  allowCaseConversion?: boolean
-  mobileOptimized?: boolean
-}) {
+export async function createCmsReportType(body: CreateCmsReportTypeBody) {
   return request<ReportTypeDefinition>(hp('/settings/cms/report-types'), {
     method: 'POST',
     body: JSON.stringify(body),
   })
 }
 
-export async function updateCmsReportType(id: string, body: Partial<{
-  label: string
-  labelPlural: string
-  description: string
-  icon: string
-  color: string
-  fields: Array<Partial<EntityFieldDefinition> & { supportAudioInput?: boolean }>
-  statuses: EnumOption[]
-  defaultStatus: string
-  closedStatuses: string[]
-  numberPrefix: string
-  numberingEnabled: boolean
-  allowFileAttachments: boolean
-  allowCaseConversion: boolean
-  mobileOptimized: boolean
-  isArchived: boolean
-}>) {
+export async function updateCmsReportType(id: string, body: UpdateCmsReportTypeBody) {
   return request<ReportTypeDefinition>(hp(`/settings/cms/report-types/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(body),
@@ -61,7 +30,7 @@ export async function updateCmsReportType(id: string, body: Partial<{
 }
 
 export async function deleteCmsReportType(id: string) {
-  return request<{ archived: boolean; id: string }>(hp(`/settings/cms/report-types/${id}`), {
+  return request<OkResponse>(hp(`/settings/cms/report-types/${id}`), {
     method: 'DELETE',
   })
 }

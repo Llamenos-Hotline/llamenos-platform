@@ -191,3 +191,4 @@ export const securityPrefsResponseSchema = z.object({
   alertOnPinChange: z.boolean(),
   updatedAt: z.string(),
 })
+export type SecurityPrefsResponse = z.infer<typeof securityPrefsResponseSchema>

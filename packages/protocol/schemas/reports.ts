@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { pubkeySchema, paginationSchema, recipientEnvelopeSchema } from './common'
-import { conversationResponseSchema } from './conversations'
+import { conversationResponseSchema, conversationMetadataSchema } from './conversations'
 import { fileRecordSchema } from './files'
 
 // --- Response schemas ---
@@ -34,16 +34,28 @@ export const conversionStatusEnum = z.enum(['pending', 'in_progress', 'completed
 
 // --- List/wrapper response schemas ---
 
+/**
+ * A report is a conversation whose metadata is stamped `type: 'report'`; every
+ * `/reports` route 404s a conversation that is not one, so on this surface
+ * `metadata` is never absent.
+ */
+export const reportConversationSchema = conversationResponseSchema.extend({
+  metadata: conversationMetadataSchema.extend({ type: z.literal('report') }),
+})
+export type Report = z.infer<typeof reportConversationSchema>
+
 export const reportListResponseSchema = z.object({
   // The route returns full conversation rows (services.conversations.list) —
   // the reports list IS the report-type conversation list.
-  conversations: z.array(conversationResponseSchema),
+  conversations: z.array(reportConversationSchema),
   total: z.number(),
 })
+export type ReportListResponse = z.infer<typeof reportListResponseSchema>
 
 export const reportCategoriesResponseSchema = z.object({
   categories: z.array(z.string()),
 })
+export type ReportCategoriesResponse = z.infer<typeof reportCategoriesResponseSchema>
 
 /** A report's completed attachments — the file rows themselves (names stay encrypted). */
 export const reportFilesResponseSchema = z.object({
@@ -61,6 +73,7 @@ export const reportLinkedCasesResponseSchema = z.object({
   })),
   total: z.number(),
 })
+export type ReportLinkedCasesResponse = z.infer<typeof reportLinkedCasesResponseSchema>
 
 // --- Input schemas ---
 
@@ -78,12 +91,14 @@ export const createReportBodySchema = z.object({
   encryptedContent: z.string().min(1, 'Report content is required').max(131072),
   readerEnvelopes: z.array(recipientEnvelopeSchema).min(1, 'At least one reader envelope required'),
 })
+export type CreateReportBody = z.input<typeof createReportBodySchema>
 
 export const reportMessageBodySchema = z.object({
   encryptedContent: z.string().min(1, 'encryptedContent is required').max(65536),
   readerEnvelopes: z.array(recipientEnvelopeSchema).min(1, 'At least one reader envelope required'),
   attachmentIds: z.array(z.string()).optional(),
 })
+export type ReportMessageBody = z.input<typeof reportMessageBodySchema>
 
 export const assignReportBodySchema = z.object({
   assignedTo: pubkeySchema,
@@ -93,3 +108,4 @@ export const updateReportBodySchema = z.object({
   status: z.enum(['waiting', 'active', 'closed']).optional(),
   conversionStatus: conversionStatusEnum.optional(),
 })
+export type UpdateReportBody = z.input<typeof updateReportBodySchema>

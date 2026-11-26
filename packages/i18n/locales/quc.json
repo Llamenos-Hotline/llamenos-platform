@@ -1879,7 +1879,8 @@
     "noActivity": "Majun b'antajik yakon",
     "noChannels": "Majun tzijob'al",
     "noShifts": "Majun samaj ya'on",
-    "selectChannels": "Kechax taq b'eyal"
+    "selectChannels": "Kechax taq b'eyal",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Samajin",
@@ -2348,7 +2349,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "companyName": "Company Name",
       "brandSid": "Brand SID",

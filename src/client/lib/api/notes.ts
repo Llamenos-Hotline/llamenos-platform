@@ -1,5 +1,5 @@
 import { request, hubPath, activeHubPath, NoActiveHubError } from './client'
-import type { EncryptedNote, ConversationMessage } from '@protocol/schemas'
+import type { EncryptedNote, CreateNoteBody, CreateReplyBody, NoteListResponse, NoteRepliesResponse, NoteReplyStoredResponse, NoteStoredResponse, UpdateNoteBody } from '@protocol/schemas'
 
 export type { EncryptedNote }
 
@@ -12,34 +12,23 @@ export async function listNotes(params?: { callId?: string; conversationId?: str
   if (params?.contactHash) qs.set('contactHash', params.contactHash)
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ notes: EncryptedNote[]; total: number }>(activeHubPath(`/notes?${qs}`))
+  return request<NoteListResponse>(activeHubPath(`/notes?${qs}`))
 }
 
-export async function createNote(data: {
-  callId?: string
-  conversationId?: string
-  contactHash?: string
-  encryptedContent: string
-  authorEnvelope?: import('@shared/types').KeyEnvelope
-  adminEnvelopes?: import('@shared/types').RecipientEnvelope[]
-}, hubId: string | null) {
+export async function createNote(data: CreateNoteBody, hubId: string | null) {
   // A note belongs to the hub of the call/conversation it is about, which may not be
   // the active one (multi-hub axiom). `hubId` is therefore required: omitting it is a
   // type error instead of a silent filing into the active hub. With no hub known there
   // is nowhere to file it: notes have no unscoped route (#2395).
   if (!hubId) throw new NoActiveHubError('/notes')
-  return request<{ note: EncryptedNote }>(hubPath(hubId, '/notes'), {
+  return request<NoteStoredResponse>(hubPath(hubId, '/notes'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
-export async function updateNote(id: string, data: {
-  encryptedContent: string
-  authorEnvelope?: import('@shared/types').KeyEnvelope
-  adminEnvelopes?: import('@shared/types').RecipientEnvelope[]
-}) {
-  return request<{ note: EncryptedNote }>(activeHubPath(`/notes/${id}`), {
+export async function updateNote(id: string, data: UpdateNoteBody) {
+  return request<NoteStoredResponse>(activeHubPath(`/notes/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
@@ -47,14 +36,11 @@ export async function updateNote(id: string, data: {
 
 // Note replies (Epic 123)
 export async function listNoteReplies(noteId: string) {
-  return request<{ replies: ConversationMessage[] }>(activeHubPath(`/notes/${noteId}/replies`))
+  return request<NoteRepliesResponse>(activeHubPath(`/notes/${noteId}/replies`))
 }
 
-export async function createNoteReply(noteId: string, data: {
-  encryptedContent: string
-  readerEnvelopes: import('@shared/types').RecipientEnvelope[]
-}) {
-  return request<{ reply: ConversationMessage }>(activeHubPath(`/notes/${noteId}/replies`), {
+export async function createNoteReply(noteId: string, data: CreateReplyBody) {
+  return request<NoteReplyStoredResponse>(activeHubPath(`/notes/${noteId}/replies`), {
     method: 'POST',
     body: JSON.stringify(data),
   })

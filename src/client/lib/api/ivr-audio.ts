@@ -1,7 +1,7 @@
 import { request, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
-import type { IvrAudioListResponse, IvrAudioRecording } from '@protocol/schemas'
+import type { IvrAudioListResponse, IvrAudioRecording, SuccessResponse } from '@protocol/schemas'
 import { toIvrPromptWav } from '../ivr-wav'
 
 export type { IvrAudioRecording }
@@ -56,5 +56,5 @@ export async function downloadIvrAudio(promptType: string, language: string): Pr
 }
 
 export async function deleteIvrAudio(promptType: string, language: string) {
-  return request<{ ok: true }>(`/settings/ivr-audio/${promptType}/${language}`, { method: 'DELETE' })
+  return request<SuccessResponse>(`/settings/ivr-audio/${promptType}/${language}`, { method: 'DELETE' })
 }

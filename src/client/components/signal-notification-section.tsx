@@ -25,7 +25,7 @@ import {
   getSignalHmacKey,
   getSecurityPrefs,
   updateSecurityPrefs,
-  type SecurityPrefs,
+  type SecurityPrefsResponse,
   type SignalContactRecord,
 } from '@/lib/api'
 import { Label } from '@/components/ui/label'
@@ -112,7 +112,7 @@ export function SignalNotificationSection({ available = true }: SignalNotificati
 
   const [loading, setLoading] = useState(true)
   const [contact, setContact] = useState<SignalContactRecord | null>(null)
-  const [prefs, setPrefs] = useState<SecurityPrefs | null>(null)
+  const [prefs, setPrefs] = useState<SecurityPrefsResponse | null>(null)
 
   // Registration form state
   const [identifier, setIdentifier] = useState('')
@@ -188,7 +188,7 @@ export function SignalNotificationSection({ available = true }: SignalNotificati
     }
   }
 
-  async function handlePrefsUpdate(patch: Partial<Omit<SecurityPrefs, 'updatedAt'>>) {
+  async function handlePrefsUpdate(patch: Partial<Omit<SecurityPrefsResponse, 'updatedAt'>>) {
     if (!prefs) return
     setPrefsUpdating(true)
     try {

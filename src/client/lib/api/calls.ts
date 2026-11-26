@@ -1,7 +1,7 @@
 import { request, activeHubPath, hubPath, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError, isRetryable, MAX_RETRIES, BASE_RETRY_DELAY } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
-import type { CallRecord, UserPresence } from '@protocol/schemas'
+import type { CallRecord, UserPresence, ActiveCallsResponse, CallActionResponse, CallHistoryResponse, CallPresenceResponse, OkResponse, TodayCountResponse } from '@protocol/schemas'
 
 export type { UserPresence }
 export type { CallRecord }
@@ -23,7 +23,7 @@ export type HubCall = ActiveCall & { hubId: string }
  * The hub is the one we asked, not anything the row claims about itself.
  */
 export async function listActiveCalls(hubId: string): Promise<{ calls: HubCall[] }> {
-  const { calls } = await request<{ calls: ActiveCall[] }>(hubPath(hubId, '/calls/active'))
+  const { calls } = await request<ActiveCallsResponse>(hubPath(hubId, '/calls/active'))
   return { calls: calls.map(call => ({ ...call, hubId })) }
 }
 
@@ -35,7 +35,7 @@ export async function getCallHistory(params?: { page?: number; limit?: number; s
   if (params?.dateFrom) qs.set('dateFrom', params.dateFrom)
   if (params?.dateTo) qs.set('dateTo', params.dateTo)
   if (params?.status) qs.set('status', params.status)
-  return request<{ calls: CallRecord[]; total: number }>(activeHubPath(`/calls/history?${qs}`))
+  return request<CallHistoryResponse>(activeHubPath(`/calls/history?${qs}`))
 }
 
 // --- Call Actions (REST) ---
@@ -43,21 +43,21 @@ export async function getCallHistory(params?: { page?: number; limit?: number; s
 // callId AND hubId, so acting on hub B's call through hub A's path 404s.
 
 export async function answerCall(callId: string, hubId: string) {
-  return request<{ call: ActiveCall }>(hubPath(hubId, `/calls/${callId}/answer`), { method: 'POST' })
+  return request<CallActionResponse>(hubPath(hubId, `/calls/${callId}/answer`), { method: 'POST' })
 }
 
 export async function hangupCall(callId: string, hubId: string) {
-  return request<{ call: ActiveCall }>(hubPath(hubId, `/calls/${callId}/hangup`), { method: 'POST' })
+  return request<CallActionResponse>(hubPath(hubId, `/calls/${callId}/hangup`), { method: 'POST' })
 }
 
 export async function reportCallSpam(callId: string, hubId: string) {
-  return request<{ callId: string; callerNumber: string | null; reportedBy: string }>(hubPath(hubId, `/calls/${callId}/spam`), { method: 'POST' })
+  return request<OkResponse>(hubPath(hubId, `/calls/${callId}/spam`), { method: 'POST' })
 }
 
 // --- Calls Today ---
 
 export async function getCallsTodayCount() {
-  return request<{ count: number }>(activeHubPath('/calls/today-count'))
+  return request<TodayCountResponse>(activeHubPath('/calls/today-count'))
 }
 
 // --- Call Recording ---
@@ -99,5 +99,5 @@ export async function getCallRecording(callId: string): Promise<ArrayBuffer> {
 // --- User Presence (admin only) ---
 
 export async function getUserPresence() {
-  return request<{ users: UserPresence[] }>(activeHubPath('/calls/presence'))
+  return request<CallPresenceResponse>(activeHubPath('/calls/presence'))
 }

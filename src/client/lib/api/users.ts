@@ -1,5 +1,5 @@
 import { request, hp, hubPath } from './client'
-import type { User } from '@protocol/schemas'
+import type { User, AdminUpdateUserBody, OkResponse, UserListResponse } from '@protocol/schemas'
 
 export type { User }
 
@@ -9,7 +9,7 @@ export type UserRole = 'volunteer' | 'admin' | 'reporter'
 // --- Users (admin only) ---
 
 export async function listUsers() {
-  return request<{ users: User[] }>(hp('/users'))
+  return request<UserListResponse>(hp('/users'))
 }
 
 /**
@@ -18,17 +18,10 @@ export async function listUsers() {
  * come from the item's hub, never from whatever hub the user happens to be browsing.
  */
 export async function listHubUsers(hubId: string) {
-  return request<{ users: User[] }>(hubPath(hubId, '/users'))
+  return request<UserListResponse>(hubPath(hubId, '/users'))
 }
 
-export async function updateUser(pubkey: string, data: Partial<{
-  name: string
-  phone: string
-  roles: string[]
-  active: boolean
-  supportedMessagingChannels: string[]
-  messagingEnabled: boolean
-}>) {
+export async function updateUser(pubkey: string, data: AdminUpdateUserBody) {
   return request<User>(hp(`/users/${pubkey}`), {
     method: 'PATCH',
     body: JSON.stringify(data),
@@ -36,5 +29,5 @@ export async function updateUser(pubkey: string, data: Partial<{
 }
 
 export async function deleteUser(pubkey: string) {
-  return request<{ ok: true }>(hp(`/users/${pubkey}`), { method: 'DELETE' })
+  return request<OkResponse>(hp(`/users/${pubkey}`), { method: 'DELETE' })
 }

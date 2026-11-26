@@ -5,7 +5,6 @@ import type {
   SignalAccountInfo,
 } from '@protocol/schemas/setup'
 import type {
-  SecurityPrefs,
   SignalIdentityRecord,
   SignalQueueStats,
   SignalContactRecord,
@@ -13,46 +12,32 @@ import type {
   SidecarTokenResponse,
   NotifierRegisterPayload,
 } from '@protocol/schemas/signal-notification'
+import type { ConnectionTestResponse, HmacKeyResponse, OkResponse, SecurityPrefsPatch, SecurityPrefsResponse, SignalRegisterBody, SignalUnregisterBody, SignalVerifyBody } from '@protocol/schemas'
 
 export type { SignalRegistrationState }
 export type { SignalAccountInfo }
 export type { SignalIdentityRecord }
 export type { SignalQueueStats }
-export type { SecurityPrefs, SignalContactRecord }
+export type { SecurityPrefsResponse, SignalContactRecord }
 
 // --- Signal Registration & Management ---
 
-export async function signalRegister(data: {
-  bridgeUrl: string
-  bridgeApiKey: string
-  phoneNumber: string
-  useVoice?: boolean
-  captcha?: string
-}) {
+export async function signalRegister(data: SignalRegisterBody) {
   return request<SignalRegistrationState>('/setup/signal/register', {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
-export async function signalVerify(data: {
-  bridgeUrl: string
-  bridgeApiKey: string
-  phoneNumber: string
-  verificationCode: string
-}) {
+export async function signalVerify(data: SignalVerifyBody) {
   return request<SignalRegistrationState>('/setup/signal/verify', {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
-export async function signalUnregister(data: {
-  bridgeUrl: string
-  bridgeApiKey: string
-  registeredNumber: string
-}) {
-  return request<{ ok: boolean; error?: string }>('/setup/signal/unregister', {
+export async function signalUnregister(data: SignalUnregisterBody) {
+  return request<ConnectionTestResponse>('/setup/signal/unregister', {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -89,7 +74,7 @@ export async function getSignalContact(): Promise<SignalContactRecord | null> {
 }
 
 export async function registerSignalContact(body: SignalContactRegistration) {
-  return request<{ ok: boolean }>('/signal-notification/contact', {
+  return request<OkResponse>('/signal-notification/contact', {
     method: 'PUT',
     body: JSON.stringify(body),
   })
@@ -167,16 +152,16 @@ export async function deleteSignalContact() {
   return request<null>('/signal-notification/contact', { method: 'DELETE' })
 }
 
-export async function getSignalHmacKey(): Promise<{ hmacKey: string }> {
-  return request<{ hmacKey: string }>('/signal-notification/hmac-key')
+export async function getSignalHmacKey() {
+  return request<HmacKeyResponse>('/signal-notification/hmac-key')
 }
 
-export async function getSecurityPrefs(): Promise<SecurityPrefs> {
-  return request<SecurityPrefs>('/signal-notification/security-prefs')
+export async function getSecurityPrefs() {
+  return request<SecurityPrefsResponse>('/signal-notification/security-prefs')
 }
 
-export async function updateSecurityPrefs(patch: Partial<Omit<SecurityPrefs, 'updatedAt'>>) {
-  return request<SecurityPrefs>('/signal-notification/security-prefs', {
+export async function updateSecurityPrefs(patch: SecurityPrefsPatch) {
+  return request<SecurityPrefsResponse>('/signal-notification/security-prefs', {
     method: 'PATCH',
     body: JSON.stringify(patch),
   })

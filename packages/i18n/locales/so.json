@@ -1879,7 +1879,8 @@
     "noActivity": "Dhaqdhaqaaq lama diiwaangelin",
     "noChannels": "Fariimo la'aan",
     "noShifts": "Wareeg lama qoondeyn",
-    "selectChannels": "Dooro kanaalada"
+    "selectChannels": "Dooro kanaalada",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Firfircoon",
@@ -2358,7 +2359,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "brandFormTitle": "Brand Registration",
       "address": "Cinwaan",

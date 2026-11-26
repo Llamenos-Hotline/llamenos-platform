@@ -1879,7 +1879,8 @@
     "noActivity": "Активності не зафіксовано",
     "noChannels": "Без повідомлень",
     "noShifts": "Не призначено жодної зміни",
-    "selectChannels": "Оберіть канали"
+    "selectChannels": "Оберіть канали",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Активний",
@@ -1971,7 +1972,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "ein": "EIN / Tax ID",
       "phone": "Телефон",

@@ -6,7 +6,7 @@ import type {
   Conversation,
   ConversationListResponse,
   ConversationMessage,
-  MessageListResponse,
+  MessageListResponse, SendMessageBody, UpdateConversationBody, VolunteerLoadResponse,
 } from '@protocol/schemas'
 
 export type { Conversation, ConversationMessage }
@@ -46,11 +46,7 @@ export async function getConversationMessages(hubId: string, id: string, params?
   return request<MessageListResponse>(hubPath(hubId, `/conversations/${id}/messages?${qs}`))
 }
 
-export async function sendConversationMessage(hubId: string, id: string, data: {
-  encryptedContent: string
-  readerEnvelopes: import('@shared/types').RecipientEnvelope[]
-  plaintextForSending?: string
-}) {
+export async function sendConversationMessage(hubId: string, id: string, data: SendMessageBody) {
   return request<ConversationMessage>(hubPath(hubId, `/conversations/${id}/messages`), {
     method: 'POST',
     body: JSON.stringify(data),
@@ -62,7 +58,7 @@ export async function claimConversation(hubId: string, id: string): Promise<HubC
   return { ...conversation, hubId }
 }
 
-export async function updateConversation(hubId: string, id: string, data: { status?: string; assignedTo?: string }): Promise<HubConversation> {
+export async function updateConversation(hubId: string, id: string, data: UpdateConversationBody): Promise<HubConversation> {
   const conversation = await request<Conversation>(hubPath(hubId, `/conversations/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(data),
@@ -71,7 +67,7 @@ export async function updateConversation(hubId: string, id: string, data: { stat
 }
 
 export async function getUserLoads(hubId: string) {
-  return request<{ loads: Record<string, number> }>(hubPath(hubId, '/conversations/load'))
+  return request<VolunteerLoadResponse>(hubPath(hubId, '/conversations/load'))
 }
 
 // --- Assignee re-wrap (#1512, #2046) ---
@@ -85,7 +81,7 @@ export async function getUserLoads(hubId: string) {
  */
 export async function listActiveConversationsInHub(hubId: string, page: number, limit: number) {
   const qs = new URLSearchParams({ status: 'active', page: String(page), limit: String(limit) })
-  return request<Pick<ConversationListResponse, 'conversations' | 'total'>>(hubPath(hubId, `/conversations?${qs}`))
+  return request<ConversationListResponse>(hubPath(hubId, `/conversations?${qs}`))
 }
 
 /** Messages the current assignee cannot open yet (≤ 200, oldest first). */

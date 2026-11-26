@@ -92,6 +92,7 @@ export const conversationStatsResponseSchema = z.object({
 export const volunteerLoadResponseSchema = z.object({
   loads: z.record(z.string(), z.number()),
 })
+export type VolunteerLoadResponse = z.infer<typeof volunteerLoadResponseSchema>
 
 // --- Assignee re-wrap (#1512, #2046) ---
 //
@@ -198,6 +199,7 @@ export const sendMessageBodySchema = z.object({
   /** Provider-assigned external message ID (used by simulation/test flows) */
   externalId: z.string().optional(),
 })
+export type SendMessageBody = z.input<typeof sendMessageBodySchema>
 
 export const updateConversationBodySchema = z.object({
   status: z.enum(['waiting', 'active', 'closed']).optional(),
@@ -205,6 +207,7 @@ export const updateConversationBodySchema = z.object({
   /** Merged into the stored metadata, so it is held to the shape the response declares. */
   metadata: conversationMetadataSchema.optional(),
 })
+export type UpdateConversationBody = z.input<typeof updateConversationBodySchema>
 
 export const claimConversationBodySchema = z.object({
   pubkey: pubkeySchema,

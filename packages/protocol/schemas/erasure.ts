@@ -33,6 +33,7 @@ export const updateErasureConfigBodySchema = z.object({
   delayHours: z.number().int().min(24).max(168).optional(),
   emergencyOverrideEnabled: z.boolean().optional(),
 })
+export type UpdateErasureConfigBody = z.input<typeof updateErasureConfigBodySchema>
 
 // --- Erasure request ---
 
@@ -101,10 +102,12 @@ export type EnvelopeRevocationJob = z.infer<typeof envelopeRevocationJobSchema>
 export const erasureConfigResponseSchema = z.object({
   config: erasureConfigSchema,
 })
+export type ErasureConfigResponse = z.infer<typeof erasureConfigResponseSchema>
 
 export const erasureRequestResponseSchema = z.object({
   request: erasureRequestSchema,
 })
+export type ErasureRequestResponse = z.infer<typeof erasureRequestResponseSchema>
 
 /** `GET /erasure/me`: the caller's own request, or `null` when they have none. */
 export const myErasureRequestResponseSchema = z.object({
@@ -117,10 +120,12 @@ export const erasureRequestListResponseSchema = z.object({
   requests: z.array(erasureRequestSchema),
   total: z.number(),
 })
+export type ErasureRequestListResponse = z.infer<typeof erasureRequestListResponseSchema>
 
 export const envelopeRevocationJobListResponseSchema = z.object({
   jobs: z.array(envelopeRevocationJobSchema),
 })
+export type EnvelopeRevocationJobListResponse = z.infer<typeof envelopeRevocationJobListResponseSchema>
 
 // --- Device wipe body ---
 

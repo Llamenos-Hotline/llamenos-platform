@@ -9,10 +9,10 @@ import type {
   NumberSearchQuery,
   NumberProvisionRequest,
   OwnedNumber,
-  AvailableNumber,
   WebhookUrlsResponse,
 } from '@protocol/schemas/provider-setup'
 import type { TelephonyProviderType } from '@shared/types'
+import type { A2pRegistrationState, AvailableNumberList, OkResponse, OwnedNumberList, SignalRegisterRequest, SignalRegistration, SignalVerifyRequest } from '@protocol/schemas'
 
 // ── OAuth ──────────────────────────────────────────────────────────────────
 
@@ -49,8 +49,8 @@ export async function configureProvider(
   provider: TelephonyProviderType,
   credentials: Record<string, string>,
   hubId?: string,
-): Promise<{ ok: true }> {
-  return request<{ ok: true }>('/provider-setup/configure', {
+) {
+  return request<OkResponse>('/provider-setup/configure', {
     method: 'POST',
     body: JSON.stringify({ provider, credentials, hubId } satisfies ConfigureProviderRequest),
   })
@@ -90,11 +90,11 @@ export async function listPhoneNumbers(
   const qs = new URLSearchParams()
   qs.set('provider', provider)
   if (hubId) qs.set('hubId', hubId)
-  return request<{ numbers: OwnedNumber[] }>(`/provider-setup/phone-numbers?${qs}`)
+  return request<OwnedNumberList>(`/provider-setup/phone-numbers?${qs}`)
 }
 
-export async function searchPhoneNumbers(query: NumberSearchQuery): Promise<{ numbers: AvailableNumber[] }> {
-  return request<{ numbers: AvailableNumber[] }>('/provider-setup/phone-numbers/search', {
+export async function searchPhoneNumbers(query: NumberSearchQuery) {
+  return request<AvailableNumberList>('/provider-setup/phone-numbers/search', {
     method: 'POST',
     body: JSON.stringify(query),
   })
@@ -113,8 +113,8 @@ export async function configureWebhooks(
   provider: string,
   numberId: string,
   opts?: { enableSms?: boolean; hubId?: string },
-): Promise<{ ok: true }> {
-  return request<{ ok: true }>('/provider-setup/configure-webhooks', {
+) {
+  return request<OkResponse>('/provider-setup/configure-webhooks', {
     method: 'POST',
     body: JSON.stringify({
       provider,
@@ -172,9 +172,9 @@ export interface SignalRegistrationResult {
 }
 
 export async function startSignalRegistration(
-  body: SignalRegisterBody,
-): Promise<SignalRegistrationResult> {
-  return request<SignalRegistrationResult>('/provider-setup/signal/register', {
+  body: SignalRegisterRequest,
+) {
+  return request<SignalRegistration>('/provider-setup/signal/register', {
     method: 'POST',
     body: JSON.stringify(body),
   })
@@ -186,11 +186,11 @@ export async function getSignalStatus(
   const qs = new URLSearchParams()
   if (opts?.registrationId) qs.set('registrationId', opts.registrationId)
   if (opts?.hubId) qs.set('hubId', opts.hubId)
-  return request<SignalRegistrationResult>(`/provider-setup/signal/status?${qs}`)
+  return request<SignalRegistration>(`/provider-setup/signal/status?${qs}`)
 }
 
-export async function verifySignalCode(body: SignalVerifyBody): Promise<SignalRegistrationResult> {
-  return request<SignalRegistrationResult>('/provider-setup/signal/verify', {
+export async function verifySignalCode(body: SignalVerifyRequest) {
+  return request<SignalRegistration>('/provider-setup/signal/verify', {
     method: 'POST',
     body: JSON.stringify(body),
   })
@@ -199,11 +199,11 @@ export async function verifySignalCode(body: SignalVerifyBody): Promise<SignalRe
 export async function unregisterSignal(
   registrationId: string,
   hubId?: string,
-): Promise<{ ok: true }> {
+) {
   const qs = new URLSearchParams()
   qs.set('registrationId', registrationId)
   if (hubId) qs.set('hubId', hubId)
-  return request<{ ok: true }>(`/provider-setup/signal/unregister?${qs}`, { method: 'DELETE' })
+  return request<OkResponse>(`/provider-setup/signal/unregister?${qs}`, { method: 'DELETE' })
 }
 
 export async function getSignalAccount(
@@ -247,7 +247,7 @@ export async function submitA2PBrand(
   brandInfo: A2PBrandInfo,
   providerType?: string,
   hubId?: string,
-): Promise<{ id: string; status: string }> {
+): Promise<A2pRegistrationState> {
   return request('/provider-setup/a2p/brand', {
     method: 'POST',
     body: JSON.stringify({ brandInfo, providerType: providerType ?? 'twilio', hubId }),
@@ -258,7 +258,7 @@ export async function submitA2PCampaign(
   registrationId: string,
   campaignInfo: A2PCampaignInfo,
   hubId?: string,
-): Promise<{ id: string; status: string }> {
+): Promise<A2pRegistrationState> {
   return request('/provider-setup/a2p/campaign', {
     method: 'POST',
     body: JSON.stringify({ registrationId, campaignInfo, hubId }),
@@ -267,14 +267,14 @@ export async function submitA2PCampaign(
 
 export async function getA2PStatus(
   opts?: { registrationId?: string; hubId?: string },
-): Promise<{ id: string; status: string; brandStatus?: string; campaignStatus?: string; error?: string }> {
+): Promise<A2pRegistrationState> {
   const qs = new URLSearchParams()
   if (opts?.registrationId) qs.set('registrationId', opts.registrationId)
   if (opts?.hubId) qs.set('hubId', opts.hubId)
   return request(`/provider-setup/a2p/status?${qs}`)
 }
 
-export async function skipA2P(providerType?: string, hubId?: string): Promise<{ id: string; status: string }> {
+export async function skipA2P(providerType?: string, hubId?: string): Promise<A2pRegistrationState> {
   return request('/provider-setup/a2p/skip', {
     method: 'POST',
     body: JSON.stringify({ providerType: providerType ?? 'twilio', hubId }),

@@ -1879,7 +1879,8 @@
     "noActivity": "Tu çalakî nehatiye tomarkirin",
     "noChannels": "Tu peyam tune",
     "noShifts": "Tu şift nehatiye destnîşankirin",
-    "selectChannels": "Kanalan hilbijêre"
+    "selectChannels": "Kanalan hilbijêre",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Çalak",
@@ -2422,7 +2423,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "addSampleMessage": "Add sample message",
       "approved": "A2P Approved",

@@ -225,6 +225,27 @@ describe('blasts routes', () => {
       expect(getBlastSpy).toHaveBeenCalledWith('blast-42')
     })
 
+    // A blast row stores `text`; `blastResponseSchema` (and so every client) speaks `body`.
+    it('answers content in the wire shape (body), not the stored shape (text)', async () => {
+      const { app } = createTestApp({
+        permissions: ['blasts:read'],
+        serviceMock: { blasts: { getBlast: vi.fn().mockResolvedValue(makeBlast({ content: { text: 'Hello', mediaUrl: 'https://example.org/a.png' } })) } },
+      })
+
+      const json = await (await app.request('/blasts/blast-1')).json()
+      expect(json.content).toEqual({ body: 'Hello', mediaUrl: 'https://example.org/a.png' })
+    })
+
+    it('answers multi-language content per language in the wire shape', async () => {
+      const { app } = createTestApp({
+        permissions: ['blasts:read'],
+        serviceMock: { blasts: { getBlast: vi.fn().mockResolvedValue(makeBlast({ content: { en: { text: 'Hello' }, es: { text: 'Hola' } } })) } },
+      })
+
+      const json = await (await app.request('/blasts/blast-1')).json()
+      expect(json.content).toEqual({ en: { body: 'Hello' }, es: { body: 'Hola' } })
+    })
+
     it('requires blasts:read permission', async () => {
       const { app } = createTestApp({ permissions: ['blasts:send'] })
       const res = await app.request('/blasts/blast-1')

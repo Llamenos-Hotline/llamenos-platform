@@ -1,5 +1,5 @@
 import { request, activeHubPath } from './client'
-import type { AuditLogEntry, ListAuditQuery } from '@protocol/schemas'
+import type { AuditLogEntry, ListAuditQuery, AuditListResponse } from '@protocol/schemas'
 
 export type { AuditLogEntry }
 
@@ -19,7 +19,7 @@ function auditQuery(params?: ListAuditQuery): URLSearchParams {
 
 /** The active hub's audit chain. */
 export async function listAuditLog(params?: ListAuditQuery) {
-  return request<{ entries: AuditLogEntry[]; total: number }>(activeHubPath(`/audit?${auditQuery(params)}`))
+  return request<AuditListResponse>(activeHubPath(`/audit?${auditQuery(params)}`))
 }
 
 /**
@@ -27,5 +27,5 @@ export async function listAuditLog(params?: ListAuditQuery) {
  * and permission (`system:view-audit`) — never "the audit log with no hub" (#2395).
  */
 export async function listPlatformAuditLog(params?: ListAuditQuery) {
-  return request<{ entries: AuditLogEntry[]; total: number }>(`/admin/audit?${auditQuery(params)}`)
+  return request<AuditListResponse>(`/admin/audit?${auditQuery(params)}`)
 }

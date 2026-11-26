@@ -1,19 +1,7 @@
 import { request } from './client'
+import type { A2pRegistrationState } from '@protocol/schemas'
 
 // --- A2P Registration ---
-
-export interface A2pRegistration {
-  id: string
-  hubId: string
-  providerType: string
-  brandStatus: 'not_submitted' | 'pending' | 'approved' | 'failed' | 'skipped'
-  campaignStatus: 'not_submitted' | 'pending' | 'approved' | 'failed' | 'skipped'
-  brandSidMasked: string | null
-  campaignSidMasked: string | null
-  error: string | null
-  submittedAt: string | null
-  approvedAt: string | null
-}
 
 export interface BrandInfo {
   entityType: string
@@ -44,30 +32,30 @@ export interface CampaignInfo {
   subscriberHelp?: boolean
 }
 
-export async function getA2pStatus(hubId: string): Promise<A2pRegistration | null> {
+export async function getA2pStatus(hubId: string): Promise<A2pRegistrationState | null> {
   try {
-    return await request<A2pRegistration>(`/provider-setup/a2p/status?hubId=${hubId}`)
+    return await request<A2pRegistrationState>(`/provider-setup/a2p/status?hubId=${hubId}`)
   } catch {
     return null
   }
 }
 
-export async function submitA2pBrand(hubId: string, brandInfo: BrandInfo): Promise<A2pRegistration> {
-  return request<A2pRegistration>('/provider-setup/a2p/brand', {
+export async function submitA2pBrand(hubId: string, brandInfo: BrandInfo) {
+  return request<A2pRegistrationState>('/provider-setup/a2p/brand', {
     method: 'POST',
     body: JSON.stringify({ hubId, brandInfo }),
   })
 }
 
-export async function submitA2pCampaign(registrationId: string, hubId: string, campaignInfo: CampaignInfo): Promise<A2pRegistration> {
-  return request<A2pRegistration>('/provider-setup/a2p/campaign', {
+export async function submitA2pCampaign(registrationId: string, hubId: string, campaignInfo: CampaignInfo) {
+  return request<A2pRegistrationState>('/provider-setup/a2p/campaign', {
     method: 'POST',
     body: JSON.stringify({ registrationId, hubId, campaignInfo }),
   })
 }
 
-export async function skipA2p(hubId: string): Promise<A2pRegistration> {
-  return request<A2pRegistration>('/provider-setup/a2p/skip', {
+export async function skipA2p(hubId: string) {
+  return request<A2pRegistrationState>('/provider-setup/a2p/skip', {
     method: 'POST',
     body: JSON.stringify({ hubId }),
   })

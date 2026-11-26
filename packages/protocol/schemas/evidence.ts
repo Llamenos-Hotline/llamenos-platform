@@ -125,12 +125,14 @@ export const custodyChainResponseSchema = z.object({
   custodyChain: z.array(custodyEntrySchema),
   total: z.number(),
 })
+export type CustodyChainResponse = z.infer<typeof custodyChainResponseSchema>
 
 export const verifyIntegrityResponseSchema = z.object({
   valid: z.boolean(),
   originalHash: z.string(),
   currentHash: z.string(),
 })
+export type VerifyIntegrityResponse = z.infer<typeof verifyIntegrityResponseSchema>
 
 // --- Evidence Access Log (Issue #730) ---
 // Admin-only, hash-chained view of every access to a single evidence item —

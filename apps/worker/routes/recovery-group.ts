@@ -52,6 +52,7 @@ import {
   recoveryEmergencyOverrideSchema,
   myShareEnvelopeQuerySchema,
   myShareEnvelopeResponseSchema,
+  recoveryListSessionsResponseSchema,
 } from '@protocol/schemas/recovery-group'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { safeFetch } from '../lib/safe-fetch'
@@ -82,20 +83,6 @@ const recoveryGroupRotateSchema = z.object({
   /** Every user recovery envelope for this hub, re-wrapped client-side under `groupPublicKey`. */
   rewrappedUserEnvelopes: z.array(rewrappedUserEnvelopeSchema),
 })
-
-const recoveryListSessionsResponseSchema = z.array(z.object({
-  sessionId: z.string(),
-  hubId: z.string(),
-  userPubkey: z.string(),
-  newDevicePubkey: z.string(),
-  status: z.string(),
-  signalVerified: z.boolean(),
-  expiresAt: z.string(),
-  createdAt: z.string(),
-  completedAt: z.string().nullable(),
-  cancelledAt: z.string().nullable(),
-  cancelledBy: z.string().nullable(),
-}))
 
 const recoveryCompleteSchema = z.object({
   /** Next sigchain seqNo for the recovering user's chain. 1 if the chain is empty (crate verifier: first link has seq=1). */

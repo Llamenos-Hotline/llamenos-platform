@@ -1879,7 +1879,8 @@
     "noActivity": "Kayıtlı etkinlik yok",
     "noChannels": "Mesajlaşma yok",
     "noShifts": "Herhangi bir vardiyaya atanmamış",
-    "selectChannels": "Kanal seçin"
+    "selectChannels": "Kanal seçin",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Aktif",
@@ -2462,7 +2463,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "email": "E-posta",
       "ein": "EIN / Tax ID",

@@ -13,6 +13,11 @@ import { Trash2, Plus, Loader2 } from 'lucide-react'
 import { useToast } from '@/lib/toast'
 import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
+/** The contact on the other end of a relationship, seen from `contactId`'s profile. */
+export function relationshipCounterpartId(rel: ContactRelationship, contactId: string): string {
+  return rel.contactIdA === contactId ? rel.contactIdB : rel.contactIdA
+}
+
 interface RelationshipWritePanelProps {
   contactId: string
   relationships: ContactRelationship[]
@@ -67,7 +72,7 @@ export function RelationshipWritePanel({
       {relationships.map(rel => (
         <div key={rel.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
           <div className="min-w-0 flex-1">
-            <p className="font-medium truncate">{rel.targetDisplayName ?? rel.targetContactId ?? '—'}</p>
+            <p className="font-medium truncate">{relationshipCounterpartId(rel, contactId).slice(0, 8)}</p>
             <p className="text-xs text-muted-foreground capitalize">{rel.relationshipType.replace(/_/g, ' ')}</p>
           </div>
           {canWrite && (

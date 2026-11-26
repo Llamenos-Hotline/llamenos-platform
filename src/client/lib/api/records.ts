@@ -1,7 +1,8 @@
 import { request, hp, activeHubPath, hubPath } from './client'
 import type { CaseRecord, RecordAssigneesResponse, RecordContact, CreateRecordBody, UpdateRecordBody } from '@protocol/schemas/records'
 import type { MergeRecordsBody, MergeRecordsResponse } from '@protocol/schemas/entity-merge'
-import type { AssignmentSuggestion } from '@protocol/schemas'
+import type { NotifyContactsResponse } from '@protocol/schemas/notifications'
+import type { AssignmentSuggestion, CaseEvent, CaseEventListResponse, ConvertFromReportResponse, EnabledResponse, EnvelopeRecipientsResponse, OkResponse, RecordContactListResponse, RecordListResponse, ReportEvent, ReportEventListResponse, SuggestAssigneesResponse } from '@protocol/schemas'
 
 export type { CaseRecord, RecordContact, CreateRecordBody, UpdateRecordBody }
 export type { AssignmentSuggestion }
@@ -23,7 +24,7 @@ export async function listRecords(params?: {
   if (params?.assignedTo) qs.set('assignedTo', params.assignedTo)
   if (params?.page) qs.set('page', String(params.page))
   qs.set('limit', String(params?.limit ?? 50))
-  return request<{ records: CaseRecord[]; total: number; page: number; limit: number; hasMore: boolean }>(activeHubPath(`/records?${qs}`))
+  return request<RecordListResponse>(activeHubPath(`/records?${qs}`))
 }
 
 export async function getRecord(id: string) {
@@ -51,7 +52,7 @@ export async function updateRecord(id: string, body: UpdateRecordBody, hubId?: s
 }
 
 export async function deleteRecord(id: string) {
-  return request<{ ok: boolean }>(activeHubPath(`/records/${id}`), { method: 'DELETE' })
+  return request<OkResponse>(activeHubPath(`/records/${id}`), { method: 'DELETE' })
 }
 
 // --- Event linking (cases ↔ events, reports ↔ events) ---
@@ -60,22 +61,22 @@ export type EventRecordLink = { recordId: string; eventId: string; linkedAt: str
 export type EventReportLink = { reportId: string; eventId: string; linkedAt: string; linkedBy: string }
 
 export async function listEventLinkedRecords(eventId: string) {
-  return request<{ links: EventRecordLink[] }>(activeHubPath(`/events/${eventId}/records`))
+  return request<CaseEventListResponse>(activeHubPath(`/events/${eventId}/records`))
 }
 
 export async function listEventLinkedReports(eventId: string) {
-  return request<{ links: EventReportLink[] }>(activeHubPath(`/events/${eventId}/reports`))
+  return request<ReportEventListResponse>(activeHubPath(`/events/${eventId}/reports`))
 }
 
 export async function linkRecordToEvent(eventId: string, recordId: string) {
-  return request<EventRecordLink>(activeHubPath(`/events/${eventId}/records`), {
+  return request<CaseEvent>(activeHubPath(`/events/${eventId}/records`), {
     method: 'POST',
     body: JSON.stringify({ recordId }),
   })
 }
 
 export async function linkReportToEvent(eventId: string, reportId: string) {
-  return request<EventReportLink>(activeHubPath(`/events/${eventId}/reports`), {
+  return request<ReportEvent>(activeHubPath(`/events/${eventId}/reports`), {
     method: 'POST',
     body: JSON.stringify({ reportId }),
   })
@@ -85,11 +86,11 @@ export async function listChildRecords(parentId: string) {
   const qs = new URLSearchParams()
   qs.set('parentRecordId', parentId)
   qs.set('limit', '50')
-  return request<{ records: CaseRecord[]; total: number; page: number; limit: number; hasMore: boolean }>(activeHubPath(`/records?${qs}`))
+  return request<RecordListResponse>(activeHubPath(`/records?${qs}`))
 }
 
 export async function listRecordContacts(id: string) {
-  return request<{ contacts: RecordContact[] }>(activeHubPath(`/records/${id}/contacts`))
+  return request<RecordContactListResponse>(activeHubPath(`/records/${id}/contacts`))
 }
 
 export async function linkContactToRecord(id: string, contactId: string, role: string) {
@@ -100,7 +101,7 @@ export async function linkContactToRecord(id: string, contactId: string, role: s
 }
 
 export async function unlinkContactFromRecord(id: string, contactId: string) {
-  return request<{ ok: boolean }>(activeHubPath(`/records/${id}/contacts/${contactId}`), { method: 'DELETE' })
+  return request<OkResponse>(activeHubPath(`/records/${id}/contacts/${contactId}`), { method: 'DELETE' })
 }
 
 export async function assignRecord(id: string, pubkeys: string[]) {
@@ -120,15 +121,15 @@ export async function unassignRecord(id: string, pubkey: string) {
 // --- Assignment Suggestions (Epic 342) ---
 
 export async function getAssignmentSuggestions(recordId: string) {
-  return request<{ suggestions: AssignmentSuggestion[] }>(activeHubPath(`/records/${recordId}/suggest-assignees`))
+  return request<SuggestAssigneesResponse>(activeHubPath(`/records/${recordId}/suggest-assignees`))
 }
 
 export async function getAutoAssignmentStatus() {
-  return request<{ enabled: boolean }>(hp('/settings/cms/auto-assignment'))
+  return request<EnabledResponse>(hp('/settings/cms/auto-assignment'))
 }
 
 export async function setAutoAssignment(enabled: boolean) {
-  return request<{ enabled: boolean }>(hp('/settings/cms/auto-assignment'), {
+  return request<EnabledResponse>(hp('/settings/cms/auto-assignment'), {
     method: 'PUT',
     body: JSON.stringify({ enabled }),
   })
@@ -151,8 +152,8 @@ export interface ConvertFromReportResult {
   assignedTo: string[]
 }
 
-export async function convertReportToEntity(params: ConvertFromReportParams): Promise<ConvertFromReportResult> {
-  return request<ConvertFromReportResult>(activeHubPath('/records/convert-from-report'), {
+export async function convertReportToEntity(params: ConvertFromReportParams) {
+  return request<ConvertFromReportResponse>(activeHubPath('/records/convert-from-report'), {
     method: 'POST',
     body: JSON.stringify({
       reportId: params.reportId,
@@ -173,7 +174,7 @@ export interface NotifyContactParams {
   }>
 }
 
-export async function notifyContacts(params: NotifyContactParams): Promise<{ results: Array<{ recipientHash: string; success: boolean; error?: string }> }> {
+export async function notifyContacts(params: NotifyContactParams): Promise<NotifyContactsResponse> {
   return request(activeHubPath(`/records/${params.recordId}/notify-contacts`), {
     method: 'POST',
     body: JSON.stringify({ notifications: params.notifications }),
@@ -197,22 +198,14 @@ export async function getRecordEnvelopeRecipients(params: {
 }) {
   if (params.recordId) {
     const path = `/records/${params.recordId}/envelope-recipients`
-    return request<{
-      summary: string[]
-      fields: string[]
-      pii: string[]
-    }>(params.hubId ? hubPath(params.hubId, path) : activeHubPath(path))
+    return request<EnvelopeRecipientsResponse>(params.hubId ? hubPath(params.hubId, path) : activeHubPath(path))
   }
   if (!params.entityTypeId) {
     throw new Error('getRecordEnvelopeRecipients: pass recordId or entityTypeId')
   }
   const qs = new URLSearchParams({ entityTypeId: params.entityTypeId })
   if (params.assignedTo?.length) qs.set('assignedTo', params.assignedTo.join(','))
-  return request<{
-    summary: string[]
-    fields: string[]
-    pii: string[]
-  }>(activeHubPath(`/records/envelope-recipients?${qs}`))
+  return request<EnvelopeRecipientsResponse>(activeHubPath(`/records/envelope-recipients?${qs}`))
 }
 
 // --- Entity Merge API ---
@@ -232,5 +225,5 @@ export async function listEntitiesCrossHub(params: { crossHub?: boolean; page?: 
   if (params.page) qs.set('page', String(params.page))
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.entityTypeId) qs.set('entityTypeId', params.entityTypeId)
-  return request<{ records: unknown[]; total: number; page: number; limit: number; hasMore: boolean }>(activeHubPath(`/records?${qs}`))
+  return request<RecordListResponse>(activeHubPath(`/records?${qs}`))
 }

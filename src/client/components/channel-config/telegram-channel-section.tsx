@@ -20,6 +20,8 @@ export function TelegramChannelSection({
   onToggle,
   statusSummary,
 }: ChannelConfigProps) {
+  // The server always answers with the channels list; only a PATCH body may omit it.
+  const currentChannels = config.enabledChannels ?? []
   const { t } = useTranslation()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
@@ -42,8 +44,8 @@ export function TelegramChannelSection({
     setSaving(true)
     try {
       const enabledChannels = telegram.enabled
-        ? (config.enabledChannels.includes('telegram') ? config.enabledChannels : [...config.enabledChannels, 'telegram' as const])
-        : config.enabledChannels.filter(c => c !== 'telegram')
+        ? (currentChannels.includes('telegram') ? currentChannels : [...currentChannels, 'telegram' as const])
+        : currentChannels.filter(c => c !== 'telegram')
 
       await updateMessagingConfig({
         ...config,

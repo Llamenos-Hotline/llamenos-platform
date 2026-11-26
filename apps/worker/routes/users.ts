@@ -4,7 +4,7 @@ import { describeRoute, resolver } from 'hono-openapi'
 import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
-import { createUserBodySchema, adminUpdateUserBodySchema, userResponseSchema, userListResponseSchema, userMetricsResponseSchema } from '@protocol/schemas/users'
+import { createUserBodySchema, adminUpdateUserBodySchema, userAdminResponseSchema, userListResponseSchema, userMetricsResponseSchema } from '@protocol/schemas/users'
 import { recordListResponseSchema } from '@protocol/schemas/records'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -101,7 +101,7 @@ users.get('/:targetPubkey',
         description: 'User details',
         content: {
           'application/json': {
-            schema: resolver(userResponseSchema),
+            schema: resolver(userAdminResponseSchema),
           },
         },
       },
@@ -184,7 +184,7 @@ users.post('/',
         description: 'User created',
         content: {
           'application/json': {
-            schema: resolver(userResponseSchema),
+            schema: resolver(userAdminResponseSchema),
           },
         },
       },
@@ -240,7 +240,7 @@ users.patch('/:targetPubkey',
         description: 'User updated',
         content: {
           'application/json': {
-            schema: resolver(userResponseSchema),
+            schema: resolver(userAdminResponseSchema),
           },
         },
       },

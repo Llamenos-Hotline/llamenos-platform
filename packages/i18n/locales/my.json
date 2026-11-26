@@ -1879,7 +1879,8 @@
     "noActivity": "လုပ်ဆောင်ချက် မှတ်တမ်းမရှိပါ",
     "noChannels": "မက်ဆေ့ချ် မရှိပါ",
     "noShifts": "အလှည့် သတ်မှတ်ထားခြင်း မရှိပါ",
-    "selectChannels": "ချန်နယ်များ ရွေးချယ်ပါ"
+    "selectChannels": "ချန်နယ်များ ရွေးချယ်ပါ",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "ဖွင့်ထားသည်",
@@ -1956,7 +1957,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "email": "အီးမေးလ်",
       "ein": "EIN / Tax ID",

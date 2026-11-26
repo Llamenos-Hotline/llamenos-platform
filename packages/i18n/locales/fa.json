@@ -1879,7 +1879,8 @@
     "noActivity": "فعالیتی ثبت نشده",
     "noChannels": "بدون پیام‌رسانی",
     "noShifts": "به هیچ شیفتی اختصاص داده نشده",
-    "selectChannels": "انتخاب کانال‌ها"
+    "selectChannels": "انتخاب کانال‌ها",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "فعال",
@@ -2651,7 +2652,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "email": "ایمیل",
       "campaignFormTitle": "Campaign Registration",

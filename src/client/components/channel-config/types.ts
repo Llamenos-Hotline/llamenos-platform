@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import type { MessagingConfig } from '@shared/types'
+import type { MessagingConfig } from '@protocol/schemas'
 import type { TransportSecurity } from '@shared/types'
 
 export interface ChannelConfigProps {

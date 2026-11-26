@@ -7,7 +7,7 @@ import type {
   RoleEnvelope,
   RoleListResponse,
   UpdateHubRoleBody,
-  UpdateRoleBody,
+  UpdateRoleBody, OkResponse,
 } from '@protocol/schemas'
 
 export type { RoleDefinition }
@@ -41,11 +41,11 @@ export async function updateRole(id: string, data: UpdateRoleBody) {
 }
 
 export async function deleteRole(id: string) {
-  return request<{ ok: true }>(`/settings/roles/${id}`, { method: 'DELETE' })
+  return request<OkResponse>(`/settings/roles/${id}`, { method: 'DELETE' })
 }
 
 export async function addRoleEnvelopes(roleId: string, envelopes: RoleEnvelope[]) {
-  return request<{ ok: true }>(`/settings/roles/${roleId}/envelopes`, {
+  return request<OkResponse>(`/settings/roles/${roleId}/envelopes`, {
     method: 'POST',
     body: JSON.stringify({ envelopes }),
   })
@@ -79,7 +79,7 @@ export async function updateHubRole(hubId: string, id: string, data: UpdateHubRo
 }
 
 export async function deleteHubRole(id: string) {
-  return request<{ ok: true }>(activeHubPath(`/settings/roles/${id}`), { method: 'DELETE' })
+  return request<OkResponse>(activeHubPath(`/settings/roles/${id}`), { method: 'DELETE' })
 }
 
 export async function getPermissionsCatalog() {

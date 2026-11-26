@@ -81,7 +81,7 @@ import { hubListResponseSchema, hubDetailResponseSchema, type Hub } from '@proto
 import { noteListResponseSchema, noteStoredResponseSchema, noteReplyStoredResponseSchema, noteRepliesResponseSchema } from '@protocol/schemas/notes'
 import { banListResponseSchema } from '@protocol/schemas/bans'
 import { inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
-import { userListResponseSchema, userResponseSchema } from '@protocol/schemas/users'
+import { userListResponseSchema, userAdminResponseSchema } from '@protocol/schemas/users'
 import { myStatusResponseSchema } from '@protocol/schemas/shifts'
 import { settingsDomainMock } from '../helpers/settings-domain-mock'
 import { CRYPTO_FORMAT_CURRENT } from '@protocol/crypto-format'
@@ -751,9 +751,12 @@ describe('Invites Routes — response conformance', () => {
 // ---------------------------------------------------------------------------
 
 describe('Users Routes — response conformance', () => {
+  // What IdentityService returns for a `users:read` caller: the admin shape, phone included
+  // (phone numbers are admin-only, and every /users route is gated on `users:read`).
   const mockUser = {
     pubkey: MOCK_PUBKEY,
     name: 'Test User',
+    phone: '+15551234567',
     roles: ['role-volunteer'],
     active: true,
     createdAt: new Date().toISOString(),
@@ -780,7 +783,7 @@ describe('Users Routes — response conformance', () => {
     expect(result.parsed.users[0].pubkey).toBe(MOCK_PUBKEY)
   })
 
-  it('GET /users/:pubkey — conforms to userResponseSchema', async () => {
+  it('GET /users/:pubkey — conforms to userAdminResponseSchema', async () => {
     const mockIdentity = {
       getUser: vi.fn().mockResolvedValue(mockUser),
     }
@@ -790,7 +793,7 @@ describe('Users Routes — response conformance', () => {
       permissions: ['users:read'],
     })
 
-    const result = await assertConformsToSchema(app, 'GET', `/users/${MOCK_PUBKEY}`, userResponseSchema, { env })
+    const result = await assertConformsToSchema(app, 'GET', `/users/${MOCK_PUBKEY}`, userAdminResponseSchema, { env })
     expect(result.parsed.pubkey).toBe(MOCK_PUBKEY)
     expect(typeof result.parsed.active).toBe('boolean')
   })

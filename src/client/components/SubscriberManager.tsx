@@ -1,25 +1,26 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { listSubscribers, removeSubscriber, importSubscribers, getSubscriberStats } from '@/lib/api'
-import type { Subscriber } from '@/lib/api'
+import type { Subscriber, SubscriberStatsResponse } from '@/lib/api'
+import type { ImportSubscribersBody } from '@protocol/schemas'
 import { useToast } from '@/lib/toast'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Trash2, Upload, Users } from 'lucide-react'
 
-interface SubscriberStatsData {
-  total: number
-  active: number
-  paused: number
-  byChannel: Record<string, number>
+type ImportChannel = ImportSubscribersBody['subscribers'][number]['channel']
+const IMPORT_CHANNELS: readonly ImportChannel[] = ['sms', 'whatsapp', 'signal']
+
+function isImportChannel(value: string): value is ImportChannel {
+  return (IMPORT_CHANNELS as readonly string[]).includes(value)
 }
 
 export function SubscriberManager() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const [subscribers, setSubscribers] = useState<Subscriber[]>([])
-  const [stats, setStats] = useState<SubscriberStatsData | null>(null)
+  const [stats, setStats] = useState<SubscriberStatsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [csvData, setCsvData] = useState('')
   const [importing, setImporting] = useState(false)
@@ -60,6 +61,7 @@ export function SubscriberManager() {
       const lines = csvData.trim().split('\n').filter(l => l.trim())
       const subs = lines.map(line => {
         const [identifier, channel = 'sms', ...tags] = line.split(',').map(s => s.trim())
+        if (!isImportChannel(channel)) throw new Error(`Unsupported channel: ${channel}`)
         return { identifier, channel, tags: tags.length > 0 ? tags : undefined }
       })
       const res = await importSubscribers({ subscribers: subs })
@@ -86,7 +88,7 @@ export function SubscriberManager() {
           </Card>
           <Card>
             <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold text-green-600">{stats.active}</p>
+              <p className="text-2xl font-bold text-green-600">{stats.byStatus.active ?? 0}</p>
               <p className="text-xs text-muted-foreground">{t('blasts.activeSubscribers')}</p>
             </CardContent>
           </Card>

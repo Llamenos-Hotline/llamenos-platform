@@ -3,7 +3,7 @@ import { describeRoute, resolver } from 'hono-openapi'
 import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
-import { listBlastsQuerySchema, listSubscribersQuerySchema, listDeliveriesQuerySchema, createBlastBodySchema, updateBlastBodySchema, scheduleBlastBodySchema, importSubscribersBodySchema, updateBlastSettingsBodySchema, blastResponseSchema, blastEnvelopeResponseSchema, subscriberStatsResponseSchema, blastStatsSchema, blastSettingsResponseSchema, subscriberListResponseSchema, blastListResponseSchema, blastDeliveryListResponseSchema, importSubscribersResponseSchema, blastDeliveryResponseSchema } from '@protocol/schemas/blasts'
+import { listBlastsQuerySchema, listSubscribersQuerySchema, listDeliveriesQuerySchema, createBlastBodySchema, updateBlastBodySchema, scheduleBlastBodySchema, importSubscribersBodySchema, updateBlastSettingsBodySchema, blastResponseSchema, blastEnvelopeResponseSchema, subscriberStatsResponseSchema, blastStatsSchema, blastSettingsResponseSchema, subscriberListResponseSchema, blastListResponseSchema, blastDeliveryListResponseSchema, importSubscribersResponseSchema, retryDeliveryResponseSchema, retryFailedResponseSchema } from '@protocol/schemas/blasts'
 import type { BlastContent, MultiBlastContent } from '@shared/types'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors } from '../openapi/helpers'
@@ -33,6 +33,28 @@ function toStorageContent(input: any): BlastContent | MultiBlastContent {
     result[lang] = { text: e.body, mediaUrl: e.mediaUrl }
   }
   return result
+}
+
+/**
+ * The inverse of `toStorageContent`: a blast row stores `text`, the wire (and every client)
+ * speaks `body`. Every response that carries a blast goes through here, so what the route
+ * declares (`blastResponseSchema`) is what it sends.
+ */
+function toWireContent(stored: unknown): { body: string; mediaUrl?: string } | Record<string, { body: string; mediaUrl?: string }> {
+  const content = stored as BlastContent | MultiBlastContent
+  if ('text' in content && typeof content.text === 'string') {
+    const single = content as BlastContent
+    return { body: single.text, ...(single.mediaUrl ? { mediaUrl: single.mediaUrl } : {}) }
+  }
+  const result: Record<string, { body: string; mediaUrl?: string }> = {}
+  for (const [lang, entry] of Object.entries(content as MultiBlastContent)) {
+    result[lang] = { body: entry.text, ...(entry.mediaUrl ? { mediaUrl: entry.mediaUrl } : {}) }
+  }
+  return result
+}
+
+function toWireBlast<T extends { content: unknown }>(blast: T) {
+  return { ...blast, content: toWireContent(blast.content) }
 }
 
 const blasts = new Hono<AppEnv>()
@@ -262,7 +284,7 @@ blasts.get('/',
     const offset = (query.page - 1) * query.limit
     const paged = allBlasts.slice(offset, offset + query.limit)
 
-    return c.json({ blasts: paged, total, page: query.page, limit: query.limit })
+    return c.json({ blasts: paged.map(toWireBlast), total, page: query.page, limit: query.limit })
   },
 )
 
@@ -300,7 +322,7 @@ blasts.post('/',
     if (body.scheduledAt) {
       blast = await services.blasts.schedule(blast.id, body.scheduledAt)
     }
-    return c.json({ blast }, 201)
+    return c.json({ blast: toWireBlast(blast) }, 201)
   },
 )
 
@@ -326,7 +348,7 @@ blasts.get('/:id',
     const id = c.req.param('id')
     const services = c.get('services')
     const blast = await services.blasts.getBlast(id)
-    return c.json(blast)
+    return c.json(toWireBlast(blast))
   },
 )
 
@@ -358,7 +380,7 @@ blasts.patch('/:id',
     if (body.defaultLanguage !== undefined) updateInput.defaultLanguage = body.defaultLanguage
     if (body.channels !== undefined) updateInput.targetChannels = body.channels
     const blast = await services.blasts.updateBlast(id, updateInput)
-    return c.json({ blast })
+    return c.json({ blast: toWireBlast(blast) })
   },
 )
 
@@ -417,7 +439,7 @@ blasts.post('/:id/send',
       })
     )
 
-    return c.json({ blast })
+    return c.json({ blast: toWireBlast(blast) })
   },
 )
 
@@ -444,7 +466,7 @@ blasts.post('/:id/schedule',
     const services = c.get('services')
     const body = c.req.valid('json')
     const blast = await services.blasts.schedule(id, body.scheduledAt)
-    return c.json({ blast })
+    return c.json({ blast: toWireBlast(blast) })
   },
 )
 
@@ -469,7 +491,7 @@ blasts.post('/:id/cancel',
     const id = c.req.param('id')
     const services = c.get('services')
     const blast = await services.blasts.cancel(id)
-    return c.json({ blast })
+    return c.json({ blast: toWireBlast(blast) })
   },
 )
 
@@ -533,7 +555,7 @@ blasts.post('/:id/deliveries/:deliveryId/retry',
         description: 'Delivery reset to pending',
         content: {
           'application/json': {
-            schema: resolver(blastDeliveryResponseSchema),
+            schema: resolver(retryDeliveryResponseSchema),
           },
         },
       },
@@ -568,7 +590,7 @@ blasts.post('/:id/retry-failed',
         description: 'Failed deliveries reset to pending',
         content: {
           'application/json': {
-            schema: resolver(okResponseSchema),
+            schema: resolver(retryFailedResponseSchema),
           },
         },
       },

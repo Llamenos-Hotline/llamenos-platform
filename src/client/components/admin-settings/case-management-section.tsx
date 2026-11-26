@@ -123,7 +123,6 @@ export function CaseManagementSection({ expanded, onToggle, statusSummary }: Pro
         description: editing.description?.trim(),
         icon: editing.icon?.trim() || undefined,
         color: editing.color || undefined,
-        category: editing.category,
         fields: (editing.fields || []) as EntityFieldDefinition[],
         statuses: editing.statuses,
         defaultStatus: editing.defaultStatus,

@@ -6,8 +6,8 @@ import {
   cancelRecoverySession,
   requestLivenessChallenge,
   submitLivenessProof,
-  type RecoverySessionInfo,
 } from '@/lib/api'
+import type { RecoverySessionStatusResponse } from '@protocol/schemas'
 import {
   RECOVERY_SHARE_COMMITMENT_MISMATCH,
   recoveryShareContribute,
@@ -37,14 +37,14 @@ import {
 
 interface Props {
   hubId: string
-  sessions: RecoverySessionInfo[]
+  sessions: RecoverySessionStatusResponse[]
   onSessionsChanged: () => void
   /** This user's own share envelope for the hub, or null if they hold no share there. */
   myShareEnvelope: string | null
   myShareCommitment: string | null
 }
 
-type SessionStatus = RecoverySessionInfo['status']
+type SessionStatus = RecoverySessionStatusResponse['status']
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
   pending: 'text-amber-600',
@@ -88,7 +88,7 @@ export function RecoveryRequestsSection({
     (s) => s.status === 'completed' || s.status === 'expired' || s.status === 'cancelled',
   )
 
-  async function handleApprove(session: RecoverySessionInfo) {
+  async function handleApprove(session: RecoverySessionStatusResponse) {
     if (!myShareEnvelope || !myShareCommitment) {
       toast(t('recoveryGroup.error.notContact'), 'error')
       return

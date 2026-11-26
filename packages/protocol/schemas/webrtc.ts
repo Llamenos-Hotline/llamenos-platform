@@ -10,6 +10,7 @@ export const webrtcTokenResponseSchema = z.object({
   identity: z.string(),
   roomName: z.string().optional(),
 })
+export type WebrtcTokenResponse = z.infer<typeof webrtcTokenResponseSchema>
 
 /**
  * One ICE server in a `/api/telephony/sip-token` response.
@@ -65,3 +66,4 @@ export const telephonyStatusResponseSchema = z.object({
   available: z.boolean(),
   provider: z.string().nullable(),
 })
+export type TelephonyStatusResponse = z.infer<typeof telephonyStatusResponseSchema>

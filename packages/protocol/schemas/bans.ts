@@ -45,6 +45,7 @@ export type BanListResponse = z.infer<typeof banListResponseSchema>
 export const createBanResponseSchema = z.object({
   ban: banResponseSchema,
 })
+export type CreateBanResponse = z.infer<typeof createBanResponseSchema>
 
 export const bulkBanResponseSchema = z.object({
   count: z.number(),
@@ -56,11 +57,13 @@ export const createBanBodySchema = z.object({
   phone: e164PhoneSchema,
   reason: z.string().max(500).optional(),
 })
+export type CreateBanBody = z.input<typeof createBanBodySchema>
 
 export const bulkBanBodySchema = z.object({
   phones: z.array(e164PhoneSchema).min(1).max(500),
   reason: z.string().max(500).optional(),
 })
+export type BulkBanBody = z.input<typeof bulkBanBodySchema>
 
 export const platformBanResponseSchema = z.object({
   id: z.string(),
@@ -115,6 +118,10 @@ export const createPlatformBanBodySchema = z.object({
   phoneHash: banDigestSchema,
   reason: z.string().max(500).optional(),
 })
+
+/** `POST /admin/bans/bulk` answers the import tally together with the generic `ok`. */
+export const platformBulkBanResponseSchema = bulkBanResponseSchema.extend({ ok: z.boolean() })
+export type PlatformBulkBanResponse = z.infer<typeof platformBulkBanResponseSchema>
 
 export const bulkPlatformBanBodySchema = z.object({
   phoneHashes: z.array(banDigestSchema).min(1).max(500),

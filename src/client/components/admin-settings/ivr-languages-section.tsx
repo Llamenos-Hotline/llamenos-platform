@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { updateIvrLanguages, type IvrLanguageSettings } from '@/lib/api'
+import { updateIvrLanguages } from '@/lib/api'
+import type { IvrLanguageSettings } from '@protocol/schemas'
 import { SettingsSection } from '@/components/settings-section'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'

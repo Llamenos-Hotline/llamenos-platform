@@ -285,28 +285,18 @@ export default tseslint.config(
       }],
     },
   },
-  // Pre-existing debt from before this rule existed (see report.md for the full inventory).
-  // Downgraded to `warn` — not disabled — so `bun run lint` stays informative on these files
-  // without blocking unrelated PRs on a cleanup that isn't theirs to do.
-  //
-  // This list was originally just `hub-onboard.ts`/`provider-setup.ts` — the only two
-  // domain modules that existed when this rail was authored. #874 (splitting api.ts into
-  // per-domain modules) landed independently and finished the split before this PR did,
-  // carrying every hand-written shape over unchanged into ~40 new files. Rebasing this PR
-  // onto that state turned "two known exceptions" into "38 of 40 files in the directory",
-  // which is `report.md`'s own UNBOUND/MISMATCHED count, not a new problem — regenerate the
-  // report and re-narrow this list file-by-file as each one is migrated to a protocol type;
-  // do not add new files here going forward, since new code should bind from the start.
+  // Hand-written shapes that remain in the API client layer after the binding migration
+  // (scripts/api-schema-binding/report.md is clean: 0 UNBOUND, 0 MISMATCHED). What is left
+  // is mostly the query-parameter and option objects and the responses of routes the binding
+  // report cannot resolve a schema for. Downgraded to `warn` — not disabled — and listed
+  // file by file: a file leaves this list when its last inline shape is bound, and no file
+  // may be added to it, since new code binds from the start.
   {
     files: [
-      'src/client/lib/api/audit.ts',
       'src/client/lib/api/auth.ts',
-      'src/client/lib/api/bans.ts',
       'src/client/lib/api/blasts.ts',
-      'src/client/lib/api/call-settings.ts',
       'src/client/lib/api/calls.ts',
       'src/client/lib/api/client.ts',
-      'src/client/lib/api/cms-report-types.ts',
       'src/client/lib/api/cms.ts',
       'src/client/lib/api/contacts.ts',
       'src/client/lib/api/conversations.ts',
@@ -316,27 +306,18 @@ export default tseslint.config(
       'src/client/lib/api/firehose.ts',
       'src/client/lib/api/governance.ts',
       'src/client/lib/api/hub-onboard.ts',
-      'src/client/lib/api/hubs.ts',
       'src/client/lib/api/interactions.ts',
       'src/client/lib/api/invites.ts',
       'src/client/lib/api/ivr-audio.ts',
       'src/client/lib/api/messaging-config.ts',
-      'src/client/lib/api/migrations.ts',
       'src/client/lib/api/notes.ts',
       'src/client/lib/api/provider-setup.ts',
       'src/client/lib/api/records.ts',
       'src/client/lib/api/recovery.ts',
       'src/client/lib/api/reports.ts',
-      'src/client/lib/api/ring-groups.ts',
-      'src/client/lib/api/roles.ts',
-      'src/client/lib/api/setup.ts',
       'src/client/lib/api/shifts.ts',
       'src/client/lib/api/signal.ts',
-      'src/client/lib/api/tags.ts',
-      'src/client/lib/api/teams.ts',
-      'src/client/lib/api/telephony.ts',
       'src/client/lib/api/triage.ts',
-      'src/client/lib/api/users.ts',
     ],
     rules: {
       'local/no-inline-api-shape': 'warn',
