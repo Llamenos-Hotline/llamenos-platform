@@ -264,6 +264,7 @@ describe('trustAnchorFinding', () => {
       'an OkHttp/JSSE trust hook': 'object : X509ExtendedTrustManager() {',
       'an Apple Security trust API or App Transport Security key': '<key>NSAllowsArbitraryLoads</key>',
       'a rustls/reqwest trust hook': 'impl ServerCertVerifier for Pinned {',
+      'the Android pinning call path (CertificatePins / configurePinning / pinnedHostname)': '            configurePinning(hostname)',
       'a SIP TLS trust anchor': 'applyTlsTrustAnchor(core, sip)',
       'a build-wiring setting that chooses what ships': 'manifestPlaceholders["networkConfig"] = "open"',
     }

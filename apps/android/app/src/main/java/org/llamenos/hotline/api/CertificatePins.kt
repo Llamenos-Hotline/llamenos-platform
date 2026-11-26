@@ -75,10 +75,11 @@ object CertificatePins {
 
     /**
      * The pinner a client must use for [hostname]: none for local development
-     * (`localhost` / `127.0.0.1`), the pinned set for every other host.
+     * (`localhost` / `127.0.0.1`), the [DEFAULT_PIN_HASHES] set for every other host.
+     * Callers cannot choose the hashes — that choice is the trust decision.
      */
-    fun pinnerFor(hostname: String, hashes: List<String> = DEFAULT_PIN_HASHES): CertificatePinner {
+    fun pinnerFor(hostname: String): CertificatePinner {
         val isLocalhost = hostname == "localhost" || hostname == "127.0.0.1"
-        return if (isLocalhost) CertificatePinner.DEFAULT else buildPinner(hostname, hashes)
+        return if (isLocalhost) CertificatePinner.DEFAULT else buildPinner(hostname, DEFAULT_PIN_HASHES)
     }
 }

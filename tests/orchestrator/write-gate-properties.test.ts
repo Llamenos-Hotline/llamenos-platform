@@ -531,8 +531,24 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
 
     it('still holds a change to the lines where ApiService.kt applies the pinner', async () => {
       const base = real(API)
-      expect(base).toContain('.certificatePinner(CertificatePins.pinnerFor(hostname, hashes))')
-      const head = base.replace('.certificatePinner(CertificatePins.pinnerFor(hostname, hashes))', '.certificatePinner(CertificatePinner.DEFAULT)')
+      expect(base).toContain('.certificatePinner(CertificatePins.pinnerFor(hostname))')
+      const head = base.replace('.certificatePinner(CertificatePins.pinnerFor(hostname))', '.certificatePinner(CertificatePinner.DEFAULT)')
+      const rep = await gate(judged({ [API]: base }, { [API]: head }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(API)
+    })
+
+    // Each of these leaves every line that names a pin or a CertificatePinner
+    // untouched, and each unpins the client. Review finding on this PR.
+    it.each<[string, (s: string) => string]>([
+      ['the hostname guard around the pinner call is changed', (s) => s.replace('if (hostname != pinnedHostname) {', 'if (false) {')],
+      ['the configurePinning call site is removed', (s) => s.replace('            configurePinning(hostname)\n', '')],
+      ['configurePinning grows a hash parameter again', (s) => s.replace('fun configurePinning(hostname: String)', 'fun configurePinning(hostname: String, hashes: List<String> = emptyList())')],
+      ['the hostname memo is initialised as already pinned', (s) => s.replace('internal var pinnedHostname: String? = null', 'internal var pinnedHostname: String? = "app"')],
+    ])('holds ApiService.kt when %s', async (_what, mutate) => {
+      const base = real(API)
+      const head = mutate(base)
+      expect(head, 'the mutation matched nothing — the test would pass vacuously').not.toBe(base)
       const rep = await gate(judged({ [API]: base }, { [API]: head }))
       expect(rep.passed).toBe(false)
       expect(trustLine(rep)).toContain(API)

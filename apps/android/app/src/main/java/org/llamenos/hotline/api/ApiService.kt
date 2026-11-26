@@ -142,12 +142,14 @@ class ApiService @Inject constructor(
      *
      * Skips pinning for localhost / 127.0.0.1 (local development).
      *
+     * The pin set and the localhost exemption are decided by [CertificatePins]; this only
+     * applies the result. There is deliberately no pin-hash parameter here.
+     *
      * @param hostname The hub server hostname (e.g. "app.example.org")
-     * @param hashes Optional override pin hashes; defaults to Let's Encrypt CA pins
      */
-    fun configurePinning(hostname: String, hashes: List<String> = CertificatePins.DEFAULT_PIN_HASHES) {
+    fun configurePinning(hostname: String) {
         client = client.newBuilder()
-            .certificatePinner(CertificatePins.pinnerFor(hostname, hashes))
+            .certificatePinner(CertificatePins.pinnerFor(hostname))
             .build()
     }
 

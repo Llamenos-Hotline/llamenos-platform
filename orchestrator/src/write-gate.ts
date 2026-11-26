@@ -194,6 +194,17 @@ export const TRUST_SIGNATURES: readonly TrustSignature[] = [
     name: 'a rustls/reqwest trust hook',
     re: /ServerCertVerifier|RootCertStore|danger_accept_invalid|add_root_certificate|tls_built_in_root_certs|\.dangerous\(\)|with_custom_certificate_verifier|ClientConfig::builder|\bwebpki|rustls::|cert_pin::/,
   },
+  {
+    // The call path that APPLIES the pin set (#3057): the pin set itself now
+    // lives in the registered CertificatePins.kt, but a client that stops
+    // calling it — or guards the call with a different condition — is
+    // unpinned all the same. Every line naming the pinning API, the hostname
+    // memo that gates it, or `configurePinning(` is projected, so changing a
+    // default, a guard or a call site in the HTTP surface is held while an
+    // unrelated API addition is not.
+    name: 'the Android pinning call path (CertificatePins / configurePinning / pinnedHostname)',
+    re: /\bCertificatePins\.|\bconfigurePinning\(|\bpinnedHostname\b/,
+  },
   { name: 'a SIP TLS trust anchor', re: /[Tt]lsTrustAnchor/ },
   {
     // Indirection: which manifest, resource directories and Info.plist the
