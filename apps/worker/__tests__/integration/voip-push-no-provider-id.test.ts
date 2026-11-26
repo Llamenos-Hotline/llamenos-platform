@@ -35,6 +35,8 @@ import { Hono } from 'hono'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { KIND_CALL_RING } from '@shared/event-kinds'
+import { hexToBytes } from '@shared/encoding'
+import { openServerEvent, serverEventKey } from '@llamenos/crypto/ffi'
 import { callRecordResponseSchema } from '@protocol/schemas/calls'
 import type { WsEventMessage } from '@protocol/schemas/ws-messages'
 import { insertHubFounder } from '../helpers/hub-founder'
@@ -54,6 +56,7 @@ const DATABASE_URL = requireDatabaseUrl()
 
 const DB_NAME = `voip_push_ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 const HMAC_SECRET = 'a'.repeat(64)
+const SERVER_SECRET_HEX = 'e'.repeat(64)
 
 // What a Twilio/SignalWire call looks like, and the UUID form the other providers use.
 // (`call_id` is the primary key, so each test mints its own.)
@@ -111,6 +114,9 @@ const env = {
   APNS_KEY_ID: 'TESTKEYID',
   APNS_TEAM_ID: 'TESTTEAMID',
   NTFY_URL: 'http://ntfy.test:80',
+  // Relay frames are sealed or not sent (no plaintext fallback), so the relay
+  // test below needs the server's event secret to receive one.
+  SERVER_SECRET: SERVER_SECRET_HEX,
 } as Env
 
 let sql: ReturnType<typeof postgres>
@@ -425,8 +431,14 @@ describe('call:ring relay event', () => {
 
     const events = frames.map(f => JSON.parse(f) as WsEventMessage).filter(e => e.type === 'event')
     expect(events).toHaveLength(1)
-    // No SERVER_SECRET in this env, so the relay payload is plaintext JSON.
-    const content = JSON.parse(events[0].payload) as { type: string; callId: string; pushRef: string }
+    // Open the frame as a member would: the per-hub key for its epoch (#2999).
+    const { epoch } = events[0]
+    const key = serverEventKey(hexToBytes(SERVER_SECRET_HEX), hubId, epoch)
+    const content = JSON.parse(openServerEvent(key, hubId, KIND_CALL_RING, epoch, events[0].payload)) as {
+      type: string
+      callId: string
+      pushRef: string
+    }
     expect(content).toMatchObject({ type: 'call:ring', callId: sid })
     expect(content.pushRef).toBe(pushedCall(sent[0]).callId)
   })
