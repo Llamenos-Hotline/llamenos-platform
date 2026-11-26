@@ -31,6 +31,11 @@ import { ServiceError } from '../../services/service-error'
 import type { AppendSigchainLinkBody, SigchainLinkType } from '@protocol/schemas/sigchain'
 import type { SigchainLink } from '@llamenos/crypto/ffi'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { sigchainVerify } from '@llamenos/crypto/ffi'
+import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js'
+import { ed25519, x25519 } from '@noble/curves/ed25519.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
+import { createSigchainLinkMock, deviceKemPayloadMock } from '../../../../tests/mocks/sigchain-mock'
 
 const db = createDatabase(requireDatabaseUrl())
 const keys = new CryptoKeysService(db)
@@ -253,5 +258,23 @@ describe('device registration is bound to one user (#2496)', () => {
       refused = e
     }
     expect((refused as ServiceError | null)?.status).toBe(409)
+  })
+})
+
+describe('the desktop test mock publishes what the real crate accepts', () => {
+  // Playwright's IPC mock appends real device_kem links to a real server. If its
+  // X-Wing key or pop were not what the crate verifies, every desktop E2E user
+  // would fail to publish (and the console guard would fail the run).
+  it('a mock-built device_kem verifies through ffi_sigchain_verify', () => {
+    const seed = crypto.getRandomValues(new Uint8Array(32))
+    const user = bytesToHex(ed25519.getPublicKey(seed))
+    const genesis = createSigchainLinkMock(seed, 'g', 'mock-dev', 1, null, '2026-11-26T00:00:00Z', JSON.stringify({
+      type: 'user_init', deviceId: 'mock-dev', devicePubkey: user,
+      deviceEncryptionPubkey: bytesToHex(x25519.getPublicKey(crypto.getRandomValues(new Uint8Array(32)))),
+    }))
+    const kem = bytesToHex(ml_kem768_x25519.keygen(crypto.getRandomValues(new Uint8Array(32))).publicKey)
+    const link = createSigchainLinkMock(seed, 'k', 'mock-dev', 2, genesis.entryHash, '2026-11-26T00:01:00Z', deviceKemPayloadMock(seed, kem, user))
+    const state = sigchainVerify([genesis, link])
+    expect(state.deviceKemKeys).toEqual([{ devicePubkey: user, kemPubkey: kem, format: 2 }])
   })
 })

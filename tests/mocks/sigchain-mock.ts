@@ -21,6 +21,7 @@ import { hmac } from '@noble/hashes/hmac.js'
 import { gcm } from '@noble/ciphers/aes.js'
 import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from '@noble/hashes/utils.js'
 import {
+  LABEL_DEVICE_POP,
   LABEL_PUK_DH,
   LABEL_PUK_PREVIOUS_GEN,
   LABEL_PUK_SECRETBOX,
@@ -44,12 +45,113 @@ export interface MockSigchainLink {
   payloadJson: string
 }
 
+/** packages/crypto `sigchain::DeviceKemKey`. */
+export interface MockDeviceKemKey {
+  devicePubkey: string
+  kemPubkey: string
+  format: number
+}
+
 /** packages/crypto `sigchain::SigchainVerifiedState`. */
 export interface MockSigchainVerifiedState {
+  userPubkey: string
   verifiedCount: number
   headSeq: number
   headHash: string
   activeDevicePubkeys: string[]
+  deviceKemKeys: MockDeviceKemKey[]
+  namedKeys: string[]
+}
+
+/** packages/crypto `sigchain::GenesisDeviceSet`. */
+export interface MockGenesisDeviceSet {
+  included: Array<{ userPubkey: string; devicePubkey: string; kemPubkey: string; format: number }>
+  missing: Array<{ userPubkey: string; devicePubkey: string }>
+}
+
+// ── Device key binding (#2496; mirrors sigchain.rs device_pop_message etc.) ──
+
+/** `sigchain::DEVICE_KEM_FORMAT`: format 2, X-Wing. */
+export const DEVICE_KEM_FORMAT = 2
+/** `device_keys::XWING_PUBLIC_KEY_LEN`. */
+const XWING_PUBLIC_KEY_LEN = 1216
+
+/** A crate refusal, carried as `"{code}: {detail}"` like the desktop's `crypto_err`. */
+function rejected(code: string, detail: string): Error {
+  return new Error(`${code}: ${detail}`)
+}
+
+function lp(b: Uint8Array): Uint8Array {
+  if (b.length > 0xffff) throw new Error('invalid_input: lp field longer than 65535 bytes')
+  const out = new Uint8Array(2 + b.length)
+  new DataView(out.buffer).setUint16(0, b.length, false)
+  out.set(b, 2)
+  return out
+}
+
+function concat(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  let o = 0
+  for (const p of parts) {
+    out.set(p, o)
+    o += p.length
+  }
+  return out
+}
+
+/** Mirror of `sigchain::device_pop_message`. */
+export function devicePopMessageMock(user: string, signingPk: Uint8Array, encryptionPk: Uint8Array, format: number): Uint8Array {
+  const fmt = new Uint8Array(2)
+  new DataView(fmt.buffer).setUint16(0, format, false)
+  const digest = sha256(concat(lp(utf8ToBytes(user)), lp(signingPk), lp(encryptionPk), fmt))
+  return concat(utf8ToBytes(LABEL_DEVICE_POP), new Uint8Array([0]), digest)
+}
+
+function decodeKeyHex(hex: string, len: number, what: string): Uint8Array {
+  if (hex.length !== len * 2 || !/^[0-9a-f]*$/.test(hex)) {
+    throw rejected('invalid_format', `${what} must be ${len} bytes of lowercase hex`)
+  }
+  return hexToBytes(hex)
+}
+
+function decodeKemPublicKey(hex: string, format: number): Uint8Array {
+  if (format !== DEVICE_KEM_FORMAT) throw rejected('unknown_format', `no KEM suite for crypto_format ${format}`)
+  // The crate also parses the key as an X-Wing key; the mock checks shape only.
+  return decodeKeyHex(hex, XWING_PUBLIC_KEY_LEN, 'encryptionPubkey')
+}
+
+/** Mirror of `sigchain::sign_device_pop`. */
+export function signDevicePopMock(signingSeed: Uint8Array, user: string, encryptionPkHex: string, format: number): string {
+  const enc = decodeKemPublicKey(encryptionPkHex, format)
+  const pk = ed25519.getPublicKey(signingSeed)
+  return bytesToHex(ed25519.sign(devicePopMessageMock(user, pk, enc, format), signingSeed))
+}
+
+/** Mirror of `sigchain::verify_device_pop`. */
+export function verifyDevicePopMock(user: string, signingPkHex: string, encryptionPkHex: string, format: number, popHex: string): void {
+  const signingPk = decodeKeyHex(signingPkHex, 32, 'devicePubkey')
+  const enc = decodeKemPublicKey(encryptionPkHex, format)
+  if (popHex.length !== 128 || !/^[0-9a-f]*$/.test(popHex)) {
+    throw rejected('chain_device_pop', 'pop must be a 64-byte signature in lowercase hex')
+  }
+  let ok = false
+  try {
+    ok = ed25519.verify(hexToBytes(popHex), devicePopMessageMock(user, signingPk, enc, format), signingPk, { zip215: false })
+  } catch {
+    ok = false
+  }
+  if (!ok) throw rejected('chain_device_pop', 'possession signature does not verify for this device, key and user')
+}
+
+/** Mirror of `sigchain::device_kem_payload`. */
+export function deviceKemPayloadMock(signingSeed: Uint8Array, kemPubkeyHex: string, user: string): string {
+  return JSON.stringify({
+    type: 'device_kem',
+    devicePubkey: bytesToHex(ed25519.getPublicKey(signingSeed)),
+    format: DEVICE_KEM_FORMAT,
+    encryptionPubkey: kemPubkeyHex,
+    pop: signDevicePopMock(signingSeed, user, kemPubkeyHex, DEVICE_KEM_FORMAT),
+  })
 }
 
 /** packages/crypto `puk::PukState`. */
@@ -212,53 +314,98 @@ export function verifySigchainMock(links: MockSigchainLink[]): MockSigchainVerif
   if (links.length === 0) throw new Error('sigchain must have at least one link')
 
   const first = links[0]
-  if (first.seq !== 1) throw new Error('first sigchain link must have seq=1')
-  if (first.prevHash !== null) throw new Error('first sigchain link must have prevHash=null')
+  if (first.seq !== 1) throw rejected('chain_seq', 'first sigchain link must have seq=1')
+  if (first.prevHash !== null) throw rejected('chain_prev_hash', 'first sigchain link must have prevHash=null')
 
   const firstPayload: unknown = JSON.parse(first.payloadJson)
   if (payloadType(firstPayload) !== 'user_init') {
-    throw new Error('first sigchain link must have type=user_init')
+    throw new Error('invalid_input: first sigchain link must have type=user_init')
   }
-
-  // Genesis authorises exactly its signer — NOT payload.devicePubkey.
-  const activePubkeys: string[] = [first.signerPubkey]
 
   if (!verifySigchainLinkMock(first, first.signerPubkey)) {
-    throw new Error('signature verification failed')
+    throw new Error('invalid_input: signature verification failed')
   }
+
+  const userPubkey = first.signerPubkey.toLowerCase()
+  // Genesis authorises exactly its signer — NOT payload.devicePubkey.
+  const activePubkeys: string[] = [first.signerPubkey]
+  const kemKeys = new Map<string, MockDeviceKemKey>()
+  const named = new Map<string, string>()
+  const claim = (key: string, device: string, seq: number) => {
+    const k = key.toLowerCase()
+    const owner = named.get(k)
+    if (owner !== undefined && owner !== device) {
+      throw rejected('chain_key_reused', `key ${k} at seq ${seq} already belongs to device ${owner}`)
+    }
+    named.set(k, device)
+  }
+  claim(first.signerPubkey, first.signerPubkey, first.seq)
+  const firstEnc = field(firstPayload, 'deviceEncryptionPubkey')
+  if (firstEnc !== undefined) claim(firstEnc, first.signerPubkey, first.seq)
 
   let prevHash = first.entryHash
   let prevSeq = first.seq
 
   for (const link of links.slice(1)) {
     if (link.seq !== prevSeq + 1) {
-      throw new Error(`sequence gap: expected ${prevSeq + 1} but got ${link.seq}`)
+      throw rejected('chain_seq', `sequence gap: expected ${prevSeq + 1} but got ${link.seq}`)
     }
     if (link.prevHash === null || !hexEq(link.prevHash, prevHash)) {
-      throw new Error(`prevHash mismatch at seq ${link.seq}`)
+      throw rejected('chain_prev_hash', `prevHash mismatch at seq ${link.seq}`)
     }
     // Exact string membership, as Rust's Vec<String>::contains.
     if (!activePubkeys.includes(link.signerPubkey)) {
-      throw new Error(`signer ${link.signerPubkey} not in active device set at seq ${link.seq}`)
+      throw rejected('chain_unauthorised_signer', `signer ${link.signerPubkey} not in active device set at seq ${link.seq}`)
     }
     if (!verifySigchainLinkMock(link, link.signerPubkey)) {
-      throw new Error('signature verification failed')
+      throw new Error('invalid_input: signature verification failed')
     }
 
-    // Rust ignores an unparseable payload here (`if let Ok(..)`).
-    let payload: unknown
-    try {
-      payload = JSON.parse(link.payloadJson)
-    } catch {
-      payload = undefined
-    }
+    const payload: unknown = JSON.parse(link.payloadJson)
     const type = payloadType(payload)
-    const devicePubkey = payloadDevicePubkey(payload)
-    if (type === 'device_add' && devicePubkey !== undefined) {
-      if (!activePubkeys.includes(devicePubkey)) activePubkeys.push(devicePubkey)
-    } else if (type === 'device_remove' && devicePubkey !== undefined) {
-      for (let i = activePubkeys.length - 1; i >= 0; i--) {
-        if (activePubkeys[i] === devicePubkey) activePubkeys.splice(i, 1)
+    const req = (key: string): string => {
+      const v = field(payload, key)
+      if (v === undefined) throw rejected('invalid_format', `link at seq ${link.seq} is missing \`${key}\``)
+      return v
+    }
+    const reqFormat = (): number => {
+      const f = (payload as Record<string, unknown>).format
+      if (typeof f !== 'number' || !Number.isInteger(f) || f < 0 || f > 0xffff) {
+        throw rejected('invalid_format', `link at seq ${link.seq} is missing \`format\``)
+      }
+      return f
+    }
+    if (type === 'device_add') {
+      const device = req('devicePubkey')
+      const enc = req('encryptionPubkey')
+      const format = reqFormat()
+      verifyDevicePopMock(userPubkey, device, enc, format, req('pop'))
+      if (named.has(device.toLowerCase())) {
+        throw rejected('chain_key_reused', `device_add at seq ${link.seq} names device ${device}, already in this chain`)
+      }
+      claim(device, device, link.seq)
+      claim(enc, device, link.seq)
+      const x25519Key = field(payload, 'deviceEncryptionPubkey')
+      if (x25519Key !== undefined) claim(x25519Key, device, link.seq)
+      if (!activePubkeys.includes(device)) activePubkeys.push(device)
+      kemKeys.set(device, { devicePubkey: device, kemPubkey: enc, format })
+    } else if (type === 'device_kem') {
+      const device = req('devicePubkey')
+      if (!hexEq(device, link.signerPubkey)) {
+        throw rejected('chain_unauthorised_signer', `device_kem at seq ${link.seq} is not signed by the device it names`)
+      }
+      const enc = req('encryptionPubkey')
+      const format = reqFormat()
+      verifyDevicePopMock(userPubkey, device, enc, format, req('pop'))
+      claim(enc, device, link.seq)
+      kemKeys.set(device, { devicePubkey: device, kemPubkey: enc, format })
+    } else if (type === 'device_remove') {
+      const devicePubkey = payloadDevicePubkey(payload)
+      if (devicePubkey !== undefined) {
+        for (let i = activePubkeys.length - 1; i >= 0; i--) {
+          if (activePubkeys[i] === devicePubkey) activePubkeys.splice(i, 1)
+        }
+        kemKeys.delete(devicePubkey)
       }
     }
 
@@ -267,11 +414,51 @@ export function verifySigchainMock(links: MockSigchainLink[]): MockSigchainVerif
   }
 
   return {
+    userPubkey,
     verifiedCount: links.length,
     headSeq: prevSeq,
     headHash: prevHash,
     activeDevicePubkeys: activePubkeys,
+    deviceKemKeys: activePubkeys.flatMap(p => kemKeys.get(p) ?? []),
+    // BTreeMap key order: byte-wise, which for lowercase hex is string order.
+    namedKeys: [...named.keys()].sort(),
   }
+}
+
+function field(payload: unknown, key: string): string | undefined {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const v = (payload as Record<string, unknown>)[key]
+  return typeof v === 'string' ? v : undefined
+}
+
+/** Mirror of `sigchain::verify_user_sigchains`. */
+export function verifyUserSigchainsMock(chains: MockSigchainLink[][]): MockSigchainVerifiedState[] {
+  const states = chains.map(verifySigchainMock)
+  const owner = new Map<string, string>()
+  for (const state of states) {
+    for (const key of state.namedKeys) {
+      const other = owner.get(key)
+      if (other !== undefined && other !== state.userPubkey) {
+        throw rejected('chain_key_reused', `key ${key} is named by the chains of users ${other} and ${state.userPubkey}`)
+      }
+      if (other !== undefined) throw rejected('chain_key_reused', `the chain of user ${state.userPubkey} is listed twice`)
+      owner.set(key, state.userPubkey)
+    }
+  }
+  return states
+}
+
+/** Mirror of `sigchain::genesis_device_set`. */
+export function genesisDeviceSetMock(chains: MockSigchainLink[][]): MockGenesisDeviceSet {
+  const set: MockGenesisDeviceSet = { included: [], missing: [] }
+  for (const state of verifyUserSigchainsMock(chains)) {
+    for (const device of state.activeDevicePubkeys) {
+      const k = state.deviceKemKeys.find(x => x.devicePubkey === device)
+      if (k) set.included.push({ userPubkey: state.userPubkey, devicePubkey: device, kemPubkey: k.kemPubkey, format: k.format })
+      else set.missing.push({ userPubkey: state.userPubkey, devicePubkey: device })
+    }
+  }
+  return set
 }
 
 // ── PUK ────────────────────────────────────────────────────────────────

@@ -25,11 +25,17 @@ import { MOCK_PIN_LOCKOUT_STORAGE_KEY } from './pin-lockout'
 import {
   createInitialPukMock,
   createSigchainLinkMock,
+  deviceKemPayloadMock,
+  genesisDeviceSetMock,
   rotatePukMock,
   verifySigchainLinkMock,
   verifySigchainMock,
+  verifyUserSigchainsMock,
   type MockSigchainLink,
 } from './sigchain-mock'
+// X-Wing (ML-KEM-768 + X25519): the mock only has to publish a real X-Wing
+// public key the server's crate accepts; it never decapsulates.
+import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js'
 import type { TauriIpcCommand } from '@/lib/platform'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { x25519 } from '@noble/curves/ed25519.js'
@@ -80,12 +86,20 @@ function requireRegisteredLabel(label: string): void {
 interface MockDeviceSecrets {
   signingSeed: Uint8Array    // 32 bytes
   encryptionSeed: Uint8Array // 32 bytes
+  /** X-Wing seed (32 bytes); absent on a pilot blob not yet unlocked since K-A. */
+  kemSeed?: Uint8Array
 }
 
 interface MockDeviceKeyState {
   deviceId: string
   signingPubkeyHex: string
   encryptionPubkeyHex: string
+  kemPubkeyHex?: string
+}
+
+/** X-Wing public key of a 32-byte seed (mirror of `device_keys::xwing_public_key`). */
+function xwingPubkeyHex(kemSeed: Uint8Array): string {
+  return bytesToHex(ml_kem768_x25519.keygen(kemSeed).publicKey)
 }
 
 let mockSecrets: MockDeviceSecrets | null = null
@@ -336,6 +350,7 @@ async function encryptWithPin(
   signingSeed: Uint8Array,
   encryptionSeed: Uint8Array,
   pin: string,
+  kemSeed?: Uint8Array,
 ): Promise<{
   kdfVersion: number; salt: string; nonce: string; ciphertext: string
   argon2MCost: number; argon2TCost: number; argon2PCost: number
@@ -344,9 +359,11 @@ async function encryptWithPin(
   const nonce = randomBytes(12)
   const kek = await deriveKek(pin, salt)
 
-  const plaintext = new Uint8Array(64)
+  // signing || encryption [|| kem], as device_keys::encrypt_device_secrets_with.
+  const plaintext = new Uint8Array(kemSeed ? 96 : 64)
   plaintext.set(signingSeed)
   plaintext.set(encryptionSeed, 32)
+  if (kemSeed) plaintext.set(kemSeed, 64)
 
   const cipher = gcm(kek, nonce)
   const encrypted = cipher.encrypt(plaintext)
@@ -365,7 +382,7 @@ async function encryptWithPin(
 async function decryptWithPin(
   encrypted: { salt: string; nonce: string; ciphertext: string },
   pin: string,
-): Promise<{ signingSeed: Uint8Array; encryptionSeed: Uint8Array }> {
+): Promise<{ signingSeed: Uint8Array; encryptionSeed: Uint8Array; kemSeed?: Uint8Array }> {
   const salt = hexToBytes(encrypted.salt)
   const nonce = hexToBytes(encrypted.nonce)
   const ciphertext = hexToBytes(encrypted.ciphertext)
@@ -374,11 +391,12 @@ async function decryptWithPin(
   const cipher = gcm(kek, nonce)
   const plaintext = cipher.decrypt(ciphertext)
 
-  if (plaintext.length !== 64) throw new Error('Invalid decrypted device key blob')
+  if (plaintext.length !== 64 && plaintext.length !== 96) throw new Error('Invalid decrypted device key blob')
 
   return {
     signingSeed: plaintext.slice(0, 32),
-    encryptionSeed: plaintext.slice(32),
+    encryptionSeed: plaintext.slice(32, 64),
+    kemSeed: plaintext.length === 96 ? plaintext.slice(64) : undefined,
   }
 }
 
@@ -684,6 +702,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     const signingSeed = randomBytes(32)
     const encryptionSeed = randomBytes(32)
+    const kemSeed = randomBytes(32)
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
 
@@ -691,12 +710,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       deviceId,
       signingPubkeyHex: bytesToHex(signingPubkey),
       encryptionPubkeyHex: bytesToHex(encryptionPubkey),
+      kemPubkeyHex: xwingPubkeyHex(kemSeed),
     }
 
-    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, pin)
+    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, pin, kemSeed)
 
     const result = { ...encrypted, state }
-    mockSecrets = { signingSeed, encryptionSeed }
+    mockSecrets = { signingSeed, encryptionSeed, kemSeed }
     mockDeviceState = state
     mockEncryptedKeys = result
 
@@ -722,11 +742,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const pin = a.pin as string
     let signingSeed: Uint8Array
     let encryptionSeed: Uint8Array
+    let kemSeed: Uint8Array | undefined
 
     try {
       const result = await decryptWithPin(data, pin)
       signingSeed = result.signingSeed
       encryptionSeed = result.encryptionSeed
+      kemSeed = result.kemSeed
     } catch {
       // Wrong PIN — record failed attempt (may throw lockout/wipe)
       recordFailedPinAttempt()
@@ -737,10 +759,21 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     // Success — reset lockout counter
     resetPinLockout()
 
-    mockSecrets = { signingSeed, encryptionSeed }
-    mockDeviceState = data.state
+    // A pilot blob gains its X-Wing key here, re-encrypted under the same PIN
+    // (mirror of unlock_with_pin → device_keys::add_device_kem_key).
+    let upgradedKeys: unknown = null
+    let state = data.state
+    if (!kemSeed) {
+      kemSeed = randomBytes(32)
+      state = { ...data.state, kemPubkeyHex: xwingPubkeyHex(kemSeed) }
+      upgradedKeys = { ...(await encryptWithPin(signingSeed, encryptionSeed, pin, kemSeed)), state }
+      mockEncryptedKeys = upgradedKeys
+    }
 
-    return data.state
+    mockSecrets = { signingSeed, encryptionSeed, kemSeed }
+    mockDeviceState = state
+
+    return { state, upgradedKeys }
   },
 
   // Mirrors CryptoState::lock (apps/desktop/src/crypto.rs): every key it holds
@@ -903,6 +936,21 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   sigchain_verify: (a) => {
     const links = JSON.parse(a.linksJson as string) as MockSigchainLink[]
     return verifySigchainMock(links)
+  },
+
+  sigchain_verify_users: (a) => {
+    return verifyUserSigchainsMock(JSON.parse(a.chainsJson as string) as MockSigchainLink[][])
+  },
+
+  sigchain_genesis_device_set: (a) => {
+    return genesisDeviceSetMock(JSON.parse(a.chainsJson as string) as MockSigchainLink[][])
+  },
+
+  device_kem_payload_from_state: (a) => {
+    const secrets = requireSecrets()
+    const ds = requireDeviceState()
+    if (!secrets.kemSeed || !ds.kemPubkeyHex) throw new Error('invalid_input: device has no X-Wing key')
+    return deviceKemPayloadMock(secrets.signingSeed, ds.kemPubkeyHex, a.userPubkey as string)
   },
 
   sigchain_verify_link: (a) => {

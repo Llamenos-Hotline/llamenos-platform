@@ -168,8 +168,7 @@ pub fn mobile_add_device_kem_key_and_load(
     data: EncryptedDeviceKeys,
     pin: String,
 ) -> Result<EncryptedDeviceKeys, CryptoError> {
-    let upgraded = device_keys::add_device_kem_key(&data, &pin)?;
-    let secrets = device_keys::unlock_device_keys(&upgraded, &pin)?;
+    let (upgraded, secrets) = device_keys::add_device_kem_key(&data, &pin)?;
 
     let mut guard = state().lock().unwrap();
     guard.secrets = Some(secrets);

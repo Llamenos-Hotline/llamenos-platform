@@ -81,7 +81,7 @@ test.describe('onboarding provisions sigchain genesis + PUK (#1050)', () => {
     await page.waitForURL((url) => url.pathname.includes('/profile-setup'))
 
     // The envelope is stored before the chain claims the PUK (PROTOCOL.md §2.11).
-    expect(posted, 'identity-init POST order').toEqual(['sigchain:genesis', 'puk-envelope', 'sigchain:puk_epoch'])
+    expect(posted, 'identity-init POST order').toEqual(['sigchain:genesis', 'puk-envelope', 'sigchain:puk_epoch', 'sigchain:device_kem'])
 
     // The page's own CryptoState verifies the stored chain and opens its PUK envelope.
     const identity = await expectInitialisedIdentity(page)
@@ -98,14 +98,18 @@ test.describe('onboarding provisions sigchain genesis + PUK (#1050)', () => {
     expect(asVolunteer.status, 'volunteer cannot read their own sigchain').toBe(200)
     expect(asVolunteer.data?.integrityBreak).toBeNull()
     const links = asVolunteer.data?.links ?? []
-    expect(links.map((l) => `${l.seqNo}:${l.linkType}`)).toEqual(['1:genesis', '2:puk_epoch'])
+    // Genesis, the first PUK, then this device's X-Wing key (#2496, spec 2026-11-25 §5).
+    expect(links.map((l) => `${l.seqNo}:${l.linkType}`)).toEqual(['1:genesis', '2:puk_epoch', '3:device_kem'])
     expect(links[0].prevHash).toBeNull()
     // The read-back carries every field of the hashed form, so the second
     // client verifies hashes and signatures itself rather than trusting the
     // onboarding client's copy.
     const verified = verifySigchainMock(links.map(toMockSigchainLink))
     expect(verified.activeDevicePubkeys).toEqual([volunteerPubkey])
-    expect(verified.headHash).toBe(links[1].hash)
+    expect(verified.headHash).toBe(links[2].hash)
+    // The device published its X-Wing key, signed by itself with its pop.
+    expect(verified.deviceKemKeys.map((k) => k.devicePubkey)).toEqual([volunteerPubkey])
+    expect(verified.deviceKemKeys[0].kemPubkey).toHaveLength(2432)
 
     // ── Read-back as a DIFFERENT identity (admin) ───────────────────────
     const asAdmin = await readSigchain(request, `/users/${volunteerPubkey}/sigchain`, ADMIN_SEED)

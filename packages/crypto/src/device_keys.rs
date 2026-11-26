@@ -212,10 +212,13 @@ impl DeviceKeyState {
 ///
 /// A blob that already holds an X-Wing key is refused, so a key that may
 /// already be in the user chain is never silently replaced.
+///
+/// Returns the new blob and its unlocked secrets, so a caller unlocking the
+/// device anyway needs no third Argon2id run.
 pub fn add_device_kem_key(
     encrypted: &EncryptedDeviceKeys,
     credential: &str,
-) -> Result<EncryptedDeviceKeys, CryptoError> {
+) -> Result<(EncryptedDeviceKeys, DeviceSecrets), CryptoError> {
     let mut secrets = unlock_device_keys(encrypted, credential)?;
     if secrets.kem_seed.is_some() {
         return Err(CryptoError::InvalidInput(
@@ -227,7 +230,8 @@ pub fn add_device_kem_key(
     secrets.kem_seed = Some(kem_seed);
     kem_seed.zeroize();
     let state = DeviceKeyState::of(&encrypted.state.device_id, &secrets);
-    encrypt_device_secrets(&secrets, credential, &state)
+    let upgraded = encrypt_device_secrets(&secrets, credential, &state)?;
+    Ok((upgraded, secrets))
 }
 
 /// Decrypt device keys from a credential-encrypted blob.
@@ -492,8 +496,12 @@ mod tests {
         assert!(before.kem_seed.is_none());
         assert!(pilot.state.kem_pubkey_hex.is_none());
 
-        let upgraded = add_device_kem_key(&pilot, "12345678").unwrap();
+        let (upgraded, loaded) = add_device_kem_key(&pilot, "12345678").unwrap();
         let after = unlock_device_keys(&upgraded, "12345678").unwrap();
+        assert_eq!(
+            loaded.kem_seed, after.kem_seed,
+            "the returned secrets are the stored ones"
+        );
         assert_eq!(upgraded.state.device_id, "pilot-dev");
         assert_eq!(
             upgraded.state.signing_pubkey_hex,
