@@ -67,6 +67,32 @@ class HubRepository @Inject constructor(
     }
 
     /**
+     * Switch to [hubId] only if the server lists it among the user's hubs. Returns whether
+     * it switched.
+     *
+     * For a hub named by something the server did not sign — a call notification built from
+     * a VoIP push, which travels in the clear through the push distributor. When the list
+     * cannot be read (offline, or the app is still locked and cannot sign the request) the
+     * hub is left alone: a tap that cannot be checked opens the app and switches nothing.
+     */
+    suspend fun switchToMemberHub(hubId: String): Boolean {
+        val hubs = try {
+            apiService.getHubs().hubs
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "hub list unavailable; not switching to a notification's hub: ${e.message}")
+            return false
+        }
+        if (hubs.none { it.id == hubId }) {
+            Log.w(TAG, "notification named a hub the user is not a member of; not switching")
+            return false
+        }
+        switchHub(hubId)
+        return true
+    }
+
+    /**
      * Fetch [hubId]'s current key and replace the cached one.
      *
      * Always asks the server: a cached key may predate a rotation, and a member removed

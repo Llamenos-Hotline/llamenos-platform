@@ -882,6 +882,7 @@ class SipRegistrationTest {
 
     @Test
     fun `ringing does not switch the active hub`() {
+        linphoneService.associateHubAccountForTesting(HUB_B, mockk(relaxed = true))
         linphoneService.storePendingCallHub(PUSH_REF, HUB_B)
         every { cryptoService.isUnlocked } returns true
 
@@ -892,6 +893,7 @@ class SipRegistrationTest {
 
     @Test
     fun `answering with the app unlocked switches to the pushed call's hub`() {
+        linphoneService.associateHubAccountForTesting(HUB_B, mockk(relaxed = true))
         linphoneService.storePendingCallHub(PUSH_REF, HUB_B)
         every { cryptoService.isUnlocked } returns true
         val call = incomingCall(SIP_CALL_ID, PUSH_REF)
@@ -905,6 +907,7 @@ class SipRegistrationTest {
 
     @Test
     fun `answering while the app is locked leaves the active hub alone`() {
+        linphoneService.associateHubAccountForTesting(HUB_B, mockk(relaxed = true))
         linphoneService.storePendingCallHub(PUSH_REF, HUB_B)
         every { cryptoService.isUnlocked } returns false
         val call = incomingCall(SIP_CALL_ID, PUSH_REF)

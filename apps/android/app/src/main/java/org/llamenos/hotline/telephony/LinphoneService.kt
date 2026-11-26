@@ -667,7 +667,8 @@ class LinphoneService @Inject constructor(
 
     /**
      * Hub an inbound INVITE arrived for: the hub its push announced, joined through the
-     * INVITE's [PUSH_REF_HEADER]; else the hub whose registered identity the INVITE's To
+     * INVITE's [PUSH_REF_HEADER] — and only if this device holds a SIP registration for that
+     * hub; else the hub whose registered identity the INVITE's To
      * names (user@domain — transport and tag params differ between the registered identity
      * and the Request-URI, so they are not compared). This SDK's Call has no getAccount();
      * identity matching is the seam.
@@ -676,9 +677,16 @@ class LinphoneService @Inject constructor(
      * so a member of several hubs binds every one of them to the same identity, and an
      * INVITE to it does not say which hub it is for. Guessing would put the volunteer in the
      * wrong hub when they answer; no hub is the honest answer, and the call still rings.
+     *
+     * Why the pushed hub must be a registered one: the VoIP push travels in the clear through
+     * the push distributor, so its `hub-id` is unauthenticated. Registrations are made only
+     * for hubs the server confirmed membership of at clock-in, so a pushed hub outside them
+     * is a forged or stale push, and is not what the answer switches to.
      */
     private fun resolveIncomingHubId(call: Call): String? {
-        pushRefOf(call)?.let { ref -> pushedCallHubIds.remove(ref)?.let { return it } }
+        pushRefOf(call)?.let { ref ->
+            pushedCallHubIds.remove(ref)?.takeIf(hubAccounts::containsKey)?.let { return it }
+        }
         val to = call.toAddress ?: return null
         return hubAccounts.entries
             .filter { (_, account) ->

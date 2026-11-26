@@ -33,15 +33,19 @@ class CallNotificationTap @Inject constructor(
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     /**
-     * Act on a tap. Returns the hub switched to, or null when [intent] is not a call
+     * Act on a tap. Returns the hub the tap asks for, or null when [intent] is not a call
      * notification tap or names no hub — in which case nothing is switched.
      *
-     * The switch runs on the application scope: the tap activity finishes at once, and the
-     * hub key refresh that follows the switch must not be cancelled with it.
+     * The hub is switched to only once the server confirms membership of it
+     * ([HubRepository.switchToMemberHub]): a pushed call notification's hub comes from a
+     * cleartext VoIP push and is not, by itself, a reason to move anyone anywhere.
+     *
+     * Runs on the application scope: the tap activity finishes at once, and the membership
+     * check and key refresh must not be cancelled with it.
      */
     fun onTap(intent: Intent?): String? {
         val hubId = hubToActivate(intent) ?: return null
-        scope.launch { hubRepository.switchHub(hubId) }
+        scope.launch { hubRepository.switchToMemberHub(hubId) }
         return hubId
     }
 

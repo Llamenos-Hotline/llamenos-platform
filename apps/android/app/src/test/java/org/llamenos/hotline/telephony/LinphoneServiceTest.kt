@@ -111,13 +111,35 @@ class LinphoneServiceTest {
         // the INVITE's Call-ID is minted by the PBX for the leg. They never match, so the only
         // way the push's hub reaches the ring is the push-ref header the bridge stamps.
         val svc = service()
+        // One identity bound to both hubs, as `/sip-token` issues it: only the push can say
+        // which of them this INVITE is for.
         svc.storePendingCallHub(PUSH_REF, "hub-from-push")
         hubAccount(svc, "hub-from-account", "volunteer1", "sip.example.org")
+        hubAccount(svc, "hub-from-push", "volunteer1", "sip.example.org")
 
         svc.handleCallState(incomingCall(pushRef = PUSH_REF), Call.State.IncomingReceived)
 
         assertEquals("hub-from-push", tracker.ringingCall.value?.hubId)
         assertEquals("hub-from-push", svc.ringingCallHubIdForTesting(SIP_CALL_ID))
+    }
+
+    @Test
+    fun `a pushed hub this device holds no registration for is not trusted`() {
+        // The VoIP push is unauthenticated (cleartext through the distributor). A hub it
+        // names that this device never registered for is not a hub to answer into.
+        val svc = service()
+        every { cryptoService.isUnlocked } returns true
+        hubAccount(svc, "hub-a", "volunteer1", "sip.example.org")
+        svc.storePendingCallHub(PUSH_REF, "hub-not-a-member")
+        val call = incomingCall(pushRef = PUSH_REF)
+
+        svc.handleCallState(call, Call.State.IncomingReceived)
+        // Falls back to the identity the INVITE was sent to — here, unambiguously hub-a.
+        assertEquals("hub-a", tracker.ringingCall.value?.hubId)
+        svc.handleCallState(call, Call.State.Connected)
+
+        coVerify(exactly = 0) { activeHubState.setActiveHub("hub-not-a-member") }
+        coVerify(exactly = 1) { activeHubState.setActiveHub("hub-a") }
     }
 
     @Test
@@ -150,6 +172,7 @@ class LinphoneServiceTest {
     fun `a ring does not switch the active hub, even with the app unlocked`() {
         val svc = service()
         every { cryptoService.isUnlocked } returns true
+        hubAccount(svc, "hub-b", "volunteer1", "sip.example.org")
         svc.storePendingCallHub(PUSH_REF, "hub-b")
 
         svc.handleCallState(incomingCall(pushRef = PUSH_REF), Call.State.IncomingReceived)
@@ -161,6 +184,7 @@ class LinphoneServiceTest {
     fun `answering a pushed call while unlocked switches to the call's hub`() {
         val svc = service()
         every { cryptoService.isUnlocked } returns true
+        hubAccount(svc, "hub-b", "volunteer1", "sip.example.org")
         svc.storePendingCallHub(PUSH_REF, "hub-b")
         val call = incomingCall(pushRef = PUSH_REF)
 
@@ -177,6 +201,7 @@ class LinphoneServiceTest {
     fun `answering while the app is locked leaves the active hub alone`() {
         val svc = service()
         every { cryptoService.isUnlocked } returns false
+        hubAccount(svc, "hub-b", "volunteer1", "sip.example.org")
         svc.storePendingCallHub(PUSH_REF, "hub-b")
         val call = incomingCall(pushRef = PUSH_REF)
 
@@ -190,6 +215,7 @@ class LinphoneServiceTest {
     fun `a declined or missed call never switches the active hub`() {
         val svc = service()
         every { cryptoService.isUnlocked } returns true
+        hubAccount(svc, "hub-b", "volunteer1", "sip.example.org")
         svc.storePendingCallHub(PUSH_REF, "hub-b")
         val call = incomingCall(pushRef = PUSH_REF)
 

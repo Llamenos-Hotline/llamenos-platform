@@ -56,12 +56,12 @@ class CallNotificationTapTest {
         IncomingCallNotifier(context, crypto).showIncomingCall(ring)
 
         // Posting the notification is part of the ring: nothing switched yet.
-        coVerify(exactly = 0) { hubRepository.switchHub(any()) }
+        coVerify(exactly = 0) { hubRepository.switchToMemberHub(any()) }
 
         val content = savedIntent(postedNotification().contentIntent)
         assertEquals(CallNotificationTapActivity::class.java.name, content.component?.className)
         assertEquals("hub-b", tap.onTap(content))
-        coVerify(exactly = 1) { hubRepository.switchHub("hub-b") }
+        coVerify(exactly = 1) { hubRepository.switchToMemberHub("hub-b") }
     }
 
     @Test
@@ -73,7 +73,7 @@ class CallNotificationTapTest {
 
         val fullScreen = savedIntent(postedNotification().fullScreenIntent)
         assertNull(tap.onTap(fullScreen))
-        coVerify(exactly = 0) { hubRepository.switchHub(any()) }
+        coVerify(exactly = 0) { hubRepository.switchToMemberHub(any()) }
     }
 
     @Test
@@ -81,7 +81,7 @@ class CallNotificationTapTest {
         val notification = PushService.buildCallNotification(context, "hub-c", "Incoming call")
 
         assertEquals("hub-c", tap.onTap(savedIntent(notification.contentIntent)))
-        coVerify(exactly = 1) { hubRepository.switchHub("hub-c") }
+        coVerify(exactly = 1) { hubRepository.switchToMemberHub("hub-c") }
     }
 
     @Test
@@ -91,7 +91,7 @@ class CallNotificationTapTest {
         val content = savedIntent(notification.contentIntent)
         assertEquals(CallNotificationTapActivity::class.java.name, content.component?.className)
         assertNull(tap.onTap(content))
-        coVerify(exactly = 0) { hubRepository.switchHub(any()) }
+        coVerify(exactly = 0) { hubRepository.switchToMemberHub(any()) }
     }
 
     @Test
@@ -100,6 +100,6 @@ class CallNotificationTapTest {
 
         assertNull(tap.onTap(forged))
         assertNull(tap.onTap(null))
-        coVerify(exactly = 0) { hubRepository.switchHub(any()) }
+        coVerify(exactly = 0) { hubRepository.switchToMemberHub(any()) }
     }
 }
