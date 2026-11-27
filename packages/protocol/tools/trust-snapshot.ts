@@ -658,7 +658,13 @@ const ANDROID_NON_SHIPPING: ReadonlySet<string> = new Set([
 
 function androidShipped(path: string): boolean {
   if (!path.startsWith(ANDROID_SRC)) return false
-  return !ANDROID_NON_SHIPPING.has(path.slice(ANDROID_SRC.length).split('/')[0] ?? '')
+  return androidSourceSetShips(path.slice(ANDROID_SRC.length).split('/')[0] ?? '')
+}
+
+/** Whether the Android source set called `name` can reach a release build. One answer for
+ *  both questions that ask it: which files under `src/` are scanned, and which Gradle wiring is recorded. */
+function androidSourceSetShips(name: string): boolean {
+  return !ANDROID_NON_SHIPPING.has(name)
 }
 
 /** Transport APIs, beyond the pinned clients, through which a connection could be opened.
@@ -718,6 +724,176 @@ const langOf = (path: string): Lang | undefined =>
 /** Code lines (comments gone) a regex hits, whitespace-squashed. */
 function matchingLines(code: string, re: RegExp): string[] {
   return code.split('\n').map(squash).filter((l) => l !== '' && re.test(l))
+}
+
+/** The Android source set a Gradle selector names — `getByName("x")`, `named("x")`, `create("x")`,
+ *  `maybeCreate("x")`, `register("x")`, `sourceSets["x"]`, `val x by getting` — or `null` when it is
+ *  written in a way that cannot be read as one literal name. `undefined` means "not a selector". */
+const SOURCE_SET_SELECTOR_RE = /\b(?:getByName|named|create|maybeCreate|register)\(\s*("[^"$]*"|[^)]*)\)|\bsourceSets\[\s*("[^"$]*"|[^\]]*)\]|\bval\s+(\w+)\s+by\s+(?:getting|creating|existing)\b/g
+
+function selectedSourceSets(text: string): (string | null)[] {
+  return [...text.matchAll(SOURCE_SET_SELECTOR_RE)].map((m) => {
+    const lit = m[1] ?? m[2]
+    if (m[3] !== undefined) return m[3]
+    const q = /^"([^"$]+)"$/.exec((lit ?? '').trim())
+    return q === null ? null : (q[1] as string)
+  })
+}
+
+/** A whole statement that is a selector chain on one literal source set, ending in a call with no trailing expression. */
+const SINGLE_LINE_CHAIN_RE = /^(?:android\.)?sourceSets(?:\.(?:getByName|named)\(\s*"([^"$]+)"\s*\)|\[\s*"([^"$]+)"\s*\])\.(?:kotlin|java|res|resources|assets|aidl|renderscript|jniLibs|shaders|mlModels|manifest)\.(?:srcDirs?|srcFile)\(\s*"[^"\\]*"(?:\s*,\s*"[^"\\]*")*\s*\)$/
+
+/** What a Gradle block says about itself: it is a `sourceSets { }` container, or it is one source set
+ *  (`undefined` = neither, `null` = a source set whose name is not one string literal). */
+type GradleFrame = { container: boolean; sourceSet?: string | null }
+
+function gradleFrame(header: string, parentIsContainer: boolean): GradleFrame {
+  const h = header.trim()
+  if (/(?:^|[.\s])sourceSets$/.test(h)) return { container: true }
+  if (!parentIsContainer) return { container: false }
+  // A direct child of a `sourceSets { }` block is a source set: by selector, or by bare name (`androidTest {`).
+  const sel = selectedSourceSets(h)
+  if (sel.length > 0) return { container: false, sourceSet: sel.length === 1 ? (sel[0] as string | null) : null }
+  const bare = /^(\w+)$/.exec(h)
+  return { container: false, sourceSet: bare === null ? null : (bare[1] as string) }
+}
+
+/** Index just past the Kotlin string literal starting at `i` (templates `${ … }` may hold quotes), or -1 if it never closes. */
+function skipKotlinString(code: string, i: number): number {
+  const raw = code.startsWith('"""', i)
+  let j = i + (raw ? 3 : 1)
+  while (j < code.length) {
+    const c = code[j] as string
+    if (raw ? code.startsWith('"""', j) : c === '"') return j + (raw ? 3 : 1)
+    if (!raw && c === '\\') j += 2
+    else if (c === '$' && code[j + 1] === '{') {
+      let depth = 1
+      j += 2
+      while (j < code.length && depth > 0) {
+        const d = code[j] as string
+        if (d === '"') {
+          const end = skipKotlinString(code, j)
+          if (end < 0) return -1
+          j = end
+          continue
+        }
+        if (d === "'") {
+          const len = code[j + 1] === '\\' ? 4 : 3
+          if (code[j + len - 1] !== "'") return -1
+          j += len
+          continue
+        }
+        if (d === '{') depth += 1
+        else if (d === '}') depth -= 1
+        j += 1
+      }
+    } else j += 1
+  }
+  return -1
+}
+
+/**
+ * The only statements that may be blanked out of a test-only source set: adding a directory or a manifest
+ * to the set the block already names, or a nested accessor block (`kotlin { … }`) holding the same. An
+ * allowlist, not a search for what is dangerous: anything else inside the block (another selector, `android`,
+ * an assignment, a call on a different receiver) makes the attribution untrustworthy and nothing is dropped.
+ */
+const SAFE_SOURCE_SET_STATEMENT_RE = /^(?:(?:(?:kotlin|java|res|resources|assets|aidl|renderscript|jniLibs|shaders|mlModels|manifest)\.)?(?:srcDirs?|srcFile)\(\s*"[^"\\]*"(?:\s*,\s*"[^"\\]*")*\s*\)|(?:kotlin|java|res|resources|assets|aidl|renderscript|jniLibs|shaders|mlModels)\s*\{|\})$/
+
+/** A second layer under the allowlist: a string template (`"${…}"`) is evaluated, so one that names a source set or
+ *  the build model is refused even inside a statement of an allowed shape. */
+const REACHES_ANOTHER_SOURCE_SET_RE = /\b(?:sourceSets|android|extensions|project)\b/
+
+const isSafeSourceSetText = (dropped: string): boolean =>
+  selectedSourceSets(dropped).length === 0 &&
+  !REACHES_ANOTHER_SOURCE_SET_RE.test(dropped) &&
+  dropped.split(/[\n;]/).map(squash).every((st) => st === '' || SAFE_SOURCE_SET_STATEMENT_RE.test(st))
+
+/** `code` with the text that sits inside a non-shipping source set blanked out, line structure kept. Text is
+ *  attributed character by character, so a block opened and closed on one line (`androidTest { … }`) is
+ *  attributed too. `undefined` when the braces do not balance: nothing can then be attributed. */
+function withoutNonShippingSourceSets(code: string): string[] | undefined {
+  const lines: string[] = ['']
+  const stack: GradleFrame[] = []
+  const owner = (): string | null | undefined => {
+    for (let i = stack.length - 1; i >= 0; i -= 1) if ((stack[i] as GradleFrame).sourceSet !== undefined) return (stack[i] as GradleFrame).sourceSet
+    return undefined
+  }
+  let header = ''
+  let dropped = ''
+  const emit = (ch: string): void => {
+    const o = owner()
+    const blanked = typeof o === 'string' && !androidSourceSetShips(o)
+    if (blanked) dropped += ch
+    if (ch === '\n') lines.push('')
+    else if (!blanked) lines[lines.length - 1] += ch
+  }
+  for (let i = 0; i < code.length; i += 1) {
+    const c = code[i] as string
+    if (c === '"') {
+      const end = skipKotlinString(code, i)
+      if (end < 0) return undefined
+      for (const ch of code.slice(i, end)) emit(ch)
+      header += code.slice(i, end)
+      i = end - 1
+      continue
+    }
+    if (c === "'") {
+      // A char literal (`'"'`, `'{'`, `'\n'`) opens no string and no block.
+      const len = code[i + 1] === '\\' ? 4 : 3
+      if (code[i + len - 1] === "'") {
+        for (const ch of code.slice(i, i + len)) emit(ch)
+        header += code.slice(i, i + len)
+        i += len - 1
+        continue
+      }
+    }
+    if (c === '{') {
+      emit(c)
+      stack.push(gradleFrame(header, stack.length > 0 && (stack[stack.length - 1] as GradleFrame).container))
+      header = ''
+      continue
+    }
+    if (c === '}') {
+      dropped += '\n' // a block's text is its own statement, however close the next one is
+      if (stack.pop() === undefined) return undefined
+      emit(c)
+      header = ''
+      continue
+    }
+    emit(c)
+    header = c === ';' ? '' : header + (c === '\n' ? ' ' : c)
+  }
+  // Anything in a test-only block beyond adding its own directories could be writing to a shipping one.
+  if (!isSafeSourceSetText(dropped)) return undefined
+  return stack.length === 0 ? lines : undefined
+}
+
+/**
+ * The lines of a Gradle build script (comments already gone) that wire the build, minus the text that
+ * sits in a source set no release build contains. The discriminator is the ENCLOSING BLOCK, which a line
+ * grep cannot see: `kotlin.srcDir("src/androidTest/…")` is a test helper inside `getByName("test")` and
+ * a change to what ships inside `getByName("main")`.
+ *
+ * Fail safe: text is dropped only when it is positively inside one source set that
+ * `androidSourceSetShips` says cannot ship. A selector that is not a string literal, several selectors
+ * on one line, unbalanced braces, or anything outside a source set stays in the snapshot.
+ */
+function gradleWiringLines(code: string, re: RegExp): string[] {
+  const kept = withoutNonShippingSourceSets(code)
+  if (kept === undefined) return matchingLines(code, re)
+  return kept.flatMap((raw) => {
+    const line = squash(raw)
+    if (line === '' || !re.test(line)) return []
+    // `sourceSets.getByName("androidTest").java.srcDir("x")` — a statement that is one selector chain on one
+    // source set; any other shape (a `;`, a block, a second selector, a trailing expression) stays.
+    const chain = SINGLE_LINE_CHAIN_RE.exec(line)
+    if (chain !== null && !line.includes(';') && selectedSourceSets(line).length === 1) {
+      const name = chain[1] ?? chain[2]
+      if (name !== undefined && !androidSourceSetShips(name)) return []
+    }
+    return [line]
+  })
 }
 
 function requireText(tree: TreeReader, path: string, why: string): string {
@@ -1004,7 +1180,7 @@ export function extractTrustSnapshot(tree: TreeReader): TrustSnapshot {
   const gradle = tree.read(ANDROID_GRADLE)
   const buildWiring: Record<string, string[]> = {}
   if (gradle !== undefined) {
-    buildWiring[ANDROID_GRADLE] = matchingLines(
+    buildWiring[ANDROID_GRADLE] = gradleWiringLines(
       stripComments(gradle, 'kotlin'),
       /sourceSets|srcDirs?\(|setSrcDirs|manifest\.srcFile|manifestPlaceholders|resValue\(|buildTypes|productFlavors|flavorDimensions|initWith\(|usesCleartext|networkSecurityConfig|sha256\//,
     )

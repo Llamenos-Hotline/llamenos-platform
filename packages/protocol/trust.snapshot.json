@@ -4,8 +4,7 @@
       "apps/android/app/build.gradle.kts": [
         "buildTypes {",
         "sourceSets {",
-        "kotlin.srcDir(\"${rootProject.projectDir}/../../packages/protocol/generated/kotlin\")",
-        "resources.srcDir(\"${layout.buildDirectory.get().asFile}/generated/testFixtures\")"
+        "kotlin.srcDir(\"${rootProject.projectDir}/../../packages/protocol/generated/kotlin\")"
       ]
     },
     "manifests": {

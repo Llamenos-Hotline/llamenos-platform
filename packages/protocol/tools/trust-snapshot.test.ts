@@ -312,6 +312,66 @@ describe('break it — each class of trust defect moves the snapshot', () => {
     })
   })
 
+  describe('Gradle wiring in a source set that ships still moves it (#3105)', () => {
+    const GRADLE = 'apps/android/app/build.gradle.kts'
+    const inSet = (set: string, body: string) => swap(`getByName("${set}") {`, `getByName("${set}") {\n            ${body}`)
+    test('the main source set takes a different manifest', () => {
+      expectMoves(edited({ [GRADLE]: inSet('main', 'manifest.srcFile("src/insecure/AndroidManifest.xml")') }), /buildWiring/)
+    })
+    test('the main source set gains a srcDir, even one that is named after a test directory', () => {
+      expectMoves(edited({ [GRADLE]: inSet('main', 'kotlin.srcDir("src/androidTest/java/org/llamenos/hotline/helpers/seed")') }), /buildWiring/)
+    })
+    test('a release source set and a flavour source set it has never heard of', () => {
+      expectMoves(edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        getByName("release") { res.srcDir("src/insecure/res") }') }), /buildWiring/)
+      expectMoves(edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        create("staging") { manifest.srcFile("src/staging/AndroidManifest.xml") }') }), /buildWiring/)
+    })
+    test('a source set that is bare-named like a shipping one', () => {
+      expectMoves(edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        release { java.srcDirs("src/insecure/java") }') }), /buildWiring/)
+    })
+    test('a test-only block closes before the shipping line that follows it', () => {
+      expectMoves(
+        edited({ [GRADLE]: swap('getByName("test") {', 'getByName("androidTest") { }\n        getByName("main").manifest.srcFile("src/insecure/AndroidManifest.xml")\n        getByName("test") {') }),
+        /buildWiring/,
+      )
+    })
+    test('fail safe: a selector that is not a string literal cannot be attributed, so it stays', () => {
+      expectMoves(edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        getByName(someSet) { java.srcDir("src/x") }') }), /buildWiring/)
+    })
+    test('fail safe: two selectors on one line cannot be attributed, so the line stays', () => {
+      expectMoves(
+        edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        sourceSets.getByName("test").java.srcDirs(sourceSets.getByName("main").java.srcDirs)') }),
+        /buildWiring/,
+      )
+    })
+    test('fail safe: braces that do not balance leave every wiring line in the snapshot', () => {
+      expectMoves(edited({ [GRADLE]: swap('getByName("test") {', 'getByName("test") {\n            kotlin.srcDir("src/androidTest/more")\n            val unclosed = run {') }), /buildWiring/)
+    })
+    test('fail safe: a test-only block that reaches another source set through the outer receiver', () => {
+      expectMoves(edited({ [GRADLE]: inSet('test', 'getByName("main").manifest.srcFile("src/insecure/AndroidManifest.xml")') }), /buildWiring/)
+      expectMoves(edited({ [GRADLE]: inSet('test', 'android.sourceSets["release"].res.srcDir("src/insecure/res")') }), /buildWiring/)
+    })
+    test('fail safe: a template inside an otherwise allowed statement that names the build model', () => {
+      expectMoves(edited({ [GRADLE]: inSet('test', 'kotlin.srcDir("${android.sourceSets["release"].res.srcDirs}")') }), /buildWiring/)
+    })
+    test('fail safe: a single-line chain on a test-only set that also does something else on the line stays', () => {
+      expectMoves(
+        edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        sourceSets.getByName("test").java.srcDir("x"); sourceSets.maybeCreate("main").manifest.srcFile("src/insecure/AndroidManifest.xml")') }),
+        /buildWiring/,
+      )
+    })
+    test('a char literal or a template holding a quote does not desynchronise the block tracking', () => {
+      expectMoves(
+        edited({ [GRADLE]: swap('sourceSets {', `sourceSets {\n        val c = '"'\n        val s = "\${listOf("{").size}"\n        getByName("main") { manifest.srcFile("src/insecure/AndroidManifest.xml") }`) }),
+        /buildWiring/,
+      )
+      // …and a test-only block that holds anything but directory wiring is not trusted to be test-only.
+      expectMoves(edited({ [GRADLE]: inSet('test', `val s = "\${listOf("}").size}"; val c = '{'\n            kotlin.srcDir("src/androidTest/more")`) }), /buildWiring/)
+    })
+    test('a build type wired to a different network security config', () => {
+      expectMoves(edited({ [GRADLE]: swap('debug {', 'debug {\n            manifestPlaceholders["networkSecurityConfig"] = "@xml/open"') }), /buildWiring/)
+    })
+  })
+
   describe('App Transport Security', () => {
     test('Info.plist: NSAllowsArbitraryLoads set true', () => {
       expectMoves(edited({ [INFO_PLIST]: swap(/(<key>NSAllowsArbitraryLoads<\/key>\s*)<false\/>/, '$1<true/>') }), /infoPlists/)
@@ -525,6 +585,32 @@ describe('break it — each class of trust defect moves the snapshot', () => {
 // ---------------------------------------------------------------------------
 
 describe('no noise — diffs that change no trust decision leave the snapshot alone', () => {
+  describe('Gradle wiring is scoped to the source set it sits in (#3105)', () => {
+    const GRADLE = 'apps/android/app/build.gradle.kts'
+    /** Add `body` inside the `getByName("<set>") {` block that already exists in the real build script. */
+    const inSet = (set: string, body: string) => swap(`getByName("${set}") {`, `getByName("${set}") {\n            ${body}`)
+    const SEED = 'kotlin.srcDir("src/androidTest/java/org/llamenos/hotline/helpers/seed")'
+
+    test('#3097: the unit-test source set also compiles a directory under androidTest', () => {
+      expectUnchanged(edited({ [GRADLE]: inSet('test', SEED) }))
+    })
+    test('a srcDir added to a test-only source set declared by a bare name, in the nested form, and on one line', () => {
+      expectUnchanged(
+        edited({
+          [GRADLE]: swap('sourceSets {', `sourceSets {\n        androidTest { ${SEED} }\n        val testFixtures by getting { java.srcDir("src/fixtures/java") }\n        named("debug") { resources.srcDirs("src/debug/more") }`),
+        }),
+      )
+    })
+    test('a selector chain on a single line that names a test-only source set', () => {
+      expectUnchanged(
+        edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        sourceSets.getByName("androidTest").java.srcDir("src/androidTest/more")') }),
+      )
+    })
+    test('a srcDir whose path mentions a test directory, in a test-only block that a later main block follows', () => {
+      expectUnchanged(edited({ [GRADLE]: inSet('test', 'kotlin {\n                srcDir("src/androidTest/java")\n            }') }))
+    })
+  })
+
   test('#3051: five imports and three suspend wrappers on existing routes in the Android HTTP surface', () => {
     expectUnchanged(
       edited({
