@@ -349,12 +349,21 @@ function parseCucumberStepPhrases(path: string): string[] {
 }
 
 /**
- * Check if a Gherkin step text matches a Cucumber step phrase pattern.
- * Handles Cucumber expression parameters like {string}, {int}, {word},
- * escaped characters like \\(, and DataTable steps (ending with :).
+ * The compiled form of each Cucumber step phrase, keyed by the phrase text.
+ * `null` records a phrase whose translation is not a valid RegExp, which
+ * then matches only by exact text.
+ *
+ * A phrase is pure input to its regex, so it is compiled once. The Android
+ * binder asks every scenario step against every step phrase (~2.5k steps x
+ * ~900 phrases on this tree), and recompiling per call was the whole cost of
+ * the repo-tests swallowed-failure guard: ~1.7s locally, 7.4s on a CI runner,
+ * past bun's 5s default test timeout.
  */
-export function stepMatchesCucumberPhrase(gherkinStep: string, cucumberPhrase: string): boolean {
-  const step = gherkinStep.trim();
+const compiledPhrases = new Map<string, RegExp | null>();
+
+function compileCucumberPhrase(cucumberPhrase: string): RegExp | null {
+  const cached = compiledPhrases.get(cucumberPhrase);
+  if (cached !== undefined) return cached;
 
   // Convert cucumber expression pattern to regex
   // Step 1: Unescape Kotlin string escapes (source file \\\\ → JS string \\)
@@ -379,13 +388,26 @@ export function stepMatchesCucumberPhrase(gherkinStep: string, cucumberPhrase: s
     })
     ;
 
+  let regex: RegExp | null;
   try {
-    const regex = new RegExp(`^${pattern}$`);
-    return regex.test(step);
+    regex = new RegExp(`^${pattern}$`);
   } catch {
-    // If regex construction fails, fall back to exact match
-    return step === cucumberPhrase;
+    regex = null;
   }
+  compiledPhrases.set(cucumberPhrase, regex);
+  return regex;
+}
+
+/**
+ * Check if a Gherkin step text matches a Cucumber step phrase pattern.
+ * Handles Cucumber expression parameters like {string}, {int}, {word},
+ * escaped characters like \\(, and DataTable steps (ending with :).
+ */
+export function stepMatchesCucumberPhrase(gherkinStep: string, cucumberPhrase: string): boolean {
+  const step = gherkinStep.trim();
+  const regex = compileCucumberPhrase(cucumberPhrase);
+  // If regex construction failed, fall back to exact match
+  return regex === null ? step === cucumberPhrase : regex.test(step);
 }
 
 // ---- Gherkin step extraction (shared by android fuzzy-phrase + desktop/backend expression matching) ----

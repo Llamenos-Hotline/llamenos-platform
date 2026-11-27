@@ -146,6 +146,8 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   // as globs; these are exact files because this list is prefix/exact
   // matching, and guards.test.ts fails if a file those globs match is
   // missing here.
+  'scripts/check-amendment-pointers.ts',
+  'scripts/check-amendment-pointers.test.ts',
   'scripts/check-bddgen-warmup.sh',
   'scripts/check-codeql-languages.ts',
   'scripts/check-consumed-env.py',
