@@ -49,6 +49,13 @@ Feature: Encrypted Backup Restore
     When I upload a version 3 backup file
     Then I should see "Invalid backup file"
 
+  # A v5 backup holds no X-Wing seed, so it cannot restore the key the user's
+  # chain names (#3053). It is refused by name, pointing at account recovery.
+  Scenario: A backup without the device's X-Wing key is refused by name
+    Given I am on the login screen
+    When I upload a version 5 backup file
+    Then I should see "This backup doesn't contain this device's post-quantum encryption key"
+
   # The same flow, with no pointer: every control is reached by Tab and operated
   # by Enter or typing, focus lands where the next input is, and each field
   # carries its purpose as its accessible name without the PIN ever being in it.
