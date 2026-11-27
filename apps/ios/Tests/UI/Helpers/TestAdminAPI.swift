@@ -81,6 +81,22 @@ enum TestAdminAPI {
         return id
     }
 
+    /// A fresh random hub key, as lowercase hex — what a hub manager's device generates (PROTOCOL.md §2.7).
+    static func randomHubKeyHex() -> String {
+        (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    }
+
+    /// Open a hub-sealed field — `hex(nonce(12) ‖ ciphertext ‖ tag(16))`, AES-256-GCM under the hub
+    /// key with the domain-separation `label` as AAD (`encryption::encrypt_hub_field`) — the way any
+    /// other member holding the key would. Nil when it does not open.
+    static func openHubField(packedHex: String, hubKeyHex: String, label: String) -> String? {
+        guard let packed = Data(hexOrNil: packedHex), let key = Data(hexOrNil: hubKeyHex), key.count == 32,
+              let box = try? AES.GCM.SealedBox(combined: packed),
+              let plaintext = try? AES.GCM.open(box, using: SymmetricKey(data: key), authenticating: Data(label.utf8))
+        else { return nil }
+        return String(data: plaintext, encoding: .utf8)
+    }
+
     /// Send a signed JSON request and fail the calling test on anything but 2xx.
     @discardableResult
     static func send(_ method: String, _ path: String, _ body: [String: Any]? = nil, baseURL: String,
@@ -144,6 +160,12 @@ enum TestAdminAPI {
 }
 
 private extension Data {
+    /// Lowercase or uppercase hex, or nil when `hexOrNil` is not an even-length hex string.
+    init?(hexOrNil hex: String) {
+        guard hex.count % 2 == 0, hex.allSatisfy(\.isHexDigit) else { return nil }
+        self.init(hexString: hex)
+    }
+
     init(hexString: String) {
         var bytes = [UInt8]()
         bytes.reserveCapacity(hexString.count / 2)

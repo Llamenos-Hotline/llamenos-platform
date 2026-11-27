@@ -162,7 +162,7 @@ class BaseUITest: XCTestCase {
     /// Fails the test before launching when the class hub could not be created —
     /// a backend that is not reachable must not turn into assertions about
     /// connection-error screens.
-    private func launchConnected(_ identityArgs: [String], hubId overrideHubId: String? = nil) {
+    private func launchConnected(_ identityArgs: [String], hubId overrideHubId: String? = nil, hubKeyHex: String? = nil) {
         let hubId = overrideHubId ?? testHubId
         guard !hubId.isEmpty else {
             XCTFail("No test hub for \(type(of: self)) — is the backend running at \(testHubURL)?")
@@ -171,6 +171,7 @@ class BaseUITest: XCTestCase {
         // The app registers its own fresh device key through the real admin API,
         // signed as the test admin (UI_TESTING builds only — AppState).
         app.launchEnvironment["XCTEST_ADMIN_SECRET"] = TestAdminAPI.seedHex
+        if let hubKeyHex { app.launchEnvironment["XCTEST_HUB_KEY_HEX"] = hubKeyHex }
         app.launchArguments.append(contentsOf: [
             "--reset-keychain",
             "--test-authenticated",
@@ -198,8 +199,32 @@ class BaseUITest: XCTestCase {
     ///
     /// `hubId` launches into a hub other than the class's shared one — for a scenario that
     /// needs a hub in a state no other test in the class has touched.
-    func launchAsAdminWithAPI(hubId: String? = nil) {
-        launchConnected(["--test-admin"], hubId: hubId)
+    ///
+    /// `hubKeyHex` makes this device hold that 32-byte hub key from launch, as if a hub manager
+    /// had shared it (`AppState.holdTestHubKey`). Keep the bytes to open what the app seals.
+    func launchAsAdminWithAPI(hubId: String? = nil, hubKeyHex: String? = nil) {
+        launchConnected(["--test-admin"], hubId: hubId, hubKeyHex: hubKeyHex)
+    }
+
+    // MARK: - Contacts
+
+    /// Open the new-contact form from the dashboard's contacts action.
+    func openNewContactForm() {
+        let contactsAction = scrollToFind("dashboard-contacts-action")
+        guard contactsAction.waitForExistence(timeout: 5) else {
+            XCTFail("Contacts quick action should exist for admin")
+            return
+        }
+        contactsAction.tap()
+
+        // A toolbar Button also surfaces as an "Other" container with the same
+        // identifier; query the button itself.
+        let addButton = app.buttons["contacts-add-button"]
+        guard addButton.waitForExistence(timeout: 10) else {
+            XCTFail("The contacts screen should offer an add-contact button")
+            return
+        }
+        addButton.tap()
     }
 
     // MARK: - Server State (deprecated)

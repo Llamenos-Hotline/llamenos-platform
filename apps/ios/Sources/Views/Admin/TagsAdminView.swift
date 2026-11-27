@@ -210,6 +210,7 @@ private struct TagCreateSheet: View {
                         Text(errorMessage)
                             .foregroundStyle(Color.brandDestructive)
                             .font(.brand(.caption))
+                            .accessibilityIdentifier("tag-create-error")
                     }
                 }
             }

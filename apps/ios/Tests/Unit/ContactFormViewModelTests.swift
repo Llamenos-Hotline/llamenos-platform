@@ -17,10 +17,10 @@ final class ContactFormViewModelTests: XCTestCase {
     private let hubId = "hub-contact-form"
     private let baseURL = URL(string: "https://hub.example.org")!
 
-    private let name = "Maria Gonzalez Ruiz"
-    private let phone = "+15551234567"
-    private let email = "maria@example.org"
-    private let notes = "prefers evening calls"
+    private let contactName = "Maria Gonzalez Ruiz"
+    private let contactPhone = "+15551234567"
+    private let contactEmail = "maria@example.org"
+    private let contactNotes = "prefers evening calls"
 
     private struct Member {
         let blob: EncryptedDeviceKeys
@@ -85,10 +85,10 @@ final class ContactFormViewModelTests: XCTestCase {
     }
 
     private func fill(_ vm: ContactFormViewModel) {
-        vm.displayName = name
-        vm.phone = phone
-        vm.email = email
-        vm.notes = notes
+        vm.displayName = contactName
+        vm.phone = contactPhone
+        vm.email = contactEmail
+        vm.notes = contactNotes
     }
 
     /// The single write the mock captured, exactly as the server would receive it.
@@ -122,12 +122,12 @@ final class ContactFormViewModelTests: XCTestCase {
 
     private func assertOpensForTheSecondReader(_ json: [String: Any], _ w: World) throws {
         let summary = try open(json, tier: "summary", as: w.admin, shape: .contactProfileKey, w)
-        XCTAssertEqual(summary["displayName"] as? String, name, "the second reader cannot open the stored summary")
+        XCTAssertEqual(summary["displayName"] as? String, contactName, "the second reader cannot open the stored summary")
 
         let pii = try open(json, tier: "pii", as: w.admin, shape: .contactIdKey, w)
-        XCTAssertEqual(pii["notes"] as? String, notes)
+        XCTAssertEqual(pii["notes"] as? String, contactNotes)
         let identifiers = try XCTUnwrap(pii["identifiers"] as? [[String: Any]])
-        XCTAssertEqual(Set(identifiers.compactMap { $0["value"] as? String }), [phone, email])
+        XCTAssertEqual(Set(identifiers.compactMap { $0["value"] as? String }), [contactPhone, contactEmail])
 
         // A device nobody sealed to has no envelope, and its key opens none of the others.
         _ = try w.service.unlockWithPin(data: w.stranger.blob, pin: Self.pin)
@@ -146,7 +146,7 @@ final class ContactFormViewModelTests: XCTestCase {
     /// in the clear: the server stores every field of this body verbatim.
     private func assertNothingDerivedFromThePII(_ raw: String, _ json: [String: Any]) {
         let wire = raw.lowercased()
-        for secret in [name, phone, email, notes, "gonzalez", "5551234567"] {
+        for secret in [contactName, contactPhone, contactEmail, contactNotes, "gonzalez", "5551234567"] {
             XCTAssertFalse(wire.contains(secret.lowercased()), "the request body carries \"\(secret)\"")
         }
         for key in ["nameHash", "trigramTokens"] {
@@ -179,7 +179,7 @@ final class ContactFormViewModelTests: XCTestCase {
         let w = try world()
         stubServer()
         let vm = ContactFormViewModel(cryptoService: w.service)
-        vm.displayName = name
+        vm.displayName = contactName
 
         _ = try await vm.save(
             hubId: hubId,
@@ -190,7 +190,7 @@ final class ContactFormViewModelTests: XCTestCase {
         let (_, json) = try onlyWrite(method: "POST", path: "/api/hubs/\(hubId)/directory")
         XCTAssertNil(json["encryptedPII"])
         let summary = try open(json, tier: "summary", as: w.admin, shape: .contactProfileKey, w)
-        XCTAssertEqual(summary["displayName"] as? String, name)
+        XCTAssertEqual(summary["displayName"] as? String, contactName)
     }
 
     func testCreateRefusesAnEmptyNameWithoutSendingAnything() async throws {

@@ -20,6 +20,7 @@ struct CreateContactView: View {
                         ToolbarItem(placement: .confirmationAction) {
                             Button(NSLocalizedString("common_save", comment: "Save")) { save() }
                                 .disabled(vm.displayName.trimmingCharacters(in: .whitespaces).isEmpty || vm.isSaving)
+                                .accessibilityIdentifier("contact-save")
                         }
                     }
                     .overlay { if vm.isSaving { ProgressView() } }

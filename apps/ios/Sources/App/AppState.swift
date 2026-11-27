@@ -324,6 +324,25 @@ final class AppState {
                 ]
             )
             hubContext.setActiveHub(hubId)
+            holdTestHubKey(hubId: hubId)
+        }
+    }
+
+    /// Stand in for a hub manager's device sharing the hub key with this one (PROTOCOL.md §2.7).
+    ///
+    /// iOS only LOADS a hub key a manager's device wrapped for it; nothing in CI is such a
+    /// device, so a test that needs the key holds it by naming it in `XCTEST_HUB_KEY_HEX`. The
+    /// test keeps the same bytes, which is what lets it open — as another member of the hub
+    /// would — whatever this app then seals under it and the server persists. Without the
+    /// variable the device holds no key, exactly like a member nobody has shared it with, and
+    /// a hub-sealed write refuses (`error_no_hub_key`) instead of passing.
+    private func holdTestHubKey(hubId: String) {
+        guard let keyHex = ProcessInfo.processInfo.environment["XCTEST_HUB_KEY_HEX"], !keyHex.isEmpty else {
+            return
+        }
+        cryptoService.storeHubKeyForTesting(hubId: hubId, keyHex: keyHex)
+        guard cryptoService.hasHubKey(hubId: hubId) else {
+            fatalError("UI_TESTING: XCTEST_HUB_KEY_HEX is not a 32-byte lowercase hex key")
         }
     }
 

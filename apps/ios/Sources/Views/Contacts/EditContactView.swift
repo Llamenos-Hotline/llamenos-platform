@@ -21,6 +21,7 @@ struct EditContactView: View {
                         ToolbarItem(placement: .confirmationAction) {
                             Button(NSLocalizedString("common_save", comment: "Save")) { update() }
                                 .disabled(vm.displayName.trimmingCharacters(in: .whitespaces).isEmpty || vm.isSaving)
+                                .accessibilityIdentifier("contact-save")
                         }
                     }
             }
@@ -82,13 +83,16 @@ struct ContactFormFields: View {
                     .accessibilityIdentifier("contact-display-name")
                 TextField(NSLocalizedString("contacts_phone", comment: "Phone"), text: $vm.phone)
                     .keyboardType(.phonePad)
+                    .accessibilityIdentifier("contact-phone")
                 TextField(NSLocalizedString("contacts_email", comment: "Email"), text: $vm.email)
                     .keyboardType(.emailAddress)
                     .autocapitalization(.none)
+                    .accessibilityIdentifier("contact-email")
             }
             Section(NSLocalizedString("contacts_section_notes", comment: "Notes")) {
                 TextEditor(text: $vm.notes)
                     .frame(minHeight: 80)
+                    .accessibilityIdentifier("contact-notes")
             }
             if appState.hasPermission("tags:view") {
                 Section(NSLocalizedString("tags_title", comment: "Tags")) {
