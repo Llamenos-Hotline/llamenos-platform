@@ -73,7 +73,8 @@ const IOS_PINNING = 'apps/ios/Sources/Services/CertificatePinning.swift'
 const DESKTOP_CERT_PIN = 'apps/desktop/src/cert_pin.rs'
 const DESKTOP_API_CONFIG = 'apps/desktop/src/api_config.rs'
 const DESKTOP_NET = 'apps/desktop/src/net.rs'
-// The file that holds DEFAULT_PIN_HASHES, wherever the Android client keeps it.
+// The file that holds DEFAULT_PIN_HASHES, wherever the Android client keeps it. The loopback
+// exemption lives beside it (CertificatePins.kt), so the exemption mutations below edit this file too.
 const ANDROID_PIN_FILE = find('val DEFAULT_PIN_HASHES')
 const ANDROID_WS = 'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt'
 const ANDROID_API = 'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt'
@@ -403,14 +404,14 @@ describe('break it — each class of trust defect moves the snapshot', () => {
 
   describe('the loopback exemption widened', () => {
     test('Android: "localhost" becomes a suffix match', () => {
-      expectMoves(edited({ [ANDROID_API]: swap('hostname == "localhost"', 'hostname.endsWith("localhost")') }), /loopbackExemptions/)
+      expectMoves(edited({ [ANDROID_PIN_FILE]: swap('hostname == "localhost"', 'hostname.endsWith("localhost")') }), /loopbackExemptions/)
     })
     test('Android relay: "localhost" becomes a suffix match', () => {
       expectMoves(edited({ [ANDROID_WS]: swap('host == "localhost"', 'host.endsWith(".localhost")') }), /loopbackExemptions/)
     })
     test('Android: an exemption written with no loopback literal at all is caught by the function digest', () => {
       expectMoves(
-        edited({ [ANDROID_API]: swap(/val pinner = if \(isLocalhost\) CertificatePinner\.DEFAULT/, 'val pinner = if (isLocalhost || hostname.endsWith(".internal")) CertificatePinner.DEFAULT') }),
+        edited({ [ANDROID_PIN_FILE]: swap(/if \(isLocalhost\) CertificatePinner\.DEFAULT/, 'if (isLocalhost || hostname.endsWith(".internal")) CertificatePinner.DEFAULT') }),
         /logic/,
       )
     })
