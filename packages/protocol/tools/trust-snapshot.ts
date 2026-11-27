@@ -658,7 +658,13 @@ const ANDROID_NON_SHIPPING: ReadonlySet<string> = new Set([
 
 function androidShipped(path: string): boolean {
   if (!path.startsWith(ANDROID_SRC)) return false
-  return !ANDROID_NON_SHIPPING.has(path.slice(ANDROID_SRC.length).split('/')[0] ?? '')
+  return androidSourceSetShips(path.slice(ANDROID_SRC.length).split('/')[0] ?? '')
+}
+
+/** Whether the Android source set called `name` can reach a release build. One answer for
+ *  both questions that ask it: which files under `src/` are scanned, and which Gradle wiring is recorded. */
+function androidSourceSetShips(name: string): boolean {
+  return !ANDROID_NON_SHIPPING.has(name)
 }
 
 /** Transport APIs, beyond the pinned clients, through which a connection could be opened.
@@ -718,6 +724,103 @@ const langOf = (path: string): Lang | undefined =>
 /** Code lines (comments gone) a regex hits, whitespace-squashed. */
 function matchingLines(code: string, re: RegExp): string[] {
   return code.split('\n').map(squash).filter((l) => l !== '' && re.test(l))
+}
+
+/** The Android source set a Gradle selector names — `getByName("x")`, `named("x")`, `create("x")`,
+ *  `maybeCreate("x")`, `register("x")`, `sourceSets["x"]`, `val x by getting` — or `null` when it is
+ *  written in a way that cannot be read as one literal name. `undefined` means "not a selector". */
+const SOURCE_SET_SELECTOR_RE = /\b(?:getByName|named|create|maybeCreate|register)\(\s*("[^"$]*"|[^)]*)\)|\bsourceSets\[\s*("[^"$]*"|[^\]]*)\]|\bval\s+(\w+)\s+by\s+(?:getting|creating|existing)\b/g
+
+function selectedSourceSets(text: string): (string | null)[] {
+  return [...text.matchAll(SOURCE_SET_SELECTOR_RE)].map((m) => {
+    const lit = m[1] ?? m[2]
+    if (m[3] !== undefined) return m[3]
+    const q = /^"([^"$]+)"$/.exec((lit ?? '').trim())
+    return q === null ? null : (q[1] as string)
+  })
+}
+
+/** What a Gradle block says about itself: it is a `sourceSets { }` container, or it is one source set
+ *  (`undefined` = neither, `null` = a source set whose name is not one string literal). */
+type GradleFrame = { container: boolean; sourceSet?: string | null }
+
+function gradleFrame(header: string, parentIsContainer: boolean): GradleFrame {
+  const h = header.trim()
+  if (/(?:^|[.\s])sourceSets$/.test(h)) return { container: true }
+  if (!parentIsContainer) return { container: false }
+  // A direct child of a `sourceSets { }` block is a source set: by selector, or by bare name (`androidTest {`).
+  const sel = selectedSourceSets(h)
+  if (sel.length > 0) return { container: false, sourceSet: sel.length === 1 ? (sel[0] as string | null) : null }
+  const bare = /^(\w+)$/.exec(h)
+  return { container: false, sourceSet: bare === null ? null : (bare[1] as string) }
+}
+
+/** `code` with the text that sits inside a non-shipping source set blanked out, line structure kept. Text is
+ *  attributed character by character, so a block opened and closed on one line (`androidTest { … }`) is
+ *  attributed too. `undefined` when the braces do not balance: nothing can then be attributed. */
+function withoutNonShippingSourceSets(code: string): string[] | undefined {
+  const lines: string[] = ['']
+  const stack: GradleFrame[] = []
+  const owner = (): string | null | undefined => {
+    for (let i = stack.length - 1; i >= 0; i -= 1) if ((stack[i] as GradleFrame).sourceSet !== undefined) return (stack[i] as GradleFrame).sourceSet
+    return undefined
+  }
+  let header = ''
+  const emit = (ch: string): void => {
+    const o = owner()
+    if (ch === '\n') lines.push('')
+    else if (!(typeof o === 'string' && !androidSourceSetShips(o))) lines[lines.length - 1] += ch
+  }
+  for (let i = 0; i < code.length; i += 1) {
+    const c = code[i] as string
+    if (c === '"') {
+      const end = skipString(code, i)
+      for (const ch of code.slice(i, end)) emit(ch)
+      header += code.slice(i, end)
+      i = end - 1
+      continue
+    }
+    if (c === '{') {
+      emit(c)
+      stack.push(gradleFrame(header, stack.length > 0 && (stack[stack.length - 1] as GradleFrame).container))
+      header = ''
+      continue
+    }
+    if (c === '}') {
+      if (stack.pop() === undefined) return undefined
+      emit(c)
+      header = ''
+      continue
+    }
+    emit(c)
+    header = c === ';' ? '' : header + (c === '\n' ? ' ' : c)
+  }
+  return stack.length === 0 ? lines : undefined
+}
+
+/**
+ * The lines of a Gradle build script (comments already gone) that wire the build, minus the text that
+ * sits in a source set no release build contains. The discriminator is the ENCLOSING BLOCK, which a line
+ * grep cannot see: `kotlin.srcDir("src/androidTest/…")` is a test helper inside `getByName("test")` and
+ * a change to what ships inside `getByName("main")`.
+ *
+ * Fail safe: text is dropped only when it is positively inside one source set that
+ * `androidSourceSetShips` says cannot ship. A selector that is not a string literal, several selectors
+ * on one line, unbalanced braces, or anything outside a source set stays in the snapshot.
+ */
+function gradleWiringLines(code: string, re: RegExp): string[] {
+  const kept = withoutNonShippingSourceSets(code)
+  if (kept === undefined) return matchingLines(code, re)
+  return kept.flatMap((raw) => {
+    const line = squash(raw)
+    if (line === '' || !re.test(line)) return []
+    if (/\bsourceSets\b/.test(line) && !line.includes('{')) {
+      // `sourceSets.getByName("androidTest").java.srcDir("x")` — the selector is on the line itself.
+      const sel = selectedSourceSets(line)
+      if (sel.length === 1 && sel[0] !== null && !androidSourceSetShips(sel[0])) return []
+    }
+    return [line]
+  })
 }
 
 function requireText(tree: TreeReader, path: string, why: string): string {
@@ -1004,7 +1107,7 @@ export function extractTrustSnapshot(tree: TreeReader): TrustSnapshot {
   const gradle = tree.read(ANDROID_GRADLE)
   const buildWiring: Record<string, string[]> = {}
   if (gradle !== undefined) {
-    buildWiring[ANDROID_GRADLE] = matchingLines(
+    buildWiring[ANDROID_GRADLE] = gradleWiringLines(
       stripComments(gradle, 'kotlin'),
       /sourceSets|srcDirs?\(|setSrcDirs|manifest\.srcFile|manifestPlaceholders|resValue\(|buildTypes|productFlavors|flavorDimensions|initWith\(|usesCleartext|networkSecurityConfig|sha256\//,
     )
