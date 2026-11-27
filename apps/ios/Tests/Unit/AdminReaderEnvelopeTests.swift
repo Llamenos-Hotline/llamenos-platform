@@ -138,7 +138,10 @@ final class AdminReaderEnvelopeTests: XCTestCase {
         XCTAssertNil(json["entity_type_id"], "body must not be snake_cased: \(json.keys.sorted())")
         // `createEventBodySchema` requires both discriminators; they come from the entity type.
         XCTAssertEqual(json["eventTypeHash"] as? String, "et-1", "got \(json.keys.sorted())")
-        XCTAssertEqual(json["statusHash"] as? String, "open", "got \(json.keys.sorted())")
+        // The status lives in the sealed details, never in the clear (#2779).
+        for retired in ["statusHash", "severityHash", "categoryHash"] {
+            XCTAssertNil(json[retired], "\(retired) must not be sent: \(json.keys.sorted())")
+        }
 
         let pubkeys = try envelopePubkeys(json["detailEnvelopes"])
         XCTAssertTrue(

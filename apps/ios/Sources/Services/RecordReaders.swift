@@ -89,6 +89,18 @@ enum RecordReaderSet {
         return try compose(serverTiers: tiers, author: author, adminReaders: admins)
     }
 
+    /// The hub-scoped request for an EXISTING record's tiers: who may already read it, so a
+    /// re-seal (a status change replaces the summary) keeps every co-assignee a reader.
+    static func lookupRecordTiers(
+        apiService: APIService,
+        recordId: String
+    ) async throws -> EnvelopeRecipientsResponse {
+        try await apiService.request(
+            method: "GET",
+            path: try apiService.activeHubPath("/api/records/\(recordId)/envelope-recipients")
+        )
+    }
+
     /// The hub-scoped request for the by-entity-type variant.
     static func lookupCreationTiers(
         apiService: APIService,

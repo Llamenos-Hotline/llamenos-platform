@@ -42,12 +42,8 @@ final class ContactsAPIService: @unchecked Sendable {
 
     // MARK: - List
 
-    func listContacts(page: Int = 1, limit: Int = 50, contactTypeHash: String? = nil) async throws -> ContactListResponse {
-        var path = apiService.hp("/api/directory") + "?page=\(page)&limit=\(limit)"
-        if let contactTypeHash {
-            let encoded = contactTypeHash.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactTypeHash
-            path += "&contactTypeHash=\(encoded)"
-        }
+    func listContacts(page: Int = 1, limit: Int = 50) async throws -> ContactListResponse {
+        let path = apiService.hp("/api/directory") + "?page=\(page)&limit=\(limit)"
         return try await apiService.request(method: "GET", path: path)
     }
 

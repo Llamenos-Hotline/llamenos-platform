@@ -96,8 +96,8 @@ struct CaseDetailView: View {
                     .clipShape(Capsule())
 
                 // Severity badge
-                if let sevHash = record.severityHash,
-                   let sev = entityType.severities?.first(where: { $0.value == sevHash }) {
+                if let sevValue = viewModel.decryptedSummaries[record.id]?.severity,
+                   let sev = entityType.severities?.first(where: { $0.value == sevValue }) {
                     HStack(spacing: 3) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 9))
@@ -177,7 +177,9 @@ struct CaseDetailView: View {
     // MARK: - Status Pill
 
     private var statusPill: some View {
-        let statusDef = entityType.statuses.first { $0.value == record.statusHash }
+        // The status lives in the sealed summary; nil until it is read, or when it cannot be.
+        let status = viewModel.decryptedSummaries[record.id]?.status
+        let statusDef = entityType.statuses.first { $0.value == status }
         let canEdit = appState.hasPermission("cases:update")
 
         return Button {
@@ -189,7 +191,7 @@ struct CaseDetailView: View {
                 Circle()
                     .fill((Color(hex: statusDef?.color ?? "#6b7280") ?? .gray))
                     .frame(width: 6, height: 6)
-                Text(statusDef?.label ?? record.statusHash)
+                Text(statusDef?.label ?? status ?? "—")
                     .font(.brand(.caption))
                     .fontWeight(.medium)
                 if canEdit {
@@ -209,7 +211,7 @@ struct CaseDetailView: View {
             set: { viewModel.showStatusSheet = $0 }
         )) {
             QuickStatusSheet(
-                currentStatus: record.statusHash,
+                currentStatus: status,
                 statuses: entityType.statuses,
                 onSelect: { newStatus in
                     Task {
@@ -856,6 +858,7 @@ private struct TimelineItemRow: View {
     let cryptoService: CryptoService
 
     @State private var decryptedContent: String?
+    @State private var statusChange: StatusChange?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -905,13 +908,14 @@ private struct TimelineItemRow: View {
                     .foregroundStyle(.secondary)
                 }
 
-                // Status change details
+                // Status change details: the transition is sealed with the entry.
                 if interaction.interactionType == .statusChange,
-                   let newHash = interaction.newStatusHash,
-                   let newStatus = entityType.statuses.first(where: { $0.value == newHash }) {
+                   let change = statusChange,
+                   let newValue = change.next,
+                   let newStatus = entityType.statuses.first(where: { $0.value == newValue }) {
                     HStack(spacing: 4) {
-                        if let prevHash = interaction.previousStatusHash,
-                           let prevStatus = entityType.statuses.first(where: { $0.value == prevHash }) {
+                        if let prevValue = change.previous,
+                           let prevStatus = entityType.statuses.first(where: { $0.value == prevValue }) {
                             HStack(spacing: 3) {
                                 Circle()
                                     .fill((Color(hex: prevStatus.color ?? "#6b7280") ?? .gray))
@@ -949,7 +953,7 @@ private struct TimelineItemRow: View {
     // MARK: - Decrypt Content
 
     private func decryptInteractionContent() async {
-        guard interaction.interactionType == .comment,
+        guard interaction.interactionType == .comment || interaction.interactionType == .statusChange,
               let encrypted = interaction.encryptedContent,
               let envelopes = interaction.contentEnvelopes,
               !envelopes.isEmpty,
@@ -965,6 +969,10 @@ private struct TimelineItemRow: View {
                 encryptedContent: encrypted,
                 envelopes: envelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
             )
+            if interaction.interactionType == .statusChange {
+                statusChange = StatusChange(plaintext: plaintext)
+                return
+            }
             // Content may be JSON with a "text" field, or raw text
             if let data = plaintext.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

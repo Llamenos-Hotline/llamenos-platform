@@ -561,7 +561,6 @@ enum EventDetailTab: String, CaseIterable, Sendable {
                 parentEventID: nil,
                 reportCount: 5,
                 startDate: "2026-03-15T10:00:00Z",
-                statusHash: "active",
                 subEventCount: 1,
                 updatedAt: "2026-03-15T12:00:00Z"
             ),

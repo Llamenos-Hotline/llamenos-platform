@@ -5,7 +5,8 @@ import SwiftUI
 /// Bottom sheet for quickly changing a case's status.
 /// Shows template-defined status options with color indicators.
 struct QuickStatusSheet: View {
-    let currentStatus: String
+    /// The record's status value; nil while its summary is unread or cannot be opened.
+    let currentStatus: String?
     let statuses: [SharedStatus]
     let onSelect: (String) -> Void
 

@@ -5,6 +5,8 @@ import SwiftUI
 /// Groups entity records by month and displays them in a calendar-like list.
 struct EntityCalendarView: View {
     let records: [SharedRecordListResponseRecord]
+    /// Record id → status label, read from each sealed summary. The server holds no status.
+    var statusByRecord: [String: String] = [:]
     let onSelectRecord: (SharedRecordListResponseRecord) -> Void
 
     private var grouped: [(String, [SharedRecordListResponseRecord])] {
@@ -23,7 +25,7 @@ struct EntityCalendarView: View {
                 Section(header: monthHeader(month)) {
                     ForEach(recs) { record in
                         Button { onSelectRecord(record) } label: {
-                            CalendarRecordRow(record: record)
+                            CalendarRecordRow(record: record, status: statusByRecord[record.id])
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("calendar-record-\(record.id)")
@@ -54,6 +56,7 @@ struct EntityCalendarView: View {
 
 private struct CalendarRecordRow: View {
     let record: SharedRecordListResponseRecord
+    let status: String?
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -65,7 +68,7 @@ private struct CalendarRecordRow: View {
                     .fontDesign(.monospaced)
             }
             Spacer()
-            Text(record.statusHash.prefix(6))
+            Text(status ?? "—")
                 .font(.caption2)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
@@ -79,6 +82,8 @@ private struct CalendarRecordRow: View {
 /// Displays entity records in newest-first vertical timeline order.
 struct EntityTimelineView: View {
     let records: [SharedRecordListResponseRecord]
+    /// Record id → status label, read from each sealed summary. The server holds no status.
+    var statusByRecord: [String: String] = [:]
     let onSelectRecord: (SharedRecordListResponseRecord) -> Void
 
     private var sorted: [SharedRecordListResponseRecord] {
@@ -96,7 +101,7 @@ struct EntityTimelineView: View {
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(sorted) { record in
-                        TimelineRecordRow(record: record) {
+                        TimelineRecordRow(record: record, status: statusByRecord[record.id]) {
                             onSelectRecord(record)
                         }
                     }
@@ -109,6 +114,7 @@ struct EntityTimelineView: View {
 
 private struct TimelineRecordRow: View {
     let record: SharedRecordListResponseRecord
+    let status: String?
     let onTap: () -> Void
 
     var body: some View {
@@ -131,8 +137,8 @@ private struct TimelineRecordRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
-                        if !record.statusHash.isEmpty {
-                            Text(record.statusHash.prefix(6))
+                        if let status {
+                            Text(status)
                                 .font(.caption2)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
