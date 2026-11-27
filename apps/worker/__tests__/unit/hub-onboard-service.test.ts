@@ -199,7 +199,7 @@ describe('HubOnboardService', () => {
       const { db, service } = setup()
       db.$setSelectResults([
         // providerConfigs
-        [{ hubId: 'hub-1', providerType: 'twilio', status: 'connected', phoneNumbers: ['+15550000000'] }],
+        [{ hubId: 'hub-1', providerType: 'twilio', status: 'connected' }],
         // hubOnboardingState (getOnboardingStatus)
         [
           {
@@ -215,6 +215,8 @@ describe('HubOnboardService', () => {
         ],
         // hub_settings (getHubProviderSettings)
         [{ hubId: 'hub-1', settings: { quotas: { maxSmsPerMonth: 25 } } }],
+        // hub_numbers
+        [{ id: 'n-1', hubId: 'hub-1', number: '+15550000000', source: 'declared', providerConfigId: null, createdAt: new Date() }],
       ])
 
       const result = await service.getHubSetupStatus('hub-1')

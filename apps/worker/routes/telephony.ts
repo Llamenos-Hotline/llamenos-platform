@@ -1,7 +1,7 @@
 import { Hono, type Context, type Next } from 'hono'
 import { describeRoute } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { getTelephonyFromService, getHubTelephonyFromService } from '../lib/service-factories'
+import { getTelephonyFromService, getHubTelephonyFromService, resolveHubTelephony } from '../lib/service-factories'
 import type { SpeechUrlBuilder, TelephonyAdapter, TelephonyResponse } from '../telephony/adapter'
 import { SipBridgeAdapter } from '../telephony/sip-bridge-adapter'
 import type { Services } from '../services'
@@ -178,14 +178,28 @@ async function getHubAdapter(env: Env, services: Services, hubId: string | undef
 }
 
 /**
+ * The hub whose OWN provider account delivered this call, or undefined when the
+ * platform's did. `?hub=` is only a label on the URL; what makes it trustworthy
+ * is that the webhook's signature was checked against that hub's own account. A
+ * hub with no account of its own is served by the platform's, so naming it
+ * proves nothing: such a call is the platform account's, and may reach only the
+ * numbers instance authority set (`hub_numbers.scope`).
+ */
+async function hubOwnAccountDelivering(c: Context<AppEnv>, services: Services, namedHubId: string | undefined): Promise<string | undefined> {
+  if (!namedHubId) return undefined
+  const resolved = await resolveHubTelephony(c.env, services.providerConfig, namedHubId)
+  return resolved?.source === 'hub' ? namedHubId : undefined
+}
+
+/**
  * The active hub that owns the number a call was placed to, or null when none
  * does. Only "no such hub" is null; any other failure is thrown, so a database
  * error is never mistaken for an unrouted number.
  */
-async function hubForCalledNumber(services: Services, calledNumber: string | undefined): Promise<string | null> {
+async function hubForCalledNumber(services: Services, calledNumber: string | undefined, deliveredByHub: string | undefined): Promise<string | null> {
   if (!calledNumber) return null
   try {
-    const { hub } = await services.hubs.getHubByPhone(calledNumber)
+    const { hub } = await services.hubs.getHubByPhone(calledNumber, deliveredByHub)
     return hub.id
   } catch (err) {
     if (err instanceof ServiceError && err.status === 404) return null
@@ -204,7 +218,7 @@ async function hubForCalledNumber(services: Services, calledNumber: string | und
  * number nor the dialled number is kept.
  */
 async function signalUnroutedCall(services: Services, calledNumberPresent: boolean): Promise<void> {
-  logger.error('Incoming call to a number no active hub owns — refused. Set the hub\'s phone number to the number the provider delivers (#2460)', {
+  logger.error('Incoming call to a number no active hub owns — refused. Declare the number the provider delivers for the hub (PUT /api/provider-setup/numbers) (#2460, #1331)', {
     calledNumberPresent,
   })
   incCounter('llamenos_call_unrouted_total', { called_number: calledNumberPresent ? 'unmatched' : 'absent' })
@@ -488,7 +502,7 @@ telephony.post('/incoming',
   // The call belongs to the hub that owns the number it was placed to — and a
   // number no active hub owns is refused, unanswered and uncharged (#2460).
   // Nothing about the call is recorded: it has no hub to belong to.
-  const hubId = await hubForCalledNumber(services, calledNumber)
+  const hubId = await hubForCalledNumber(services, calledNumber, await hubOwnAccountDelivering(c, services, namedHubId))
   if (!hubId) {
     await signalUnroutedCall(services, !!calledNumber)
     return telephonyResponse(deliveringAdapter.rejectCall())

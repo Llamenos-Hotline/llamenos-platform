@@ -830,6 +830,7 @@ final class AdminViewModel {
                     credentials: credentials.isEmpty ? nil : credentials,
                     hubID: nil,
                     phoneNumber: telephonyPhoneNumber.isEmpty ? nil : telephonyPhoneNumber,
+                    phoneNumbers: nil,
                     provider: telephonyProvider
                 )
             )

@@ -45,3 +45,30 @@ export const numberProvisionRequestSchema = z.object({
   autoConfigureWebhooks: z.boolean().optional().default(true),
 })
 export type NumberProvisionRequest = z.infer<typeof numberProvisionRequestSchema>
+
+/**
+ * A number a hub answers on (`hub_numbers`, #1331). `declared` numbers were
+ * stated by an operator — on a self-hosted PBX the carrier delivers DIDs and no
+ * API lists them; `provisioned` ones were bought through a provider's number API.
+ */
+export const hubNumberSchema = z.object({
+  id: z.string(),
+  /** E.164. */
+  number: z.string(),
+  source: z.enum(['declared', 'provisioned']),
+  providerConfigId: z.string().nullable(),
+})
+export type HubNumberResponse = z.infer<typeof hubNumberSchema>
+
+export const hubNumberListSchema = z.object({ numbers: z.array(hubNumberSchema) })
+
+/**
+ * Replace the numbers an operator declares for a hub. Each is E.164, or a
+ * national-format number when the server has a default country
+ * (`DEFAULT_PHONE_COUNTRY`). Numbers bought through a provider are not affected.
+ */
+export const declareHubNumbersRequestSchema = z.object({
+  hubId: z.string().optional(),
+  numbers: z.array(z.string().min(1).max(32)).max(50),
+})
+export type DeclareHubNumbersRequest = z.infer<typeof declareHubNumbersRequestSchema>

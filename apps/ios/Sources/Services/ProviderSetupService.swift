@@ -91,7 +91,7 @@ final class ProviderSetupService {
     // MARK: - Configuration
 
     func configureProvider(provider: SharedProviderType, credentials: [String: String], hubId: String?) async throws {
-        let body = ConfigureProviderRequest(credentials: credentials, hubID: hubId, phoneNumber: nil, provider: provider)
+        let body = ConfigureProviderRequest(credentials: credentials, hubID: hubId, phoneNumber: nil, phoneNumbers: nil, provider: provider)
         let _: EmptyResponse = try await api.request(method: "POST", path: "/api/provider-setup/configure", body: body)
     }
 

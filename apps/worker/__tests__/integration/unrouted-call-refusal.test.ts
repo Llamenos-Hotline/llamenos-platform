@@ -165,10 +165,11 @@ describe('the day-1 path: the wizard-configured number reaches the default hub (
     await services.providerConfig.upsertProviderConfig({
       hubId: null,
       providerType: 'twilio',
-      credentials: null,
+      // The platform configuration keeps its number in its credentials: with no
+      // hub it has no `hub_numbers` row to live in.
+      credentials: JSON.stringify({ phoneNumber: hotline }),
       status: 'connected',
       capabilities: [],
-      phoneNumbers: [hotline],
       error: null,
       lastCheckedAt: new Date(),
     })

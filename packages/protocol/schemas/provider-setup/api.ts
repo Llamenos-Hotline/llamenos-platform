@@ -20,7 +20,13 @@ export const configureProviderRequestSchema = z.object({
   provider: telephonyProviderTypeSchema,
   credentials: z.record(z.string(), z.string()).optional(),
   hubId: z.string().optional(),
+  /** The hub's hotline number — replaces its primary number. */
   phoneNumber: z.string().optional(),
+  /**
+   * Every number the operator declares for the hub (a self-hosted PBX's DIDs).
+   * Replaces the hub's declared set; takes precedence over `phoneNumber`.
+   */
+  phoneNumbers: z.array(z.string().min(1).max(32)).max(50).optional(),
 })
 export type ConfigureProviderRequest = z.infer<typeof configureProviderRequestSchema>
 

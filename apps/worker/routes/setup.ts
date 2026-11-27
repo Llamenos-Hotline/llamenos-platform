@@ -25,6 +25,10 @@ import {
   unregisterNumber,
   getAccountInfo,
 } from '../messaging/signal/registration'
+import { normalizeE164 } from '../lib/phone-number'
+import { createLogger } from '../lib/logger'
+
+const logger = createLogger('routes.setup')
 
 const setup = new Hono<AppEnv>()
 
@@ -126,19 +130,27 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
       }
       const hotlineName = c.env.HOTLINE_NAME || 'Hotline'
       // The default hub answers the hotline number — the one routing matches an
-      // incoming call against (`hubs.phone_number`). It is the number of the
+      // incoming call against (`hub_numbers`). It is the number of the
       // provider the platform's calls actually go through, in the precedence
       // `getTelephonyFromService` builds that provider from: the configuration
       // the wizard's provider step saved, else the TWILIO_* env vars. Reading
       // only the env var left a wizard-configured deployment's hub with no
       // number, and every call to it routed to no hub (#2460).
       const platformProvider = await services.providerConfig.getTelephonyProvider()
+      const configuredNumber = (platformProvider ? platformProvider.phoneNumber : c.env.TWILIO_PHONE_NUMBER) || ''
+      // A number that cannot be read as one would fail the whole hub creation;
+      // the hub is created without it and the admin declares it (PUT
+      // /provider-setup/numbers). Say so — a hub with no number answers no calls.
+      const hotlineNumber = configuredNumber ? normalizeE164(configuredNumber) ?? '' : ''
+      if (configuredNumber && !hotlineNumber) {
+        logger.error('The configured hotline number cannot be read as a telephone number — the default hub has none and answers no calls until one is declared')
+      }
       const defaultHub = {
         id: crypto.randomUUID(),
         name: hotlineName,
         slug: hotlineName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
         status: 'active' as const,
-        phoneNumber: (platformProvider ? platformProvider.phoneNumber : c.env.TWILIO_PHONE_NUMBER) || '',
+        phoneNumber: hotlineNumber,
         description: '',
         timezone,
         createdBy: pubkey,

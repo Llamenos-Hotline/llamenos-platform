@@ -8,7 +8,17 @@ export const hubResponseSchema = z.object({
   name: z.string(),
   slug: z.string(),
   description: z.string().optional(),
+  /**
+   * The hub's primary hotline number (E.164): the first of `phoneNumbers`.
+   * Kept for clients that show a single number.
+   */
   phoneNumber: z.string().optional(),
+  /**
+   * Every number the hub answers on (E.164), primary first — the one set inbound
+   * routing resolves a call's hub from (`hub_numbers`, #1331). Empty when the
+   * hub answers no calls.
+   */
+  phoneNumbers: z.array(z.string()).optional(),
   /**
    * IANA zone the hub's shift schedules are written in. A shift's `startTime`,
    * `endTime` and `days` are wall-clock values in THIS zone, and the roster is
@@ -183,7 +193,10 @@ export const createHubBodySchema = z.object({
   name: z.string().min(1).max(200),
   slug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/).optional(),
   description: z.string().max(500).optional(),
+  /** The hub's hotline number — shorthand for `phoneNumbers: [phoneNumber]`. */
   phoneNumber: z.string().max(20).optional(),
+  /** Every number the hub answers on; E.164, or national format when the server has a default country. */
+  phoneNumbers: z.array(z.string().max(20)).max(50).optional(),
   /** Defaults from the creating admin's device on the client; `UTC` when a client sends none. */
   timezone: ianaTimezoneSchema.optional().default(DEFAULT_HUB_TIMEZONE),
 })
@@ -199,7 +212,14 @@ export const updateHubBodySchema = z.object({
   name: z.string().min(1).max(200).optional(),
   slug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/).optional(),
   description: z.string().max(500).optional(),
+  /**
+   * Set the hub's PRIMARY number: replaces the current primary, keeps the hub's
+   * other numbers. An empty string removes the primary. Use `phoneNumbers` to
+   * replace the whole declared set.
+   */
   phoneNumber: z.string().max(20).optional(),
+  /** Replace the whole set of numbers the operator has declared for the hub. Numbers bought through a provider are not affected. */
+  phoneNumbers: z.array(z.string().max(20)).max(50).optional(),
   timezone: ianaTimezoneSchema.optional(),
   status: z.enum(['active', 'archived']).optional(),
 })

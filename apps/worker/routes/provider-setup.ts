@@ -22,6 +22,8 @@ import {
   signalRegistrationStateSchema,
   a2pRegistrationStateSchema,
   webhookUrlsResponseSchema,
+  hubNumberListSchema,
+  declareHubNumbersRequestSchema,
 } from '@protocol/schemas/provider-setup'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { telephonyProviderTypeSchema } from '@protocol/schemas/settings'
@@ -31,6 +33,8 @@ import { SignalRegistrationError } from '../services/provider-setup/signal-regis
 import { A2pRegistrationError } from '../services/provider-setup/a2p-registration'
 import { removeAllVolunteerEndpoints } from '../telephony/registrar'
 import { audit } from '../services/audit'
+import { permissionGranted } from '@shared/permissions'
+import type { HubNumberScope } from '../db/schema'
 
 /**
  * Resolve the hub a provider-setup request acts on: the path hub, or a hub
@@ -44,6 +48,18 @@ function validateBodyHubAccess(c: Context<AppEnv>, bodyHubId: string | undefined
   return target.hubId
 }
 
+/**
+ * The authority a caller's number declarations carry (`hub_numbers.scope`).
+ * Instance authority (`system:manage-hubs`, the permission that sets a hub's
+ * number on `PATCH /hubs/:id`) vouches for a number on every path a call can
+ * arrive by. A hub's own provider administrator can say which numbers their
+ * hub's account delivers, and no more: their declaration routes only calls
+ * delivered through that account, never one the platform account carried, so it
+ * cannot capture another hub's callers.
+ */
+function numberScope(c: Context<AppEnv>): HubNumberScope {
+  return permissionGranted(c.get('permissions'), 'system:manage-hubs') ? 'platform' : 'hub'
+}
 
 /** Read OAuth client_id from environment for a provider. */
 function getOAuthClientId(provider: string): string {
@@ -457,6 +473,8 @@ providerSetup.post('/configure',
         body.credentials ?? {},
         hubId,
         body.phoneNumber,
+        body.phoneNumbers,
+        numberScope(c),
       )
       if (previous?.type === 'asterisk' && body.provider !== 'asterisk') {
         const { users } = await services.identity.getUsers()
@@ -591,6 +609,65 @@ providerSetup.get('/phone-numbers',
         provider as Parameters<typeof services.providerSetup.listNumbers>[0],
         hubId,
       )
+      return c.json({ numbers })
+    } catch (err) {
+      if (err instanceof ProviderApiError) {
+        return c.json({ error: err.message }, err.statusCode as 400 | 401 | 403 | 404 | 500)
+      }
+      throw err
+    }
+  },
+)
+
+// ── Hub Numbers (the numbers a hub answers on) ─────────────────────────────
+providerSetup.get('/numbers',
+  requirePermission('telephony:view-numbers'),
+  describeRoute({
+    tags: ['Provider Setup'],
+    summary: 'List the numbers a hub answers on (declared and provisioned)',
+    responses: {
+      200: {
+        description: 'The hub\'s numbers, primary first',
+        content: { 'application/json': { schema: resolver(hubNumberListSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  async (c) => {
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'telephony:view-numbers')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    if (!target.hubId) return c.json({ error: 'hubId is required' }, 400)
+    const numbers = await c.get('services').providerSetup.hubNumbers(target.hubId)
+    return c.json({ numbers })
+  },
+)
+
+providerSetup.put('/numbers',
+  requirePermission('telephony:manage-providers'),
+  describeRoute({
+    tags: ['Provider Setup'],
+    summary: 'Declare the numbers a hub answers on',
+    description:
+      'For a self-hosted PBX, where the carrier delivers the DIDs and there is no number API to list or buy them: ' +
+      'tell the server which numbers are this hub\'s. Replaces the hub\'s declared set; numbers bought through a ' +
+      'provider are untouched. 409 when a number already belongs to another hub.',
+    responses: {
+      200: {
+        description: 'The hub\'s numbers after the change, primary first',
+        content: { 'application/json': { schema: resolver(hubNumberListSchema) } },
+      },
+      409: { description: 'A number already belongs to another hub' },
+      ...authErrors,
+    },
+  }),
+  validator('json', declareHubNumbersRequestSchema),
+  async (c) => {
+    const body = c.req.valid('json')
+    try {
+      const hubId = validateBodyHubAccess(c, body.hubId, 'telephony:manage-providers')
+      if (!hubId) return c.json({ error: 'hubId is required' }, 400)
+      const numbers = await c.get('services').providerSetup.declareNumbers(hubId, body.numbers, numberScope(c))
+      await audit(c.get('services').audit, 'hubNumbersDeclared', c.get('pubkey'), { count: numbers.length }, undefined, hubId)
       return c.json({ numbers })
     } catch (err) {
       if (err instanceof ProviderApiError) {

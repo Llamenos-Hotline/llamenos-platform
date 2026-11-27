@@ -13,6 +13,8 @@ import type {
 } from '@protocol/schemas/provider-setup'
 import { buildProviderWebhookUrls } from '../../lib/provider-webhook-urls'
 import { ProviderConfigService } from '../provider-config'
+import { loadHubNumbers, recordProvisionedNumber, replaceDeclaredNumbers, setPrimaryDeclaredNumber, type HubNumber } from '../hub-numbers'
+import type { HubNumberScope } from '../../db/schema'
 import { getProviderCapability, hasCapability } from './registry'
 import { encryptCredentials, decryptCredentials } from './crypto'
 import type { WebhookUrls, ConnectionTestResult, SipTrunkConfig, SipTrunkRequest } from './types'
@@ -30,18 +32,43 @@ export class ProviderSetup {
     this.providerConfig = new ProviderConfigService(db)
   }
 
+  /**
+   * Save a provider's credentials. `phoneNumbers` are the numbers the operator
+   * declares for the hub — on a self-hosted PBX, the DIDs the carrier delivers,
+   * which no provider API can enumerate. They replace the hub's declared set;
+   * the single `phoneNumber` is the hotline number and replaces only the
+   * primary. Omitting both leaves the hub's numbers alone.
+   *
+   * `numberScope` is the authority the caller declares them with: `platform`
+   * only for a caller holding instance authority (`system:manage-hubs`), else
+   * `hub` — which routes only calls the hub's own provider account delivers
+   * (see `hub_numbers.scope`).
+   *
+   * A hubless (instance-wide) provider has no hub to route to, so its number is
+   * kept in its credentials, where the adapter reads the number it dials from.
+   */
   async configure(
     provider: TelephonyProviderType,
     credentials: Record<string, string>,
-    hubId?: string,
-    phoneNumber?: string,
+    hubId: string | undefined,
+    phoneNumber: string | undefined,
+    phoneNumbers: readonly string[] | undefined,
+    numberScope: HubNumberScope,
   ): Promise<{ ok: true }> {
     const impl = getProviderCapability(provider)
     if (!impl) {
       throw new ProviderApiError(`Provider ${provider} not supported`, 400, 'Unsupported provider')
     }
 
-    const encryptedCreds = encryptCredentials(credentials, this.serverKek)
+    const stored = !hubId && phoneNumber ? { ...credentials, phoneNumber } : credentials
+    const encryptedCreds = encryptCredentials(stored, this.serverKek)
+
+    // Numbers first: one already held by another hub refuses the request before
+    // any credential is stored.
+    if (hubId) {
+      if (phoneNumbers) await replaceDeclaredNumbers(this.db, hubId, phoneNumbers, numberScope)
+      else if (phoneNumber) await setPrimaryDeclaredNumber(this.db, hubId, phoneNumber, numberScope)
+    }
 
     await this.providerConfig.upsertProviderConfig({
       hubId: hubId ?? null,
@@ -49,7 +76,6 @@ export class ProviderSetup {
       credentials: encryptedCreds,
       status: 'connected',
       capabilities: impl.capabilities as string[],
-      phoneNumbers: phoneNumber ? [phoneNumber] : [],
       error: null,
       lastCheckedAt: new Date(),
     })
@@ -90,7 +116,6 @@ export class ProviderSetup {
       providerType: config.providerType,
       status: result.connected ? 'connected' : 'error',
       capabilities: config.capabilities as string[],
-      phoneNumbers: config.phoneNumbers as string[],
       error: result.error || null,
       lastCheckedAt: new Date(),
     })
@@ -103,23 +128,7 @@ export class ProviderSetup {
     hubId?: string,
   ): Promise<OwnedNumber[]> {
     const { impl, creds } = await this.resolveProvider(provider, hubId, 'listNumbers')
-    const numbers = await impl.listOwnedNumbers(creds)
-
-    const config = await this.getProviderConfigRow(provider, hubId)
-    if (config) {
-      await this.providerConfig.upsertProviderConfig({
-        id: config.id,
-        hubId: config.hubId,
-        providerType: config.providerType,
-        status: 'connected',
-        capabilities: config.capabilities as string[],
-        phoneNumbers: numbers.map((n) => n.phoneNumber),
-        error: null,
-        lastCheckedAt: new Date(),
-      })
-    }
-
-    return numbers
+    return impl.listOwnedNumbers(creds)
   }
 
   async searchNumbers(
@@ -139,22 +148,27 @@ export class ProviderSetup {
     const { impl, creds } = await this.resolveProvider(provider, hubId, 'provisionNumbers')
     const number = await impl.provisionNumber(creds, request)
 
-    const config = await this.getProviderConfigRow(provider, hubId)
-    if (config) {
-      const existing = (config.phoneNumbers as string[]) || []
-      await this.providerConfig.upsertProviderConfig({
-        id: config.id,
-        hubId: config.hubId,
-        providerType: config.providerType,
-        status: 'connected',
-        capabilities: config.capabilities as string[],
-        phoneNumbers: [...existing, number.phoneNumber],
-        error: null,
-        lastCheckedAt: new Date(),
-      })
+    // A number bought for a hub is a number that hub answers on — the same
+    // store a declared one lands in, so routing needs nothing provider-specific.
+    if (hubId) {
+      const config = await this.getProviderConfigRow(provider, hubId)
+      await recordProvisionedNumber(this.db, hubId, number.phoneNumber, config?.id ?? null)
     }
 
     return number
+  }
+
+  /** The numbers a hub answers on, primary first. */
+  async hubNumbers(hubId: string): Promise<HubNumber[]> {
+    return (await loadHubNumbers(this.db, [hubId])).get(hubId) ?? []
+  }
+
+  /**
+   * Declare the numbers an operator says belong to a hub (a self-hosted PBX's
+   * DIDs). Replaces the declared set; provisioned numbers are untouched.
+   */
+  async declareNumbers(hubId: string, numbers: readonly string[], numberScope: HubNumberScope): Promise<HubNumber[]> {
+    return replaceDeclaredNumbers(this.db, hubId, numbers, numberScope)
   }
 
   /** Every provider-facing webhook URL for a hub (or the global config). */
@@ -238,7 +252,6 @@ export class ProviderSetup {
       credentials: encryptedCreds,
       status: 'connected',
       capabilities,
-      phoneNumbers: [],
       lastCheckedAt: new Date(),
     })
 
@@ -269,11 +282,12 @@ export class ProviderSetup {
       }
     }
 
+    const numbers = config.hubId ? (await loadHubNumbers(this.db, [config.hubId])).get(config.hubId) ?? [] : []
     return {
       provider,
       status: config.status as ProviderStatusResponse['status'],
       capabilities: (config.capabilities as string[]) || [],
-      phoneNumbers: (config.phoneNumbers as string[]) || undefined,
+      phoneNumbers: numbers.length > 0 ? numbers.map((n: HubNumber) => n.number) : undefined,
       error: config.error || undefined,
       lastCheckedAt: config.lastCheckedAt?.toISOString() || undefined,
     }
