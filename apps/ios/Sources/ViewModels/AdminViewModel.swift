@@ -1515,6 +1515,10 @@ final class AdminViewModel {
         switch type {
         case .ban:
             await removeBan(id: id)
+        case .platformBan:
+            await removePlatformBan(id: id)
+        case .customField:
+            await deleteField(name: id)
         case .reportCategory:
             await deleteReportCategory(id: id)
         case .erasure:
@@ -1538,9 +1542,39 @@ final class AdminViewModel {
 
 /// Types of items that can be deleted in the admin section.
 enum DeleteType: Sendable {
+    /// A hub-scoped ban (`DELETE /api/bans/:id`).
     case ban
+    /// A platform-scoped ban (`DELETE /api/admin/bans/:id`) — a different resource from `.ban`.
+    case platformBan
+    /// A custom field definition; the pending id is the field's `name`.
+    case customField
     case reportCategory
     case erasure
+
+    /// Title of the confirmation alert for this kind of item.
+    var confirmTitle: String {
+        switch self {
+        case .platformBan:
+            return NSLocalizedString("platform_bans_remove_confirm_title", comment: "Remove this platform ban?")
+        case .ban, .customField, .reportCategory, .erasure:
+            return NSLocalizedString("admin_delete_confirm_title", comment: "Confirm Delete")
+        }
+    }
+
+    /// Consequence copy of the confirmation alert: what the admin is about to lose or release.
+    var confirmMessage: String {
+        switch self {
+        case .platformBan:
+            return NSLocalizedString("platform_bans_remove_confirm_message", comment: "Platform ban removal consequence")
+        case .customField:
+            return NSLocalizedString("custom_fields_delete_confirm", comment: "Custom field deletion consequence")
+        case .ban, .reportCategory, .erasure:
+            return NSLocalizedString(
+                "admin_delete_confirm_message",
+                comment: "Are you sure you want to delete this item? This action cannot be undone."
+            )
+        }
+    }
 }
 
 // MARK: - Erasure Models

@@ -75,7 +75,7 @@ struct PlatformBansView: View {
             Section(header: Text(NSLocalizedString("platform_bans_title", comment: "Platform Bans"))) {
                 ForEach(viewModel.platformBans) { ban in
                     BanRowView(ban: ban) {
-                        viewModel.confirmDelete(id: ban.id, type: .ban)
+                        viewModel.confirmDelete(id: ban.id, type: .platformBan)
                     }
                     .accessibilityIdentifier("platform-ban-row-\(ban.id)")
                 }
