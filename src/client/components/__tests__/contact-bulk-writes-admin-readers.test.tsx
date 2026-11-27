@@ -22,9 +22,16 @@ const mocks = vi.hoisted(() => ({
   mergeContacts: vi.fn(),
   activeHubAdminReaders: vi.fn(),
   toast: vi.fn(),
+  // ONE `t` for every render, as react-i18next gives: its `t` keeps its identity
+  // until the language changes. A fresh function per render (#3080) re-ran the
+  // merge dialog's directory load on every render — `t` is in its deps — so the
+  // dialog never stopped rendering, and React was still mid-render when the
+  // test environment tore `window` down.
+  t: (key: string) => key,
+  loadDecryptedContacts: vi.fn(),
 }))
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }))
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))
 vi.mock('@/lib/key-manager', () => ({ getPublicKeyHex: () => DEVICE }))
 vi.mock('@/lib/platform', async importOriginal => ({ ...(await importOriginal<typeof import('@/lib/platform')>()), encryptMessage: mocks.encryptMessage }))
@@ -34,7 +41,7 @@ vi.mock('@/lib/api', () => ({
   mergeContacts: mocks.mergeContacts,
 }))
 vi.mock('@/lib/contact-directory', () => ({
-  loadDecryptedContacts: async () => ({ contacts: [{ id: 'c2', displayName: 'Second Contact' }] }),
+  loadDecryptedContacts: mocks.loadDecryptedContacts,
   matchesContactQuery: () => true,
 }))
 
@@ -51,6 +58,7 @@ beforeEach(() => {
   }))
   mocks.bulkCreateContacts.mockResolvedValue({ created: 2 })
   mocks.mergeContacts.mockResolvedValue({})
+  mocks.loadDecryptedContacts.mockImplementation(async () => ({ contacts: [{ id: 'c2', displayName: 'Second Contact' }] }))
 })
 
 describe('#2174 — contact import', () => {
@@ -99,5 +107,7 @@ describe('#2174 — contact merge', () => {
     await waitFor(() => expect(onMerged).toHaveBeenCalled())
     const body = mocks.mergeContacts.mock.calls[0][0] as { mergedSummaryEnvelopes: Array<{ pubkey: string }> }
     expect(body.mergedSummaryEnvelopes.map(e => e.pubkey)).toEqual([DEVICE, ADMIN, SECOND_ADMIN])
+    // The directory is decrypted once per open, not once per render (#3080).
+    expect(mocks.loadDecryptedContacts).toHaveBeenCalledTimes(1)
   })
 })
