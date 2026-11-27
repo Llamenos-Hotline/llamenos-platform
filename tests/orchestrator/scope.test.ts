@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { checkScope, checkScopeAcross } from '../../orchestrator/src/scope.js'
+import { checkScope, checkScopeRouting } from '../../orchestrator/src/scope.js'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../../orchestrator/src/fragments.js'
 import { trackedFiles } from './codeowners.js'
 import { readFileSync } from 'node:fs'
@@ -1116,117 +1116,91 @@ describe('crypto BDD is writable end to end by the lane that owns the crypto dom
   })
 })
 
-describe('checkScopeAcross — cross-lane grants (#1115)', () => {
+/**
+ * The gate's scope half after #3056: lane write-scope is ROUTING, not a gate.
+ * Only never-write (`forbidden`) and the supply chain (`supplyChain`) refuse;
+ * every other path outside the PR's own lane lands in `outside`, which names
+ * who should review and fails nothing. There is no grant input any more.
+ */
+describe('checkScopeRouting — stray-scope is routing, never-write is the gate (#3056)', () => {
   const backend: LaneScope = { owned: ['apps/worker/', 'tests/steps/backend/'], notOwned: ['tests/'] }
-  const desktop: LaneScope = { owned: ['src/client/', 'tests/'], notOwned: ['tests/steps/backend/'] }
+  const infra: LaneScope = { owned: ['deploy/', '.github/workflows/', 'scripts/'], notOwned: [] }
   const emptyLane: LaneScope = { owned: [], notOwned: [] }
   const never = ['deploy/secrets/']
+  const excluded = ['.github/workflows/', '.github/actions/', 'deploy/', 'Dockerfile*', 'Caddyfile*', 'knope.toml', 'package.json', 'bun.lockb']
 
-  it('a file owned by ANY authorised lane is in scope', () => {
-    const r = checkScopeAcross(['apps/worker/a.ts', 'src/client/b.ts'], backend, [desktop], never)
-    expect(r.strayed).toEqual([])
+  it('a file outside the own lane is reported as outside, and is not refused', () => {
+    const r = checkScopeRouting(['apps/worker/a.ts', 'src/client/b.ts', 'apps/ios/X.swift'], backend, never, excluded)
+    expect(r.outside).toEqual(['src/client/b.ts', 'apps/ios/X.swift'])
     expect(r.forbidden).toEqual([])
+    expect(r.supplyChain).toEqual([])
   })
 
-  it('without the grant, the same diff strays', () => {
-    expect(checkScopeAcross(['apps/worker/a.ts', 'src/client/b.ts'], backend, [], never).strayed)
-      .toEqual(['src/client/b.ts'])
+  it('a diff wholly inside the own lane has nothing outside', () => {
+    expect(checkScopeRouting(['apps/worker/a.ts', 'tests/steps/backend/a.steps.ts'], backend, never, excluded))
+      .toEqual({ forbidden: [], supplyChain: [], outside: [] })
   })
 
-  it('a file owned by no authorised lane still strays', () => {
-    expect(checkScopeAcross(['apps/ios/X.swift'], backend, [desktop], never).strayed)
-      .toEqual(['apps/ios/X.swift'])
+  it('resolves the own lane by longest match, owned against notOwned', () => {
+    // backend owns tests/steps/backend/ but disclaims the rest of tests/.
+    expect(checkScopeRouting(['tests/steps/backend/a.steps.ts', 'tests/mocks/b.ts'], backend, never).outside)
+      .toEqual(['tests/mocks/b.ts'])
   })
 
-  // The grant vocabulary names LANES, and no lane owns a never-write path, so
-  // no number of grants can reach one.
-  it('never-write stays absolute regardless of how many lanes are granted', () => {
-    const r = checkScopeAcross(['deploy/secrets/prod.pem'], backend, [desktop], never)
+  // The security half, KEPT. No lane owns a never-write path and no amount of
+  // cross-lane routing reaches one.
+  it('never-write stays an absolute refusal, and is not also counted as outside', () => {
+    const r = checkScopeRouting(['deploy/secrets/prod.pem'], backend, never, excluded)
     expect(r.forbidden).toEqual(['deploy/secrets/prod.pem'])
-    expect(r.strayed).toEqual([])
+    expect(r.outside).toEqual([])
+    expect(r.supplyChain).toEqual([])
   })
 
-  it('resolves each lane separately rather than unioning owned/notOwned', () => {
-    // desktop owns tests/ but not tests/steps/backend/; backend is the
-    // reverse. Each file is legal for exactly one of them.
-    expect(checkScopeAcross(['tests/steps/backend/a.steps.ts', 'tests/mocks/b.ts'], backend, [desktop], never).strayed)
-      .toEqual([])
-    expect(checkScopeAcross(['packages/crypto/src/lib.rs'], backend, [desktop], never).strayed)
-      .toEqual(['packages/crypto/src/lib.rs'])
-  })
-
-  // UNSCOPED_LANE semantics, unchanged: this must stay true of the PR's OWN
-  // lane so non-fleet branches are judged exactly as they are today.
-  it('an unrestricted OWN scope still means no ownership check', () => {
-    const r = checkScopeAcross(['anything/at/all.ts', 'deploy/secrets/k.pem'], emptyLane, [], never)
-    expect(r.strayed).toEqual([])
+  it('never-write binds an unrestricted own lane too', () => {
+    const r = checkScopeRouting(['anything/at/all.ts', 'deploy/secrets/k.pem'], emptyLane, never, excluded)
     expect(r.forbidden).toEqual(['deploy/secrets/k.pem'])
   })
 
-  // The inverse, and the one that matters for safety. `assertLiveLanesHaveScope`
-  // only requires a non-empty scope of lanes that are not `off`, so an `off`
-  // lane legitimately has `owned: []`. If a grant for it were honoured, one
-  // label would make the whole PR unrestricted — the grant would fail OPEN.
-  it('a GRANTED lane with an empty scope grants nothing — it must not make the PR unrestricted', () => {
-    const r = checkScopeAcross(['src/client/b.ts', 'apps/ios/X.swift'], backend, [emptyLane], never)
-    expect(r.strayed).toEqual(['src/client/b.ts', 'apps/ios/X.swift'])
+  // An unrestricted own lane (a branch that is not `fleet/<lane>/…`) owns
+  // nothing, so every non-secret path is outside it FOR ROUTING. That is what
+  // keeps a PR's review routing from depending on what its branch is called.
+  it('an unrestricted own lane routes every path and refuses none but secrets', () => {
+    const r = checkScopeRouting(['anything/at/all.ts', 'deploy/x.yml'], emptyLane, never, excluded)
+    expect(r.outside).toEqual(['anything/at/all.ts', 'deploy/x.yml'])
+    expect(r.supplyChain).toEqual([])
+    expect(r.forbidden).toEqual([])
   })
 
-  // The second thing the review gate caught: NEVER_WRITE_PATHS is
-  // SECRET_PATH_PATTERNS only, and `deploy/` + `.github/workflows/` are
-  // deliberately NOT in it because lanes own some of them. Without a grant
-  // exclusion, one self-applied `scope:infra` label would extend any worker's
-  // write scope to the supply chain.
-  describe('grant exclusion: a grant may not reach CI or deploy config', () => {
-    const infra: LaneScope = { owned: ['deploy/', '.github/workflows/', 'scripts/'], notOwned: [] }
-    const excluded = ['.github/workflows/', '.github/actions/', 'deploy/', 'Dockerfile*', 'Caddyfile*', 'knope.toml']
-
-    it('refuses CI and deploy paths to a grant even though the granted lane owns them', () => {
-      const r = checkScopeAcross(
-        ['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'],
-        backend, [infra], never, excluded,
-      )
-      expect(r.strayed).toEqual(['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'])
+  describe('supply chain: the one outside-the-lane class that still refuses', () => {
+    it('refuses CI and deploy paths a PR\'s own lane does not own', () => {
+      const r = checkScopeRouting(['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml', 'apps/worker/a.ts'], backend, never, excluded)
+      expect(r.supplyChain).toEqual(['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'])
+      // They are ALSO outside the lane — the report names the owner either way.
+      expect(r.outside).toEqual(['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'])
     })
 
-    it('still lets a grant reach the granted lane\'s non-supply-chain paths', () => {
+    it('does not refuse a non-supply-chain path another lane owns', () => {
       // scripts/ is infra-owned and NOT excluded — #1060 legitimately needs
       // scripts/bootstrap-admin.ts from the backend lane.
-      expect(checkScopeAcross(['scripts/bootstrap-admin.ts'], backend, [infra], never, excluded).strayed)
-        .toEqual([])
+      const r = checkScopeRouting(['scripts/bootstrap-admin.ts'], backend, never, excluded)
+      expect(r.supplyChain).toEqual([])
+      expect(r.outside).toEqual(['scripts/bootstrap-admin.ts'])
     })
 
-    // The exclusion restricts GRANTS, never a lane's own scope.
-    // This PR grants package.json/bun.lockb to every lane so a worker can propose
-    // a dependency rather than delete the feature that needed it. That grant is for
-    // a lane's OWN PR — a self-applicable label must not widen an unrelated worker
-    // onto the manifest. Caught by the fleet review on #1172.
-    it('refuses the dependency manifest and lockfile to a grant', () => {
-      const deps: LaneScope = { owned: ['package.json', 'bun.lockb', 'apps/worker/'], notOwned: [] }
-      const withManifests = [...excluded, 'package.json', 'bun.lockb']
-      const r = checkScopeAcross(['package.json', 'bun.lockb'], backend, [deps], never, withManifests)
-      expect(r.strayed).toEqual(['package.json', 'bun.lockb'])
+    it('refuses the dependency manifest and lockfile to a lane that does not own them', () => {
+      expect(checkScopeRouting(['package.json', 'bun.lockb'], backend, never, excluded).supplyChain)
+        .toEqual(['package.json', 'bun.lockb'])
     })
 
-    it('still lets the owning lane write the manifest on its own PR', () => {
+    it('never refuses the owning lane its own supply-chain paths', () => {
       const deps: LaneScope = { owned: ['package.json', 'bun.lockb'], notOwned: [] }
-      const withManifests = [...excluded, 'package.json', 'bun.lockb']
-      expect(checkScopeAcross(['package.json'], deps, [], never, withManifests).strayed).toEqual([])
+      expect(checkScopeRouting(['package.json'], deps, never, excluded)).toEqual({ forbidden: [], supplyChain: [], outside: [] })
+      expect(checkScopeRouting(['.github/workflows/ci.yml', 'deploy/x.yml'], infra, never, excluded).supplyChain).toEqual([])
     })
 
-    it('does not stop the owning lane writing those paths on its own PR', () => {
-      expect(checkScopeAcross(['.github/workflows/ci.yml', 'deploy/x.yml'], infra, [], never, excluded).strayed)
-        .toEqual([])
+    it('defaults to no supply-chain list when it is omitted', () => {
+      expect(checkScopeRouting(['.github/workflows/ci.yml'], backend, never).supplyChain).toEqual([])
     })
-
-    it('defaults to no exclusion when the list is omitted, so existing callers are unaffected', () => {
-      expect(checkScopeAcross(['.github/workflows/ci.yml'], backend, [infra], never).strayed).toEqual([])
-    })
-  })
-
-  it('an empty granted scope alongside a real one leaves the real grant intact and nothing more', () => {
-    const r = checkScopeAcross(['src/client/b.ts', 'apps/ios/X.swift'], backend, [emptyLane, desktop], never)
-    expect(r.strayed).toEqual(['apps/ios/X.swift'])
   })
 })
 
@@ -1384,7 +1358,7 @@ describe('operator-facing docs are infra-owned, and ONLY at the repo root (#1467
 /**
  * #1610 — the `*.pem` carve-out, exercised through the real gate rather than
  * through `matchesSecretPath` alone (`fragments.test.ts` covers the predicate
- * itself). These run `checkScope`/`checkScopeAcross` against the REAL
+ * itself). These run `checkScope`/`checkScopeRouting` against the REAL
  * `NEVER_WRITE_PATHS`, so a narrowing of the constant, a mis-threaded
  * `contentOf`, or a carve-out that escaped `*.pem` all fail here.
  *
@@ -1461,18 +1435,18 @@ describe('public certificates at *.pem paths (#1610)', () => {
     expect(checkScope([X1_PATH], ios, NEVER_ALL, lookup({ [X1_PATH]: ISRG_ROOT_X1 })).strayed).toEqual([X1_PATH])
   })
 
-  it('checkScopeAcross threads the lookup too — a grant neither needs nor bypasses it', () => {
+  it('checkScopeRouting threads the lookup too — routing neither needs nor bypasses it', () => {
     const backendLane: LaneScope = { owned: ['apps/worker/'], notOwned: [] }
     const androidLane: LaneScope = { owned: ['apps/android/'], notOwned: [] }
     // Forbidden with no lookup, on the lane that owns the path.
-    expect(checkScopeAcross([X1_PATH], androidLane, [], NEVER_ALL).forbidden).toEqual([X1_PATH])
+    expect(checkScopeRouting([X1_PATH], androidLane, NEVER_ALL).forbidden).toEqual([X1_PATH])
     // Permitted with one.
-    expect(checkScopeAcross([X1_PATH], androidLane, [], NEVER_ALL, [], lookup({ [X1_PATH]: ISRG_ROOT_X1 })))
-      .toEqual({ forbidden: [], strayed: [] })
-    // A private key is forbidden even when the lane owns the directory and a
-    // grant is in force — never-write still beats everything.
-    expect(checkScopeAcross(
-      [X1_PATH], backendLane, [androidLane], NEVER_ALL, [],
+    expect(checkScopeRouting([X1_PATH], androidLane, NEVER_ALL, [], lookup({ [X1_PATH]: ISRG_ROOT_X1 })))
+      .toEqual({ forbidden: [], supplyChain: [], outside: [] })
+    // A private key is forbidden even when the PR's lane does NOT own the
+    // directory — never-write beats everything, routing included.
+    expect(checkScopeRouting(
+      [X1_PATH], backendLane, NEVER_ALL, [],
       lookup({ [X1_PATH]: throwawayPrivateKeyPem() }),
     ).forbidden).toEqual([X1_PATH])
   })

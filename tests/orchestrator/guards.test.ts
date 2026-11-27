@@ -1619,12 +1619,13 @@ describe('rail: fleet/review runs once per review request, not on every push', (
 
   /**
    * #1124: a bare `pull_request:` means `[opened, synchronize, reopened]`,
-   * and `fleet/verify` is where a `scope:<lane>` grant is actually read
-   * (`resolveGrantedLanes` in ci.ts reads the PR's labels inside this gate,
-   * #1117). Applying a grant is none of those three events, so before this
-   * fix nothing re-evaluated the PR afterwards and the pre-grant
-   * `scope=fail` verdict simply stood — observed live on #1060, #1064 and
-   * #1072, all three carrying their grants and all three still red.
+   * and `fleet/verify` reads the PR's LIVE state inside the gate (a
+   * trust-anchor sign-off on the exact head today, #2556; a `scope:<lane>`
+   * grant when this was written, #1117 — removed by #3056). Giving a sign-off
+   * is none of those three events, so before this fix nothing re-evaluated the
+   * PR afterwards and the pre-sign-off verdict simply stood — observed live on
+   * #1060, #1064 and #1072, all three carrying their grants and all three
+   * still red.
    *
    * Pinned as a rail because the regression is invisible: dropping
    * `review_requested` (or reverting to a bare `pull_request:`) breaks
@@ -1633,7 +1634,7 @@ describe('rail: fleet/review runs once per review request, not on every push', (
    * also stay EXPLICIT: re-bare-ing the trigger silently drops
    * `review_requested` along with the explicitness.
    */
-  it('fleet-verify.yml re-runs on review_requested, so a scope grant applied after open is actually consulted', () => {
+  it('fleet-verify.yml re-runs on review_requested, so live state changed after open (a sign-off) is actually consulted', () => {
     // #2815: the request reaches it through fleet-verify-re-evaluate.yml,
     // which triggers on exactly that and calls this file — never as one of
     // this file's own `pull_request` types (see required-context-creation.test.ts).

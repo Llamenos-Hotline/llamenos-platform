@@ -336,14 +336,14 @@ export async function requestReviewAtOpen(
 
 /**
  * Re-fire the review gate on a PR that ALREADY has (or lacks) a pending
- * trigger reviewer — used after a `scope:<lane>` grant is applied (#2643).
+ * trigger reviewer — used when a new head needs a review the earlier request
+ * already ran without (#2738).
  *
- * `fleet-verify.yml` listens for `review_requested`, never `labeled`, and a
- * rerun repeats the stale label lookup, so a grant applied after the first
- * run only counts once the review is requested AGAIN. That is
+ * A push never starts a review, and a rerun repeats the stale lookup, so the
+ * review only counts once it is requested AGAIN. That is
  * `requestReviewAtOpen` minus its rule 2 (a pending reviewer is success):
- * here the pending request is precisely the one that ran without the labels,
- * so a pending trigger reviewer is DELETEd first and POSTed back. The
+ * here the pending request is precisely the one that ran against the old
+ * head, so a pending trigger reviewer is DELETEd first and POSTed back. The
  * confirmation is still the event count (rule 1). A CODEOWNER stand-in whose
  * request GitHub re-adds instantly cannot be cycled — that comes back
  * `failed` and is logged, never silently reported as refired.

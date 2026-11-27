@@ -87,3 +87,16 @@ export function buildGateTrace(input: GateTraceInput): string {
   ]
   return parts.join(' ')
 }
+
+/**
+ * The lanes that should review this PR, as one line for the job summary
+ * (#3056). Kept OUT of `buildGateTrace`: that line is machine-parsed
+ * (`status.ts` reads `sha=` as its last field) and routing is not a gate
+ * stage. Empty when the report names no other lane, so a single-lane PR's
+ * summary is unchanged.
+ */
+export function reviewLanesLines(report: Pick<VerifyReport, 'reviewLanes'>): string[] {
+  const lanes = report.reviewLanes ?? []
+  if (lanes.length === 0) return []
+  return [`- review lanes: ${lanes.map((l) => `${l.lane} (${l.files.join(', ')})`).join('; ')} — routing, not a gate (#3056)`]
+}

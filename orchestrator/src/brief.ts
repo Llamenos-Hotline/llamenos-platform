@@ -104,11 +104,11 @@ export function buildBrief(item: WorkItem, lane: Lane, branch: string): Brief {
         `that crosses into files another LANE owns (a route plus the schema it declares and the client ` +
         `that sends it; a catalog permission plus the migration that grants it) is still ONE problem and ` +
         `ONE PR — take those files, and those lanes review them. Never split the issue into per-lane PRs. ` +
-        `At PR open the orchestrator reads your diff, applies the \`scope:<lane>\` label(s) it needs, says ` +
-        `so in a PR comment, and re-requests review, so do not label the PR yourself. It will NOT do this ` +
-        `for CI/deploy/supply-chain paths (\`.github/workflows/\`, \`deploy/\`, \`Dockerfile*\`, ` +
-        `\`Caddyfile*\`, \`knope.toml\`, \`package.json\`, \`bun.lockb\`) owned by another lane, or for ` +
-        `secrets — a diff holding one gets no grant at all and stops at \`NO-VERDICT:scope\`.\n\n` +
+        `\`fleet/verify\` does not fail a PR for touching another lane's files; it names the lanes ` +
+        `involved so they review, and there is no label to apply, so do not label the PR. It DOES still ` +
+        `refuse a diff that writes CI/deploy/supply-chain paths (\`.github/workflows/\`, \`deploy/\`, ` +
+        `\`Dockerfile*\`, \`Caddyfile*\`, \`knope.toml\`, \`package.json\`, \`bun.lockb\`) that your lane does ` +
+        `not own, and a diff holding a secret, at \`NO-VERDICT:scope\`.\n\n` +
         `If the fix genuinely requires one of THOSE (a path only another lane's own PR may write), ` +
         `do NOT touch it. You then have TWO options, and choosing between them is your ` +
         `judgement call:\n\n` +

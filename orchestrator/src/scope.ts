@@ -39,7 +39,7 @@ function longestMatch(file: string, patterns: string[]): string | undefined {
  * owned and notOwned regardless of specificity, and it binds even a lane
  * whose `owned` list is empty — an unrestricted lane still cannot touch
  * secrets. (CI and deploy config are NOT never-write — see
- * `GRANT_EXCLUDED_PATHS` and `checkScopeAcross`.) `strayed` is everything
+ * `GRANT_EXCLUDED_PATHS` and `checkScopeRouting`.) `strayed` is everything
  * else that falls outside the lane once neverWrite is out of the way.
  *
  * The neverWrite comparison is `secretFinding` (write-gate.ts), whose path
@@ -93,73 +93,52 @@ export function checkScope(
 }
 
 /**
- * Scope across the lanes a PR is AUTHORISED to write: its OWN lane, plus every
- * lane explicitly granted to it by a `scope:<lane>` label. A file is `strayed`
- * only when it falls outside every authorised lane.
+ * What `fleet/verify` makes of a diff's paths: which of them it REFUSES, and
+ * which merely name another lane that should review (#3056).
  *
- * The own scope and the granted scopes are separate parameters on purpose,
- * because "an empty `owned` list means no ownership check" must apply to the
- * PR's own lane and NEVER to a grant:
+ * The old gate treated every path outside the authoring lane as a failure and
+ * let a `scope:<lane>` label excuse it. That was built to stop concurrent
+ * per-platform workers overwriting each other's slice of one change. Under
+ * one-issue-one-PR (#2979) one worker authors the whole change, so a diff that
+ * spans lanes is the intended shape of a full-stack PR and the label recorded
+ * nothing the diff did not already say. The two halves are therefore split:
  *
- * - For the PR's own lane it is correct and load-bearing. `UNSCOPED_LANE` is
- *   exactly that, and it is how every branch not named `fleet/<lane>/…` is
- *   judged today. Treating it otherwise would change behaviour for most PRs.
- * - For a GRANT it is a fail-open. `assertLiveLanesHaveScope` only requires a
- *   non-empty scope of lanes that are not `off`, so an `off` lane — or one
- *   whose fragment is missing or unparseable — legitimately has `owned: []`.
- *   If a grant for such a lane were honoured, a single `scope:<that lane>`
- *   label would make the whole PR unrestricted and wave through a diff that
- *   would otherwise be `scope=fail`. An empty granted scope is therefore
- *   discarded: a grant may only ever widen by a real lane's real paths.
+ * - `forbidden` — never-write (secrets, private keys). A security control,
+ *   ABSOLUTE, and it binds even an unrestricted lane. Unchanged.
+ * - `supplyChain` — a path in `grantExcluded` (CI, deploy, supply chain) that
+ *   the PR's own lane does not own. Still a refusal: the issue relaxed lane
+ *   bookkeeping, not who may rewrite the build system, and it was the one
+ *   outside-the-lane class no label could ever excuse. Only the owning lane's
+ *   own PR writes these. An unrestricted own lane (`UNSCOPED_LANE`, a branch
+ *   that is not `fleet/<lane>/…`) never had this check and still does not.
+ * - `outside` — every other path the own lane does not own. NOT a failure:
+ *   routing metadata naming who should review. An unrestricted own lane owns
+ *   nothing, so for routing purposes every non-secret path is outside it, which
+ *   is what lets a PR whose branch is not `fleet/<lane>/…` still say which
+ *   lanes to ask.
  *
- * `forbidden` (neverWrite) is checked first and stays ABSOLUTE either way —
- * but note precisely what that covers: `NEVER_WRITE_PATHS` is
- * `SECRET_PATH_PATTERNS`, i.e. **secrets only**. `deploy/` and
- * `.github/workflows/` are deliberately NOT never-write, because lanes own
- * some of them. So "no grant can reach a never-write path" is true and also
- * much weaker than it sounds, and an earlier revision of this file overstated
- * it into "secrets, CI and deploy config are unreachable", which was false.
- *
- * `grantExcluded` is what actually makes CI and deploy unreachable *by grant*:
- * paths on that list are refused to a grant even when the granted lane owns
- * them, while the owning lane still writes them normally on its own PR. See
- * `GRANT_EXCLUDED_PATHS`.
- *
- * Each lane is evaluated with its own `owned`/`notOwned` pair, never a
- * flattened union: flattening would break longest-match, letting desktop's
- * `tests/` grant cancel backend's `tests/` exclusion and making a path
- * writable that neither lane can write on its own.
+ * Each own-lane comparison is `checkScope`'s (longest match wins, owned vs
+ * notOwned), and `secretFinding` decides never-write exactly as there.
  */
-export function checkScopeAcross(
+export function checkScopeRouting(
   changed: string[],
   ownScope: LaneScope,
-  grantedScopes: LaneScope[],
   neverWrite: readonly string[],
   grantExcluded: readonly string[] = [],
   contentOf?: (file: string) => FileContent | undefined,
-): { forbidden: string[]; strayed: string[] } {
+): { forbidden: string[]; supplyChain: string[]; outside: string[] } {
   const forbidden: string[] = []
-  const strayed: string[] = []
-  // Only the PR's own lane may be unrestricted. A granted lane with no owned
-  // paths grants nothing at all.
+  const supplyChain: string[] = []
+  const outside: string[] = []
   const unrestricted = ownScope.owned.length === 0
-  const granted = grantedScopes.filter((s) => s.owned.length > 0)
   for (const f of changed) {
     if (secretFinding(f, neverWrite, contentOf?.(f)) !== undefined) {
       forbidden.push(f)
       continue
     }
-    if (unrestricted) continue
-    // The PR's own lane is checked first and is never subject to the grant
-    // exclusion: infra writes its own workflows on its own PR.
-    if (checkScope([f], ownScope, []).strayed.length === 0) continue
-    // Beyond the own lane, a grant may not reach the supply chain even when
-    // the granted lane owns it.
-    if (grantExcluded.some((p) => matchesPath(f, p))) {
-      strayed.push(f)
-      continue
-    }
-    if (!granted.some((s) => checkScope([f], s, []).strayed.length === 0)) strayed.push(f)
+    if (!unrestricted && checkScope([f], ownScope, []).strayed.length === 0) continue
+    outside.push(f)
+    if (!unrestricted && grantExcluded.some((p) => matchesPath(f, p))) supplyChain.push(f)
   }
-  return { forbidden, strayed }
+  return { forbidden, supplyChain, outside }
 }

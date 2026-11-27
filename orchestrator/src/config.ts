@@ -27,8 +27,9 @@ export interface Lane {
   /** Filled by loadLanes() from .claude/agents/fragments/<id>-supervisor.md */
   scope: LaneScope
   /**
-   * Set only on a SCOPE-ONLY lane (`SCOPE_ONLY_LANE_IDS`): a fragment whose
-   * owned paths a `scope:<id>` grant may reach, but which is not a lane — no
+   * Set only on a SCOPE-ONLY lane (`SCOPE_ONLY_LANE_IDS`): a fragment that
+   * owns paths and so REVIEWS a PR touching them (`reviewLanesFor`, #3056; it
+   * was a `scope:<id>` grant target before then), but which is not a lane — no
    * dispatch, no `fleet/<id>/<item>` branch, no `lanes.json` mode. See
    * `loadGrantableLanes` (#2867).
    */
@@ -62,18 +63,18 @@ export const LANE_IDS = ['backend', 'shared', 'desktop', 'ios', 'android', 'infr
  * first as "not a lane, therefore owns nothing" was the gap #2867 measured:
  * `docs/runbooks/mac-ci-runner-disk.md` is `mac`'s, infra's own `scripts/ci/`
  * change needs to update it in the same commit, and because `mac` was not in
- * the lane list the runbook read as owned by NO lane — so `scope:mac` could not
- * be granted and the gate told the author to delete the documentation.
+ * the lane list the runbook read as owned by NO lane — so it could name no
+ * reviewer (then: no `scope:mac` grant could be made, and the gate told the
+ * author to delete the documentation).
  *
  * Listed explicitly rather than "every fragment outside LANE_IDS": a fragment
- * becoming grantable widens what a self-applicable label can reach, and that
- * decision belongs in this human-gated file, not in whichever fragment is
- * added next.
+ * becoming a reviewer lane decides who the gate asks, and that decision
+ * belongs in this human-gated file, not in whichever fragment is added next.
  */
 export const SCOPE_ONLY_LANE_IDS = ['mac'] as const
 
 /**
- * What a scope-only `scope:<id>` grant may reach — a SUBSET of the fragment's
+ * What a scope-only fragment is routed review of — a SUBSET of the fragment's
  * owned paths, never all of them.
  *
  * `mac` also owns `scripts/ci/mac-runner-disk-guard.sh` and `scripts/mac-run.sh`:
@@ -311,9 +312,9 @@ function grantableScope(declared: LaneScope | undefined, allowed: readonly strin
 }
 
 /**
- * Every lane a `scope:<id>` grant may name: the real lanes (`loadLanes`) plus
+ * Every lane the gate may route review to: the real lanes (`loadLanes`) plus
  * the scope-only fragments (`SCOPE_ONLY_LANE_IDS`). Used by everything that
- * JUDGES or GRANTS a scope; dispatch, digests and `doctor` keep `loadLanes`,
+ * JUDGES a scope or names reviewing lanes; dispatch, digests and `doctor` keep `loadLanes`,
  * so a scope-only fragment never shows up as an `off` lane or gets work.
  */
 export async function loadGrantableLanes(
@@ -596,22 +597,26 @@ export const TRUST_ANCHOR_FILES: readonly TrustAnchorFile[] = [
 export const TRUST_ANCHOR_APPROVERS: readonly string[] = ['rhonda-rodododo']
 
 /**
- * Paths a `scope:<lane>` GRANT may never reach, even when the granted lane
- * genuinely owns them (#1115).
+ * Paths a PR may write only when its OWN lane owns them (#1115, #3056). The
+ * name is historical: until #3056 a `scope:<lane>` label could widen a PR onto
+ * another lane's files and these were the paths that label could never reach.
+ * The label is gone, and the list is now the one outside-the-lane class
+ * `fleet/verify` still REFUSES (`checkScopeRouting`'s `supplyChain`); every
+ * other path outside the lane is routed to its owner for review instead.
  *
  * This is NOT a never-write list and must not be confused with one. The lane
  * that owns these paths still writes them normally on its own PR — infra
  * edits its own workflows, ios edits `.github/workflows/ios*.yml`. What is
- * refused is *widening* someone else's PR onto them via a label.
+ * refused is a DIFFERENT lane's PR writing them.
  *
- * Why grants specifically: `NEVER_WRITE_PATHS` is `SECRET_PATH_PATTERNS` and
+ * Why these specifically: `NEVER_WRITE_PATHS` is `SECRET_PATH_PATTERNS` and
  * covers secrets only. `deploy/` and `.github/workflows/` are deliberately
  * excluded from it (see the comment above SECRET_PATH_PATTERNS) precisely
- * because lanes own some of them. So without this list, one self-applied
- * `scope:infra` label would extend any worker's write scope to CI and deploy
- * config — the supply chain that builds, tests, signs and ships the app —
- * and `fleet/verify` would report `scope=pass`. A grant is meant to let a
- * cross-lane CODE fix stay atomic, never to hand a lane the build system.
+ * because lanes own some of them. So without this list, any worker's PR could
+ * rewrite CI and deploy config — the supply chain that builds, tests, signs
+ * and ships the app — and `fleet/verify` would report `scope=pass`. A
+ * cross-lane CODE fix is the intended shape of a full-stack PR; rewriting the
+ * build system from someone else's PR is not.
  *
  * `.github/ci/` is intentionally absent: those are lint/tsc baseline files,
  * already shared-write to backend and desktop by their fragments, and not
@@ -626,9 +631,9 @@ export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   '.github/scripts/',
   '.github/actions/',
   // The rest of what decides what CI, the scanners and the labels will accept
-  // (#2935). `.github/labels.yml` defines the `scope:` labels themselves — the
-  // grant mechanism — so a label able to widen a PR onto it could widen the
-  // label set. The scanner suppressions and the audit allowlist are the files a
+  // (#2935). `.github/labels.yml` defines the labels the fleet reads (the
+  // `-reviewer` profiles, the hold labels), so a PR able to edit it could
+  // change what the fleet does with a label. The scanner suppressions and the audit allowlist are the files a
   // PR edits to make a finding disappear.
   // Prefixes, not one spelling each: GitHub accepts `.yml` and `.yaml` for the
   // dependabot config, and an alternate spelling must not be a way around the
@@ -674,12 +679,11 @@ export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   // Dependency manifests. This same PR grants these to every lane so a worker
   // can PROPOSE adding a dependency rather than deleting the feature that
   // needed it (#1171 removed desktop call audio for exactly that reason).
-  // That grant is for a lane writing the manifest on its OWN PR. A
-  // `scope:<lane>` label must not also widen an UNRELATED worker's PR onto
-  // it: install-time code execution is the most direct supply-chain reach
-  // there is, and the label is self-applicable. CODEOWNERS still puts a human
+  // That grant is for a lane writing the manifest on its OWN PR. It must not
+  // also let an UNRELATED worker's PR write it: install-time code execution is
+  // the most direct supply-chain reach there is. CODEOWNERS still puts a human
   // on any PR touching these either way — this keeps the automated gate from
-  // being the weaker of the two. Caught by the fleet review on this PR.
+  // being the weaker of the two. Caught by the fleet review on #1172.
   'package.json',
   'bun.lockb',
 ]
