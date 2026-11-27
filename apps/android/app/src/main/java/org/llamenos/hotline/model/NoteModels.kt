@@ -18,13 +18,9 @@ typealias UpdateNoteBody = org.llamenos.protocol.UpdateNoteBody
 typealias NotesListResponse = org.llamenos.protocol.NoteListResponse
 
 /**
- * Reply type from generated protocol.
- */
-typealias NoteReply = org.llamenos.protocol.SharedNote
-
-/**
- * Note replies response from GET /api/notes/:id/replies.
- * Uses the generated NoteRepliesResponse.
+ * Note replies response from GET /api/notes/:id/replies: `note_replies` rows
+ * (`NoteReplyResponse`), not notes — a reply has no `updatedAt` and is read
+ * through `readerEnvelopes` (#2300).
  */
 typealias NoteRepliesResponse = org.llamenos.protocol.NoteRepliesResponse
 

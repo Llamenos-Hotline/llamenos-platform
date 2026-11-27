@@ -2,6 +2,7 @@ package org.llamenos.hotline.ui.notes
 
 import org.llamenos.hotline.crypto.HpkeEnvelope
 import org.llamenos.hotline.crypto.NoteEnvelope
+import org.llamenos.protocol.NoteReplyResponse
 import org.llamenos.protocol.SharedNote
 
 /**
@@ -49,7 +50,7 @@ internal fun splitAuthorAndAdminEnvelopes(
 }
 
 /**
- * Candidate HPKE envelopes for reading a note or reply, most-likely first.
+ * Candidate HPKE envelopes for reading a note, most-likely first.
  *
  * Two envelopes may open for us:
  *  1. `authorEnvelope` — for notes written after the #1023 fix this opens only
@@ -82,3 +83,15 @@ internal fun noteReadCandidates(note: SharedNote, ourEncryptionPubkey: String): 
     }
     return candidates
 }
+
+/**
+ * Candidate HPKE envelopes for reading a note reply: our entry in
+ * `readerEnvelopes`, matched by our ENCRYPTION pubkey. A reply is a
+ * `note_replies` row — it carries no `authorEnvelope`/`adminEnvelopes`
+ * (#2300), so [noteReadCandidates] cannot read one. Every reader, the author
+ * included, has an entry here (`noteRecipientPubkeys`).
+ */
+internal fun noteReplyReadCandidates(reply: NoteReplyResponse, ourEncryptionPubkey: String): List<HpkeEnvelope> =
+    reply.readerEnvelopes
+        .filter { it.pubkey == ourEncryptionPubkey }
+        .map { HpkeEnvelope(enc = it.enc, ct = it.ct) }

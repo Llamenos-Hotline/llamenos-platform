@@ -31,7 +31,6 @@ import org.llamenos.hotline.model.CustomFieldsResponse
 import org.llamenos.hotline.model.CustomFieldDefinitionType
 import org.llamenos.hotline.model.NotePayload
 import org.llamenos.hotline.model.NoteRepliesResponse
-import org.llamenos.hotline.model.NoteReply
 import org.llamenos.hotline.model.NotesListResponse
 import org.llamenos.protocol.CreateNoteBody
 import org.llamenos.hotline.model.CreateNoteBodyAdminEnvelope
@@ -41,6 +40,7 @@ import org.llamenos.hotline.model.CreateReplyBodyReaderEnvelope
 import org.llamenos.hotline.model.Note
 import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.model.UpdateNoteBody
+import org.llamenos.protocol.NoteReplyResponse
 import org.llamenos.protocol.NoteStoredResponse
 import org.llamenos.protocol.RecipientEnvelope
 import javax.inject.Inject
@@ -617,10 +617,10 @@ class NotesViewModel @Inject constructor(
     /**
      * Decrypt a single reply by finding our HPKE envelope and calling CryptoService.
      */
-    private suspend fun decryptReply(reply: NoteReply): DecryptedReply? {
+    private suspend fun decryptReply(reply: NoteReplyResponse): DecryptedReply? {
         val ourPubkey = cryptoService.encryptionPubkeyHex ?: return null
 
-        for (hpkeEnvelope in noteReadCandidates(reply, ourPubkey)) {
+        for (hpkeEnvelope in noteReplyReadCandidates(reply, ourPubkey)) {
             val payload = try {
                 cryptoService.decryptNote(reply.encryptedContent, hpkeEnvelope)
             } catch (_: Exception) {
