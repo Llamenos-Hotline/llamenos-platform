@@ -822,6 +822,8 @@ All ids follow §2.1. Every set is sorted and unique (§5.2).
 | `recovery_group` | `format`, `groupPk` (KEM public key of that format's suite), `threshold` (2–5, matching `hub_recovery_groups.threshold`), `holders: [user]`, `commitments` (H of the share commitments), `delayHours`, `emergencyFloorHours` | role management |
 | `checkpoint` | `state` = `H(canonical(chain-derived state at n − 1))` | role management |
 
+*Revised 2026-11-27 (no real data; see the note under §3).* **Only the new-hub genesis is built.** `migration` is always `0` and `members` names the founder alone. A verifier refuses `migration: 1` with a named code until a migration is ever needed; the field stays so that one can be added without a format change.
+
 **Group membership is derived, never listed.**
 
 - A `purpose` group's members are the users whose chain-derived permissions include
@@ -947,7 +949,7 @@ against it proves nothing (#2947). Each negative vector names a **closed rejecti
 | `thread-key.json` | a server-minted generation 1 (`signer: null`), the client-minted generation 2 on first open, a claim to generation 3, and messages sealed to each (§2.7) | `signer: null` at generation 2 or later (`thread_unsigned_generation`); a client seal to the generation-1 record (`thread_unsigned_seal`); a wrong or missing signature at generation ≥ 2 (`thread_bad_signature`); a generation gap; a record whose `format` differs from the row's (`format_mismatch`) |
 | `group-grant.json` | the three grant kinds, with signatures (§2.8) | `epoch_sk` that does not match the chain `pk`; a grant `crypto_format` other than the epoch's `format`; a granter lacking permission; a recipient device not in the owner's chain |
 | `index-key.json` | an index key, its commitment and its wrap to the epoch `pk` (D7) | a key that does not match its commitment |
-| `hub-chain.json` | a valid chain: genesis (both new-hub and migration), a bundle policy, role grants, `group_epoch` for purpose and user groups, `escrow_set`, `connector_enroll`, `recovery_group`, `checkpoint`, with derived state after each link (§5) | an unsigned or wrongly signed link; a signer without permission; a user-group epoch signed by someone else; a `prevHash` or seq gap; the revoked-admin race; an unsorted set; out-of-profile strings; a **forked pair** served to two clients; a server-substituted epoch `pk` |
+| `hub-chain.json` | a valid chain: genesis (new-hub only; see §5.6), a bundle policy, role grants, `group_epoch` for purpose and user groups, `escrow_set`, `connector_enroll`, `recovery_group`, `checkpoint`, with derived state after each link (§5) | an unsigned or wrongly signed link; a signer without permission; a user-group epoch signed by someone else; a `prevHash` or seq gap; the revoked-admin race; an unsorted set; out-of-profile strings; a **forked pair** served to two clients; a server-substituted epoch `pk`; a genesis with `migration: 1` |
 | `recovery.json` | `recovery_group`, K approvals and `recovery_device_add` (§5.8) | K − 1 approvals; duplicate holders; an approval over different device keys or session; a holder outside the set; an emergency approval standing in for the threshold |
 | `format-migration.json` | a format-1 row (today's bytes, with no blob prefix) and its format-2 re-encryption under fixed seeds (§3) | format `0` or `3`; v2 bytes through the v1 reader and the reverse |
 
