@@ -79,6 +79,12 @@ A hub is eligible only when all three hold, each checked by the client from chai
 The server enforces (2) and (3) on each per-hub request, as it would for a single-hub search. The
 client never sends to an ineligible hub, so a lying server can't widen the fan-out.
 
+**Amended by #3032 (organisations §3, §10.2), effective once #2294's org contract PR lands.**
+Condition 1 becomes two-sided membership: the hub's own `policy {kind: org}` link names the org's
+`hub_attach`. Condition 2's body becomes `policy {kind: "org_search", org, orgGenesis}`, and the
+opt-in is void once the hub is no longer in that org. Both ship in the same contract PR as this
+spec (O-A), so no build ever uses the older body.
+
 ---
 
 ## 5. X4: which fields — decided
