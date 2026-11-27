@@ -2739,8 +2739,8 @@ export async function enableMessagingViaApi(
 export interface SeedSpec {
   hubId: string
   adminSeed: string
+  /** Hub-scoped switches only — test-seed never edits a deployment-wide role. */
   permissions?: {
-    grantVolunteerCms?: boolean
     enableCaseManagement?: boolean
   }
   entityTypes?: Array<{

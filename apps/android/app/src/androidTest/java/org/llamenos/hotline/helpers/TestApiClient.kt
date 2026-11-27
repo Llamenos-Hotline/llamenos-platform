@@ -30,9 +30,13 @@ class TestApiClient(
 
     // ─── Seed Spec Types ──────────────────────────────────────────────
 
+    /**
+     * Hub-scoped seed switches. There is no switch that edits a deployment-wide
+     * role: such a role is shared by every hub, so the edit outlives the scenario
+     * (the server refuses an unknown key here — #3082, #3083).
+     */
     @Serializable
     data class SeedPermissions(
-        val grantVolunteerCms: Boolean = false,
         val enableCaseManagement: Boolean = false,
     )
 
