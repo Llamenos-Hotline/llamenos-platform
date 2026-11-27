@@ -350,6 +350,9 @@ describe('break it — each class of trust defect moves the snapshot', () => {
       expectMoves(edited({ [GRADLE]: inSet('test', 'getByName("main").manifest.srcFile("src/insecure/AndroidManifest.xml")') }), /buildWiring/)
       expectMoves(edited({ [GRADLE]: inSet('test', 'android.sourceSets["release"].res.srcDir("src/insecure/res")') }), /buildWiring/)
     })
+    test('fail safe: a template inside an otherwise allowed statement that names the build model', () => {
+      expectMoves(edited({ [GRADLE]: inSet('test', 'kotlin.srcDir("${android.sourceSets["release"].res.srcDirs}")') }), /buildWiring/)
+    })
     test('fail safe: a single-line chain on a test-only set that also does something else on the line stays', () => {
       expectMoves(
         edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        sourceSets.getByName("test").java.srcDir("x"); sourceSets.maybeCreate("main").manifest.srcFile("src/insecure/AndroidManifest.xml")') }),

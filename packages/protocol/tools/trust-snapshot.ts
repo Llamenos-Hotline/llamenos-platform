@@ -800,7 +800,13 @@ function skipKotlinString(code: string, i: number): number {
  */
 const SAFE_SOURCE_SET_STATEMENT_RE = /^(?:(?:(?:kotlin|java|res|resources|assets|aidl|renderscript|jniLibs|shaders|mlModels|manifest)\.)?(?:srcDirs?|srcFile)\(\s*"[^"\\]*"(?:\s*,\s*"[^"\\]*")*\s*\)|(?:kotlin|java|res|resources|assets|aidl|renderscript|jniLibs|shaders|mlModels)\s*\{|\})$/
 
+/** A second layer under the allowlist: a string template (`"${…}"`) is evaluated, so one that names a source set or
+ *  the build model is refused even inside a statement of an allowed shape. */
+const REACHES_ANOTHER_SOURCE_SET_RE = /\b(?:sourceSets|android|extensions|project)\b/
+
 const isSafeSourceSetText = (dropped: string): boolean =>
+  selectedSourceSets(dropped).length === 0 &&
+  !REACHES_ANOTHER_SOURCE_SET_RE.test(dropped) &&
   dropped.split(/[\n;]/).map(squash).every((st) => st === '' || SAFE_SOURCE_SET_STATEMENT_RE.test(st))
 
 /** `code` with the text that sits inside a non-shipping source set blanked out, line structure kept. Text is
