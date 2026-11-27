@@ -16,9 +16,10 @@ import org.junit.runner.RunWith
 /**
  * `packages/crypto/tests/fixtures/v2/device-binding.json` (#2496; spec
  * 2026-11-25-v2-device-linking-and-recovery §5–§6) through this app's production
- * reader: [CryptoService.genesisDeviceSet] over UniFFI — the device set a hub's
- * migration genesis is built from. Positives must produce the crate's set
- * exactly; each negative is asserted by its closed rejection code.
+ * reader: [CryptoService.verifySigchains] over UniFFI — each chain verified, then
+ * cross-user key reuse refused. Positives must yield the crate's active device
+ * keys exactly (the genesis `user_init` names the first device's X-Wing key);
+ * each negative is asserted by its closed rejection code.
  *
  * Runs on a device/emulator with the native library. No server.
  */
@@ -43,33 +44,32 @@ class DeviceBindingVectorTest {
         }
     }
 
-    private fun set(c: JsonObject): org.llamenos.core.GenesisDeviceSet = runBlocking {
-        CryptoService().genesisDeviceSet(c.getValue("chains").toString())
+    private fun verify(c: JsonObject) = runBlocking {
+        CryptoService().verifySigchains(c.getValue("chains").toString())
     }
 
     @Test
-    fun positivesProduceTheCratesGenesisDeviceSet() {
+    fun positivesYieldTheCratesActiveDeviceKeys() {
         val positives = fixture.getValue("positives").jsonArray
         assertEquals(3, positives.size)
         for (p in positives.map { it.jsonObject }) {
             val name = p.getValue("name").jsonPrimitive.content
-            val expect = p.getValue("expect").jsonObject
-            val got = set(p)
-            assertEquals(name, expect.getValue("included").jsonArray.map { it.jsonObject.getValue("kemPubkey").jsonPrimitive.content },
-                got.included.map { it.kemPubkey })
-            assertEquals(name, expect.getValue("missing").jsonArray.map { it.jsonObject.getValue("devicePubkey").jsonPrimitive.content },
-                got.missing.map { it.devicePubkey })
+            val expect = p.getValue("expect").jsonArray.map { chain ->
+                chain.jsonArray.map { it.jsonObject.getValue("devicePubkey").jsonPrimitive.content to it.jsonObject.getValue("encryptionPubkey").jsonPrimitive.content }
+            }
+            val got = verify(p).map { state -> state.activeDeviceKeys.map { it.devicePubkey to it.encryptionPubkey } }
+            assertEquals(name, expect, got)
         }
     }
 
     @Test
     fun negativesAreRefusedWithTheirCode() {
         val negatives = fixture.getValue("negatives").jsonArray
-        assertEquals(8, negatives.size)
+        assertEquals(9, negatives.size)
         for (n in negatives.map { it.jsonObject }) {
             val name = n.getValue("name").jsonPrimitive.content
             try {
-                set(n)
+                verify(n)
                 fail("$name: accepted")
             } catch (e: CryptoException) {
                 assertEquals(name, n.getValue("expect").jsonPrimitive.content, codeOf(e))

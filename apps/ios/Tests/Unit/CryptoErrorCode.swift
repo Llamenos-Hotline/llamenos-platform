@@ -15,6 +15,8 @@ func cryptoErrorCode(_ error: Error) -> String {
         return "invalid_id"
     case .NoEventKey:
         return "no_event_key"
+    case .BackupMissingXwingSeed:
+        return "backup_missing_xwing_seed"
     case .SigchainRejected(let message):
         // A flat error: the closed code is carried as `sigchain rejected (<code>): …`.
         if let open = message.range(of: "sigchain rejected ("),

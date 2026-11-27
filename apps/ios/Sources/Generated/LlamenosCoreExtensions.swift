@@ -63,9 +63,7 @@ extension DeviceKeyState: Codable {
             deviceId: try container.decode(String.self, forKey: .deviceId),
             signingPubkeyHex: try container.decode(String.self, forKey: .signingPubkeyHex),
             encryptionPubkeyHex: try container.decode(String.self, forKey: .encryptionPubkeyHex),
-            // Absent in a pilot blob stored before X-Wing keys existed (#2496);
-            // unlocking gives the device one.
-            kemPubkeyHex: try container.decodeIfPresent(String.self, forKey: .kemPubkeyHex)
+            kemPubkeyHex: try container.decode(String.self, forKey: .kemPubkeyHex)
         )
     }
 
@@ -74,7 +72,7 @@ extension DeviceKeyState: Codable {
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(signingPubkeyHex, forKey: .signingPubkeyHex)
         try container.encode(encryptionPubkeyHex, forKey: .encryptionPubkeyHex)
-        try container.encodeIfPresent(kemPubkeyHex, forKey: .kemPubkeyHex)
+        try container.encode(kemPubkeyHex, forKey: .kemPubkeyHex)
     }
 }
 

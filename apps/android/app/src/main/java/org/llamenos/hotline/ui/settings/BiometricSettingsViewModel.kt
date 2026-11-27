@@ -113,11 +113,7 @@ class BiometricSettingsViewModel @Inject constructor(
                 // Verifies the PIN by attempting the real decrypt — throws on a wrong PIN.
                 // This re-loads the same identity that's already unlocked in this session,
                 // so it's safe to call while the app is already authenticated.
-                val unlocked = cryptoService.unlockWithPin(encryptedData, pin)
-                // A pilot blob gains its X-Wing key on any unlock (#2496); keep it.
-                unlocked.upgradedKeys?.let {
-                    keyValueStore.store(KeystoreService.KEY_ENCRYPTED_KEYS, json.encodeToString(StoredKeyData.of(it)))
-                }
+                cryptoService.unlockWithPin(encryptedData, pin)
 
                 pendingPin = pin
                 val cipher = biometricKeyStore.getBiometricEncryptCipher()

@@ -42,12 +42,14 @@ import javax.inject.Singleton
  * register. [PushRegistrationManager] attaches the push endpoint to the same
  * server-side device later, when a distributor assigns one.
  *
- * It also publishes the device in the user's sigchain ([ensureIdentity]): the
- * user's genesis and first PUK when the chain is still empty (PROTOCOL.md §2.11),
- * then this device's X-Wing key as a `device_kem` link (spec
- * 2026-11-25-v2-device-linking-and-recovery §5, #2496). A device without one is
- * left out of its hubs' migration genesis, so this runs on every unlock until
- * the chain names the key this device holds.
+ * It also brings the device's sigchain identity up to date ([ensureIdentity]):
+ * the user's genesis and first PUK when the chain is still empty (PROTOCOL.md
+ * §2.11) — the genesis naming this device's X-Wing key with its possession
+ * signature (spec 2026-11-25-v2-device-linking-and-recovery §5 as revised
+ * 2026-11-26, #2496) — then verification that the chain authorises this device
+ * under the X-Wing key it holds. The key is fixed for the device's life: a chain
+ * naming another key for it is reported, never re-keyed (re-keying is
+ * remove-and-relink, L6).
  *
  * Multi-hub axiom: registration is per-device, not per-hub; nothing here
  * reads or depends on the active hub.
@@ -107,16 +109,15 @@ class DeviceRegistrationManager @Inject constructor(
 
     private val identityMutex = Mutex()
 
-    /** The X-Wing key the server's chain was last seen to name for this device, this process. */
-    private var publishedKemKey: String? = null
+    /** The X-Wing key the server's chain was last verified to name for this device, this process. */
+    private var verifiedKemKey: String? = null
 
     /**
      * Bring this device's sigchain identity up to date: genesis + PUK generation 1
      * + puk_epoch if the user's chain is empty and this is the user's identity
-     * device, then a `device_kem` publishing this device's X-Wing key unless the
-     * verified chain already names it. Idempotent. A failure is logged loudly and
-     * retried by the next unlock — never skipped silently: until it succeeds the
-     * device is listed as missing by its hubs' migration genesis.
+     * device, then verification that the chain authorises this device under the
+     * X-Wing key it holds. Idempotent. A failure is logged loudly and retried by
+     * the next unlock — never skipped silently.
      */
     suspend fun ensureIdentity(): Result<Unit> = identityMutex.withLock {
         val user = cryptoService.signingPubkeyHex
@@ -124,7 +125,7 @@ class DeviceRegistrationManager @Inject constructor(
         if (user == null || kem == null) {
             return@withLock Result.failure(IllegalStateException("Device keys are locked or have no X-Wing key"))
         }
-        if (publishedKemKey == kem) return@withLock Result.success(Unit)
+        if (verifiedKemKey == kem) return@withLock Result.success(Unit)
         try {
             var links = apiService.getSigchain(user).links
             val known = verifiedHead(user)
@@ -139,25 +140,20 @@ class DeviceRegistrationManager @Inject constructor(
             } else if (links.isEmpty()) {
                 links = initialiseIdentity(user)
             }
-            var verified = cryptoService.verifySigchain(cryptoLinksJson(links))
+            val verified = cryptoService.verifySigchain(cryptoLinksJson(links))
             if (verified.userPubkey != user || !verified.activeDevicePubkeys.contains(user)) {
                 throw IllegalStateException("Verified sigchain does not authorise this device")
             }
             recordHead(user, verified)
-            if (verified.deviceKemKeys.none { it.devicePubkey == user && it.kemPubkey == kem }) {
-                val payload = Json.parseToJsonElement(cryptoService.deviceKemPayload(user)).jsonObject
-                appendSigned(user, SigchainLinkType.DeviceKem, payload, links.last())
-                links = apiService.getSigchain(user).links
-                verified = cryptoService.verifySigchain(cryptoLinksJson(links))
-                if (verified.deviceKemKeys.none { it.devicePubkey == user && it.kemPubkey == kem }) {
-                    throw IllegalStateException("Verified sigchain does not name this device's X-Wing key")
-                }
-                recordHead(user, verified)
+            if (verified.activeDeviceKeys.none { it.devicePubkey == user && it.encryptionPubkey == kem }) {
+                throw IllegalStateException(
+                    "The verified sigchain names a different X-Wing key for this device than the one it holds",
+                )
             }
-            publishedKemKey = kem
+            verifiedKemKey = kem
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Publishing the device X-Wing key (device_kem) failed: ${e.message}", e)
+            Log.e(TAG, "Device identity verification failed: ${e.message}", e)
             Result.failure(e)
         }
     }
@@ -184,13 +180,8 @@ class DeviceRegistrationManager @Inject constructor(
     /** Genesis + PUK generation 1 + puk_epoch, in the order PROTOCOL.md §2.11 fixes. */
     private suspend fun initialiseIdentity(user: String): List<SigchainResponseLink> {
         val deviceId = cryptoService.deviceId ?: throw IllegalStateException("Device keys are locked")
-        val x25519 = cryptoService.encryptionPubkeyHex ?: throw IllegalStateException("Device keys are locked")
-        val genesis = buildJsonObject {
-            put("type", "user_init")
-            put("deviceId", deviceId)
-            put("devicePubkey", user)
-            put("deviceEncryptionPubkey", x25519)
-        }
+        // Built in Rust: the device's keys, its X-Wing key and the pop over it.
+        val genesis = Json.parseToJsonElement(cryptoService.userInitPayload()).jsonObject
         appendSigned(user, SigchainLinkType.Genesis, genesis, null)
         // The envelope is stored BEFORE the chain claims the PUK, so a chain never
         // names a PUK whose seed was lost.

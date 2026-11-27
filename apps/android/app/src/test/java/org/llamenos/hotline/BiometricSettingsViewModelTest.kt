@@ -66,7 +66,7 @@ class BiometricSettingsViewModelTest {
         // PIN mock CryptoService to throw CryptoException instead.
         keyValueStore.store(
             KeystoreService.KEY_ENCRYPTED_KEYS,
-            """{"salt":"$pin","nonce":"n","ciphertext":"c","signingPubkeyHex":"$signingPubkey","encryptionPubkeyHex":"$encryptionPubkey","deviceId":"$deviceId"}""",
+            """{"salt":"$pin","nonce":"n","ciphertext":"c","signingPubkeyHex":"$signingPubkey","encryptionPubkeyHex":"$encryptionPubkey","deviceId":"$deviceId","kemPubkeyHex":"${"e".repeat(2432)}"}""",
         )
     }
 

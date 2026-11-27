@@ -26,7 +26,6 @@ import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.DeviceKeyState
-import org.llamenos.hotline.crypto.UnlockResult
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.PinLockoutState
 import org.llamenos.hotline.service.DeviceRegistrationManager
@@ -564,13 +563,11 @@ class AuthViewModelTest {
         // ViewModel → PushRegistrationManager wiring, not on crypto.
         val mockCrypto = mockk<CryptoService>()
         coEvery { mockCrypto.unlockWithPin(any(), any()) } returns
-            UnlockResult(
-                DeviceKeyState(
-                    deviceId = "device-1",
-                    signingPubkeyHex = "a".repeat(64),
-                    encryptionPubkeyHex = "b".repeat(64),
-                    kemPubkeyHex = "e".repeat(2432),
-                ),
+            DeviceKeyState(
+                deviceId = "device-1",
+                signingPubkeyHex = "a".repeat(64),
+                encryptionPubkeyHex = "b".repeat(64),
+                kemPubkeyHex = "e".repeat(2432),
             )
         keyValueStore.store(
             KeystoreService.KEY_ENCRYPTED_KEYS,
@@ -582,6 +579,7 @@ class AuthViewModelTest {
                     signingPubkeyHex = "a".repeat(64),
                     encryptionPubkeyHex = "b".repeat(64),
                     deviceId = "device-1",
+                    kemPubkeyHex = "e".repeat(2432),
                 ),
             ),
         )
@@ -615,6 +613,7 @@ class AuthViewModelTest {
                 signingPubkeyHex = "a".repeat(64),
                 encryptionPubkeyHex = "b".repeat(64),
                 deviceId = "device-1",
+                kemPubkeyHex = "e".repeat(2432),
             ),
         )
         every { ks.checkLockoutState() } returns PinLockoutState.Unlocked(attemptsRemaining = 10)
@@ -678,6 +677,7 @@ class AuthViewModelTest {
                     signingPubkeyHex = "a".repeat(64),
                     encryptionPubkeyHex = "b".repeat(64),
                     deviceId = "device-1",
+                    kemPubkeyHex = "e".repeat(2432),
                 ),
             ),
         )

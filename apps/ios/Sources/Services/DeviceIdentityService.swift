@@ -3,15 +3,17 @@ import os
 
 // MARK: - DeviceIdentityService
 
-/// Publishes this device in the user's sigchain (#2496; spec
-/// 2026-11-25-v2-device-linking-and-recovery §5).
+/// Brings this device's identity in the user's sigchain up to date (#2496; spec
+/// 2026-11-25-v2-device-linking-and-recovery §5 as revised 2026-11-26).
 ///
 /// On every unlock and after enrolment: the user's genesis, first PUK and
 /// `puk_epoch` when the chain is still empty and this device never verified one
-/// (PROTOCOL.md §2.11), then a `device_kem` link publishing this device's X-Wing
-/// key unless the verified chain already names it. A device without one is left
-/// out of its hubs' migration genesis device set, so a failure is logged loudly
-/// and retried on the next unlock, never skipped.
+/// (PROTOCOL.md §2.11) — the genesis, built in Rust, naming this device's X-Wing
+/// key with its possession signature — then verification that the chain
+/// authorises this device under the X-Wing key it holds. The key is fixed for the
+/// device's life: a chain naming another key for it is reported, never re-keyed
+/// (re-keying is remove-and-relink, L6). A failure is logged loudly and retried
+/// on the next unlock, never skipped.
 ///
 /// The head this device last verified is kept in the Keychain. A chain the server
 /// later serves that does not extend it (empty, shorter, or forked) is refused:
@@ -27,7 +29,7 @@ final class DeviceIdentityService {
     private let logger = Logger(subsystem: "org.llamenos.hotline", category: "DeviceIdentity")
 
     /// The X-Wing key the verified chain was last seen to name for this device, this process.
-    private var publishedKemKey: String?
+    private var verifiedKemKey: String?
     private var inFlight: Task<Void, Error>?
 
     init(apiService: APIService, cryptoService: CryptoService, keychainService: KeychainService) {
@@ -39,7 +41,7 @@ final class DeviceIdentityService {
     enum IdentityError: Error, LocalizedError {
         case locked
         case notAuthorised
-        case kemNotPublished
+        case kemMismatch
         case chainRolledBack
         case unreadableHead
 
@@ -47,7 +49,7 @@ final class DeviceIdentityService {
             switch self {
             case .locked: return "Device keys are locked or have no X-Wing key"
             case .notAuthorised: return "Verified sigchain does not authorise this device"
-            case .kemNotPublished: return "Verified sigchain does not name this device's X-Wing key"
+            case .kemMismatch: return "The verified sigchain names a different X-Wing key for this device than the one it holds"
             case .chainRolledBack: return "The server's sigchain does not extend the head this device verified"
             case .unreadableHead: return "The sigchain head this device recorded cannot be read"
             }
@@ -60,7 +62,7 @@ final class DeviceIdentityService {
             do {
                 try await ensureIdentity()
             } catch {
-                logger.error("Publishing the device X-Wing key (device_kem) failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("Device identity verification failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -78,7 +80,7 @@ final class DeviceIdentityService {
         guard let user = cryptoService.signingPubkeyHex, let kem = cryptoService.kemPubkeyHex else {
             throw IdentityError.locked
         }
-        if publishedKemKey == kem { return }
+        if verifiedKemKey == kem { return }
 
         var links = try await sigchain(of: user)
         if let known = try verifiedHead(of: user) {
@@ -88,37 +90,23 @@ final class DeviceIdentityService {
         } else if links.isEmpty {
             links = try await initialiseIdentity(user: user)
         }
-        var verified = try cryptoService.verifySigchain(linksJson: try cryptoLinksJson(links))
+        let verified = try cryptoService.verifySigchain(linksJson: try cryptoLinksJson(links))
         guard verified.userPubkey == user, verified.activeDevicePubkeys.contains(user) else {
             throw IdentityError.notAuthorised
         }
         try recordHead(user: user, verified)
-
-        if !verified.deviceKemKeys.contains(where: { $0.devicePubkey == user && $0.kemPubkey == kem }) {
-            let payload = try cryptoService.deviceKemPayload(userPubkey: user)
-            try await appendSigned(user: user, type: .deviceKem, payloadJson: payload, head: links.last)
-            links = try await sigchain(of: user)
-            verified = try cryptoService.verifySigchain(linksJson: try cryptoLinksJson(links))
-            guard verified.deviceKemKeys.contains(where: { $0.devicePubkey == user && $0.kemPubkey == kem }) else {
-                throw IdentityError.kemNotPublished
-            }
-            try recordHead(user: user, verified)
+        guard verified.activeDeviceKeys.contains(where: { $0.devicePubkey == user && $0.encryptionPubkey == kem }) else {
+            throw IdentityError.kemMismatch
         }
-        publishedKemKey = kem
+        verifiedKemKey = kem
     }
 
     // MARK: - Genesis + PUK (PROTOCOL.md §2.11)
 
     private func initialiseIdentity(user: String) async throws -> [SigchainResponseLink] {
-        guard let deviceId = cryptoService.deviceId, let x25519 = cryptoService.encryptionPubkeyHex else {
-            throw IdentityError.locked
-        }
-        let genesis = try json([
-            "type": "user_init",
-            "deviceId": deviceId,
-            "devicePubkey": user,
-            "deviceEncryptionPubkey": x25519,
-        ])
+        guard let deviceId = cryptoService.deviceId else { throw IdentityError.locked }
+        // Built in Rust: the device's keys, its X-Wing key and the pop over it.
+        let genesis = try cryptoService.userInitPayload()
         try await appendSigned(user: user, type: .genesis, payloadJson: genesis, head: nil)
 
         // The envelope is stored BEFORE the chain claims the PUK, so a chain never

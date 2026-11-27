@@ -3,15 +3,15 @@ import XCTest
 
 /// `packages/crypto/tests/fixtures/v2/device-binding.json` (#2496; spec
 /// 2026-11-25-v2-device-linking-and-recovery §5–§6) through this app's
-/// production reader: `CryptoService.genesisDeviceSet` over UniFFI — the device
-/// set a hub's migration genesis is built from. Positives produce the crate's
-/// set exactly; each negative fails with its closed rejection code.
+/// production reader: `CryptoService.verifySigchains` over UniFFI — each chain
+/// verified, then cross-user key reuse refused. Positives yield the crate's
+/// active device keys exactly (the genesis names the first device's X-Wing key);
+/// each negative fails with its closed rejection code.
 final class DeviceBindingVectorTests: XCTestCase {
 
     private struct Fixture: Decodable {
-        struct Device: Decodable { let devicePubkey: String; let kemPubkey: String? }
-        struct Expect: Decodable { let included: [Device]; let missing: [Device] }
-        struct Positive: Decodable { let name: String; let chains: JSONValue; let expect: Expect }
+        struct Key: Decodable { let devicePubkey: String; let encryptionPubkey: String }
+        struct Positive: Decodable { let name: String; let chains: JSONValue; let expect: [[Key]] }
         struct Negative: Decodable { let name: String; let chains: JSONValue; let expect: String }
         let positives: [Positive]
         let negatives: [Negative]
@@ -33,54 +33,57 @@ final class DeviceBindingVectorTests: XCTestCase {
         return try JSONDecoder().decode(Fixture.self, from: try Data(contentsOf: url))
     }
 
-    func testPositivesProduceTheCratesGenesisDeviceSet() throws {
+    func testPositivesYieldTheCratesActiveDeviceKeys() throws {
         let f = try load()
         XCTAssertEqual(f.positives.count, 3)
         for p in f.positives {
-            let set = try CryptoService().genesisDeviceSet(chainsJson: p.chains.json)
-            XCTAssertEqual(set.included.map(\.kemPubkey), p.expect.included.compactMap(\.kemPubkey), p.name)
-            XCTAssertEqual(set.missing.map(\.devicePubkey), p.expect.missing.map(\.devicePubkey), p.name)
+            let states = try CryptoService().verifySigchains(chainsJson: p.chains.json)
+            XCTAssertEqual(
+                states.map { $0.activeDeviceKeys.map { "\($0.devicePubkey):\($0.encryptionPubkey)" } },
+                p.expect.map { $0.map { "\($0.devicePubkey):\($0.encryptionPubkey)" } },
+                p.name
+            )
         }
     }
 
     func testNegativesFailWithTheirCode() throws {
         let f = try load()
-        XCTAssertEqual(f.negatives.count, 8)
+        XCTAssertEqual(f.negatives.count, 9)
         for n in f.negatives {
             XCTAssertEqual(
-                codeOfFailure { _ = try CryptoService().genesisDeviceSet(chainsJson: n.chains.json) },
+                codeOfFailure { _ = try CryptoService().verifySigchains(chainsJson: n.chains.json) },
                 n.expect,
                 n.name
             )
         }
     }
 
-    /// A pilot device's 64-byte blob (the fixture readers are pilot-shaped) gains
-    /// an X-Wing key on unlock, and keeps its signing and X25519 keys.
-    func testAPilotBlobGainsAnXWingKeyOnUnlock() throws {
-        struct Devices: Decodable { let pin: String; let devices: [String: EncryptedDeviceKeys] }
-        var dir = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { dir.deleteLastPathComponent() }
-        let f = try JSONDecoder().decode(Devices.self, from: try Data(contentsOf: dir.appendingPathComponent(
-            "packages/crypto/tests/fixtures/v2/fixture-reader-devices.json")))
-        let pilot = try XCTUnwrap(f.devices.values.first)
-        XCTAssertNil(pilot.state.kemPubkeyHex)
-        let pilotService = CryptoService()
-        let upgraded = try XCTUnwrap(try pilotService.unlockWithPin(data: pilot, pin: f.pin).upgradedKeys)
-        XCTAssertEqual(upgraded.state.signingPubkeyHex, pilot.state.signingPubkeyHex)
-        XCTAssertEqual(upgraded.state.encryptionPubkeyHex, pilot.state.encryptionPubkeyHex)
-        XCTAssertEqual(upgraded.state.kemPubkeyHex?.count, 2432)
-        // The stored form round-trips the new key through the app's Codable.
-        let decoded = try JSONDecoder().decode(EncryptedDeviceKeys.self, from: try JSONEncoder().encode(upgraded))
-        XCTAssertEqual(decoded.state.kemPubkeyHex, upgraded.state.kemPubkeyHex)
-        pilotService.lock()
-
+    /// The device's own genesis, built in Rust, names the X-Wing key it holds;
+    /// unlocking again reads the same key and never draws one.
+    func testTheGenesisNamesTheDevicesOwnXWingKey() throws {
         let service = CryptoService()
-        let encrypted = try service.generateDeviceKeys(deviceId: UUID().uuidString, pin: "65432100")
-        XCTAssertNotNil(encrypted.state.kemPubkeyHex, "a new device has an X-Wing key")
+        let pin = "65432100"
+        let encrypted = try service.generateDeviceKeys(deviceId: UUID().uuidString, pin: pin)
+        XCTAssertEqual(encrypted.state.kemPubkeyHex.count, 2432)
+        let genesis = try service.createSigchainLink(
+            id: "g", seq: 1, prevHash: nil, timestamp: "2026-11-26T00:00:00Z",
+            payloadJson: try service.userInitPayload()
+        )
+        let verified = try service.verifySigchain(linksJson: try linksJson([genesis]))
+        XCTAssertEqual(verified.activeDeviceKeys.map(\.encryptionPubkey), [encrypted.state.kemPubkeyHex])
         service.lock()
-        let unlocked = try service.unlockWithPin(data: encrypted, pin: "65432100")
-        XCTAssertNil(unlocked.upgradedKeys, "a device that has one is not re-keyed")
-        XCTAssertEqual(service.kemPubkeyHex, encrypted.state.kemPubkeyHex)
+        XCTAssertEqual(try service.unlockWithPin(data: encrypted, pin: pin).kemPubkeyHex, encrypted.state.kemPubkeyHex)
     }
+}
+
+/// UniFFI `SigchainLink`s in the crate's JSON shape.
+func linksJson(_ links: [SigchainLink]) throws -> String {
+    let array: [[String: Any]] = links.map { l in
+        [
+            "id": l.id, "seq": l.seq, "prevHash": l.prevHash ?? NSNull(), "entryHash": l.entryHash,
+            "signerDeviceId": l.signerDeviceId, "signerPubkey": l.signerPubkey,
+            "signature": l.signature, "timestamp": l.timestamp, "payloadJson": l.payloadJson,
+        ]
+    }
+    return String(decoding: try JSONSerialization.data(withJSONObject: array), as: UTF8.self)
 }

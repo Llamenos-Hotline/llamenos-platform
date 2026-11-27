@@ -28,11 +28,10 @@ data class DeviceKeyState(
     val encryptionPubkeyHex: String,
     /**
      * X-Wing (ML-KEM-768 + X25519) public key, 2432 hex chars — the device's
-     * crypto_format 2 key (wire spec D16), published by a `device_kem` link.
-     * Null only for a pilot blob not yet unlocked since K-A (#2496); unlocking
-     * gives it one ([CryptoService.unlockWithPin]).
+     * crypto_format 2 key (wire spec D16). Created once with the device, named
+     * in its `user_init` or `device_add`, and never redrawn (#2496).
      */
-    val kemPubkeyHex: String? = null,
+    val kemPubkeyHex: String,
 ) {
     internal fun toFfi() = org.llamenos.core.DeviceKeyState(
         deviceId = deviceId,
@@ -85,17 +84,6 @@ data class EncryptedDeviceKeys(
         )
     }
 }
-
-/**
- * The result of a PIN unlock: the device state, and — for a pilot device whose
- * blob had no X-Wing key — the re-encrypted blob that now holds one. The caller
- * MUST store [upgradedKeys] in place of the old blob when it is not null
- * (spec 2026-11-25-v2-device-linking-and-recovery §5).
- */
-data class UnlockResult(
-    val state: DeviceKeyState,
-    val upgradedKeys: EncryptedDeviceKeys? = null,
-)
 
 data class AuthToken(
     val pubkey: String,
@@ -237,6 +225,14 @@ data class EphemeralKeyResult(
 class CryptoException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
+ * A device backup that holds no X-Wing seed (a v5 file): refused by name, never
+ * half-restored to a device that would sign in and decrypt nothing (#3053).
+ * The message is the crate's, naming the missing seed; the user recovers onto a
+ * new device identity instead (spec 2026-11-25 L7).
+ */
+class BackupMissingXwingSeedException(cause: Throwable) : Exception(cause.message, cause)
+
+/**
  * CryptoService wraps the llamenos-core native library via JNI/UniFFI.
  *
  * ## V3 Device Key Model
@@ -268,6 +264,7 @@ class CryptoService @Inject constructor() {
 
     /** X25519 encryption public key (hex). Used for HPKE. */
     var encryptionPubkeyHex: String? = null
+        private set
 
     /** This device's X-Wing public key, once unlocked (see [DeviceKeyState.kemPubkeyHex]). */
     var kemPubkeyHex: String? = null
@@ -341,22 +338,15 @@ class CryptoService @Inject constructor() {
     /**
      * Decrypt device keys from PIN-encrypted storage and load into Rust state.
      */
-    suspend fun unlockWithPin(data: EncryptedDeviceKeys, pin: String): UnlockResult =
+    suspend fun unlockWithPin(data: EncryptedDeviceKeys, pin: String): DeviceKeyState =
         withContext(computeDispatcher) {
             NativeCryptoLibrary.require()
 
             try {
-                val result = if (data.state.kemPubkeyHex == null) {
-                    // A pilot blob: unlock and gain an X-Wing key in one step (spec §5).
-                    val upgraded = EncryptedDeviceKeys.fromFfi(
-                        org.llamenos.core.mobileAddDeviceKemKeyAndLoad(data = data.toFfi(), pin = pin),
-                    )
-                    UnlockResult(upgraded.state, upgraded)
-                } else {
-                    UnlockResult(DeviceKeyState.fromFfi(org.llamenos.core.mobileUnlock(data = data.toFfi(), pin = pin)))
-                }
-                adopt(result.state)
-                result
+                // Unlocking only reads the device's X-Wing seed; it is never redrawn.
+                val state = DeviceKeyState.fromFfi(org.llamenos.core.mobileUnlock(data = data.toFfi(), pin = pin))
+                adopt(state)
+                state
             } catch (e: org.llamenos.core.CryptoException) {
                 throw CryptoException("Decryption failed: incorrect PIN", e)
             }
@@ -774,6 +764,55 @@ class CryptoService @Inject constructor() {
         }
     }
 
+    // ---- Device backup (packages/crypto backup.rs, v6) ----
+
+    /** A fresh recovery key for display: base32, dash-grouped. */
+    fun generateRecoveryKey(): String {
+        NativeCryptoLibrary.require()
+        return org.llamenos.core.mobileGenerateRecoveryKey()
+    }
+
+    /**
+     * The loaded device's backup file (JSON): its three seeds — signing, X25519
+     * and X-Wing — sealed under [pin] and [recoveryKey]. The seeds never leave Rust.
+     */
+    suspend fun createBackup(pin: String, recoveryKey: String): String = withContext(computeDispatcher) {
+        NativeCryptoLibrary.require()
+        if (!isUnlocked) throw CryptoException("No key loaded")
+        try {
+            org.llamenos.core.mobileCreateBackup(pin, recoveryKey)
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Backup failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Restore a device from a backup file and load it, re-encrypted under
+     * [newPin]. The X-Wing key comes back with the other two, so it is the one
+     * the user's chain names (#3053). A backup without the X-Wing seed is refused
+     * as [BackupMissingXwingSeedException] — never half-restored.
+     */
+    suspend fun restoreBackup(
+        backupJson: String,
+        credential: String,
+        isRecoveryKey: Boolean,
+        newPin: String,
+        deviceId: String,
+    ): EncryptedDeviceKeys = withContext(computeDispatcher) {
+        NativeCryptoLibrary.require()
+        try {
+            val encrypted = EncryptedDeviceKeys.fromFfi(
+                org.llamenos.core.mobileRestoreBackupAndLoad(backupJson, credential, isRecoveryKey, newPin, deviceId),
+            )
+            adopt(encrypted.state)
+            encrypted
+        } catch (e: org.llamenos.core.CryptoException.BackupMissingXwingSeed) {
+            throw BackupMissingXwingSeedException(e)
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Backup restore failed: ${e.message}", e)
+        }
+    }
+
     // ---- Sigchain Operations ----
 
     /** Create a new sigchain link signed by this device. */
@@ -813,31 +852,32 @@ class CryptoService @Inject constructor() {
     }
 
     /**
-     * This device's `device_kem` payload JSON for [userPubkey] (spec §5): its
-     * X-Wing key and possession signature, made in Rust. The link carrying it
-     * must be signed by this device ([createSigchainLink]).
+     * This device's genesis `user_init` payload JSON (spec 2026-11-25 §5 as
+     * revised 2026-11-26): its Ed25519, X25519 and X-Wing keys, `format: 2` and
+     * the possession signature, made in Rust. Sign the link carrying it with
+     * [createSigchainLink].
      */
-    suspend fun deviceKemPayload(userPubkey: String): String = withContext(computeDispatcher) {
+    suspend fun userInitPayload(): String = withContext(computeDispatcher) {
         NativeCryptoLibrary.require()
+        if (!isUnlocked) throw CryptoException("No key loaded")
         try {
-            org.llamenos.core.mobileDeviceKemPayload(userPubkey)
+            org.llamenos.core.mobileUserInitPayload()
         } catch (e: org.llamenos.core.CryptoException) {
-            throw CryptoException("device_kem payload failed: ${e.message}", e)
+            throw CryptoException("user_init payload failed: ${e.message}", e)
         }
     }
 
     /**
-     * The migration-genesis device set for a hub's members' chains (spec §5):
-     * every chain verified together (cross-user key reuse refused), active
-     * devices with an X-Wing key in `included`, the rest in `missing`.
+     * Verify several users' chains together (spec §6): each chain verified, then
+     * any key named by two users' chains refused (`chain_key_reused`).
      */
-    suspend fun genesisDeviceSet(chainsJson: String): org.llamenos.core.GenesisDeviceSet =
+    suspend fun verifySigchains(chainsJson: String): List<org.llamenos.core.SigchainVerifiedState> =
         withContext(computeDispatcher) {
             NativeCryptoLibrary.require()
             try {
-                org.llamenos.core.mobileGenesisDeviceSet(chainsJson)
+                org.llamenos.core.mobileSigchainVerifyUsers(chainsJson)
             } catch (e: org.llamenos.core.CryptoException) {
-                throw CryptoException("Genesis device set refused: ${e.message}", e)
+                throw CryptoException("Sigchain verification refused: ${e.message}", e)
             }
         }
 

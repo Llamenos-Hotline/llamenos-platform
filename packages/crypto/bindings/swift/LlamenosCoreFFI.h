@@ -361,11 +361,6 @@ RustBuffer uniffi_llamenos_core_fn_func_generate_ephemeral_keypair_mobile(RustCa
 RustBuffer uniffi_llamenos_core_fn_func_get_public_key(RustBuffer secret_key_hex, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_ADD_DEVICE_KEM_KEY_AND_LOAD
-#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_ADD_DEVICE_KEM_KEY_AND_LOAD
-RustBuffer uniffi_llamenos_core_fn_func_mobile_add_device_kem_key_and_load(RustBuffer data, RustBuffer pin, RustCallStatus *_Nonnull out_status
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BUILD_AUTH_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BUILD_AUTH_MESSAGE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_build_auth_message(RustBuffer pubkey_hex, uint64_t timestamp, RustBuffer method, RustBuffer path, RustBuffer nonce, RustCallStatus *_Nonnull out_status
@@ -420,6 +415,11 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_create_auth_token_from_signing_ke
 RustBuffer uniffi_llamenos_core_fn_func_mobile_create_auth_token_without_nonce(uint64_t timestamp, RustBuffer method, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CREATE_BACKUP
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CREATE_BACKUP
+RustBuffer uniffi_llamenos_core_fn_func_mobile_create_backup(RustBuffer pin, RustBuffer recovery_key, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_CALL_METADATA
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_CALL_METADATA
 RustBuffer uniffi_llamenos_core_fn_func_mobile_decrypt_call_metadata(RustBuffer encrypted_content, RustBuffer envelopes, RustCallStatus *_Nonnull out_status
@@ -438,11 +438,6 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_decrypt_hub_field(RustBuffer pack
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_MESSAGE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_decrypt_message(RustBuffer encrypted_content, RustBuffer envelopes, RustCallStatus *_Nonnull out_status
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DEVICE_KEM_PAYLOAD
-#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DEVICE_KEM_PAYLOAD
-RustBuffer uniffi_llamenos_core_fn_func_mobile_device_kem_payload(RustBuffer user_pubkey, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_ECDH_COMPLETE
@@ -487,15 +482,16 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_generate_ephemeral_key(RustCallSt
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_GENERATE_RECOVERY_KEY
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_GENERATE_RECOVERY_KEY
+RustBuffer uniffi_llamenos_core_fn_func_mobile_generate_recovery_key(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_GENERATE_WAKE_KEY
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_GENERATE_WAKE_KEY
 RustBuffer uniffi_llamenos_core_fn_func_mobile_generate_wake_key(RustCallStatus *_Nonnull out_status
     
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_GENESIS_DEVICE_SET
-#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_GENESIS_DEVICE_SET
-RustBuffer uniffi_llamenos_core_fn_func_mobile_genesis_device_set(RustBuffer chains_json, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_GET_DEVICE_STATE
@@ -599,6 +595,11 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(Rus
 RustBuffer uniffi_llamenos_core_fn_func_mobile_resolve_admin_readers(RustBuffer server_recipients, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RESTORE_BACKUP_AND_LOAD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RESTORE_BACKUP_AND_LOAD
+RustBuffer uniffi_llamenos_core_fn_func_mobile_restore_backup_and_load(RustBuffer backup_json, RustBuffer credential, int8_t is_recovery_key, RustBuffer new_pin, RustBuffer device_id, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_CASE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_CASE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_seal_case(RustBuffer purpose, RustBuffer plaintext, RustBuffer reader_pubkeys, RustCallStatus *_Nonnull out_status
@@ -662,6 +663,12 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_sign(RustBuffer message_hex, Rust
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_UNLOCK
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_UNLOCK
 RustBuffer uniffi_llamenos_core_fn_func_mobile_unlock(RustBuffer data, RustBuffer pin, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_USER_INIT_PAYLOAD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_USER_INIT_PAYLOAD
+RustBuffer uniffi_llamenos_core_fn_func_mobile_user_init_payload(RustCallStatus *_Nonnull out_status
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_VERIFY_AUTH_TOKEN
@@ -1073,12 +1080,6 @@ uint16_t uniffi_llamenos_core_checksum_func_get_public_key(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_ADD_DEVICE_KEM_KEY_AND_LOAD
-#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_ADD_DEVICE_KEM_KEY_AND_LOAD
-uint16_t uniffi_llamenos_core_checksum_func_mobile_add_device_kem_key_and_load(void
-    
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BUILD_AUTH_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BUILD_AUTH_MESSAGE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_build_auth_message(void
@@ -1139,6 +1140,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_non
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CREATE_BACKUP
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CREATE_BACKUP
+uint16_t uniffi_llamenos_core_checksum_func_mobile_create_backup(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DECRYPT_CALL_METADATA
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DECRYPT_CALL_METADATA
 uint16_t uniffi_llamenos_core_checksum_func_mobile_decrypt_call_metadata(void
@@ -1160,12 +1167,6 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_field(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DECRYPT_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DECRYPT_MESSAGE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_decrypt_message(void
-    
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DEVICE_KEM_PAYLOAD
-#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DEVICE_KEM_PAYLOAD
-uint16_t uniffi_llamenos_core_checksum_func_mobile_device_kem_payload(void
     
 );
 #endif
@@ -1217,15 +1218,15 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_generate_ephemeral_key(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_GENERATE_WAKE_KEY
-#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_GENERATE_WAKE_KEY
-uint16_t uniffi_llamenos_core_checksum_func_mobile_generate_wake_key(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_GENERATE_RECOVERY_KEY
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_GENERATE_RECOVERY_KEY
+uint16_t uniffi_llamenos_core_checksum_func_mobile_generate_recovery_key(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_GENESIS_DEVICE_SET
-#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_GENESIS_DEVICE_SET
-uint16_t uniffi_llamenos_core_checksum_func_mobile_genesis_device_set(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_GENERATE_WAKE_KEY
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_GENERATE_WAKE_KEY
+uint16_t uniffi_llamenos_core_checksum_func_mobile_generate_wake_key(void
     
 );
 #endif
@@ -1343,6 +1344,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_resolve_admin_readers(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RESTORE_BACKUP_AND_LOAD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RESTORE_BACKUP_AND_LOAD
+uint16_t uniffi_llamenos_core_checksum_func_mobile_restore_backup_and_load(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_CASE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_CASE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_seal_case(void
@@ -1418,6 +1425,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_sign(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_UNLOCK
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_UNLOCK
 uint16_t uniffi_llamenos_core_checksum_func_mobile_unlock(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_USER_INIT_PAYLOAD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_USER_INIT_PAYLOAD
+uint16_t uniffi_llamenos_core_checksum_func_mobile_user_init_payload(void
     
 );
 #endif

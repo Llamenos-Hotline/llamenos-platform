@@ -113,9 +113,9 @@ class InviteViewModel @Inject constructor(
             // DeviceRegistrationManager logs it and every unlock retries.
             if (errorRes == null) {
                 deviceRegistrationManager.register()
-                // The user now exists server-side: create its sigchain genesis and
-                // first PUK, and publish this device's X-Wing key (#2496). Logged
-                // and retried on every unlock if it fails.
+                // The user now exists server-side: create its sigchain genesis (naming
+                // this device's X-Wing key) and first PUK (#2496). Logged and retried
+                // on every unlock if it fails.
                 deviceRegistrationManager.ensureIdentity()
             }
             _uiState.update {

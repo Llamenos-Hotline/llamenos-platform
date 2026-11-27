@@ -74,7 +74,7 @@ class InviteViewModelEnrollmentTest {
         viewModel.redeem()
 
         assertEquals(InviteStage.REDEEMED, redeemed().stage)
-        // Then the user's sigchain identity and this device's X-Wing key (#2496).
+        // Then the user's sigchain identity, its genesis naming this device's X-Wing key (#2496).
         coVerifyOrder {
             invites.redeemInvite(code)
             deviceRegistration.register()

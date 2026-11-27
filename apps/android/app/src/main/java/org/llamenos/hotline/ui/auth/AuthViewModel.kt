@@ -44,8 +44,8 @@ data class StoredKeyData(
     val signingPubkeyHex: String,
     val encryptionPubkeyHex: String,
     val deviceId: String,
-    /** X-Wing public key; absent in a pilot blob stored before K-A (#2496). */
-    val kemPubkeyHex: String? = null,
+    /** X-Wing public key, fixed for the device's life (#2496). */
+    val kemPubkeyHex: String,
 ) {
     fun toEncrypted() = EncryptedDeviceKeys(
         kdfVersion = kdfVersion,
@@ -300,8 +300,8 @@ class AuthViewModel @Inject constructor(
      * and an unknown pubkey is refused.
      */
     private fun onIdentityKnownToServer() {
-        // Also publishes this device's X-Wing key (device_kem) — after genesis and
-        // the first PUK if the user has no chain yet (spec 2026-11-25 §5, #2496).
+        // Also verifies this device's sigchain identity — after genesis and the
+        // first PUK if the user has no chain yet (spec 2026-11-25 §5, #2496).
         deviceRegistrationManager.ensureRegistered()
     }
 
@@ -463,12 +463,7 @@ class AuthViewModel @Inject constructor(
 
                 val encryptedData = json.decodeFromString<StoredKeyData>(storedJson).toEncrypted()
 
-                val unlocked = cryptoService.unlockWithPin(encryptedData, pin)
-                // A pilot blob just gained its X-Wing key (spec §5): it replaces
-                // the stored one before the key can be published.
-                unlocked.upgradedKeys?.let {
-                    keystoreService.store(KeystoreService.KEY_ENCRYPTED_KEYS, json.encodeToString(StoredKeyData.of(it)))
-                }
+                cryptoService.unlockWithPin(encryptedData, pin)
 
                 // Success — reset failed attempts
                 ks?.resetFailedAttempts()

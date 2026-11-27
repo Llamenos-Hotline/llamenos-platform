@@ -565,6 +565,86 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 /**
+ * An active device's format-2 encryption key, as the `user_init` or
+ * `device_add` that named it says. Fixed for the device's life.
+ */
+public struct ActiveDeviceKey: Equatable, Hashable {
+    /**
+     * The device's Ed25519 key, hex
+     */
+    public let devicePubkey: String
+    /**
+     * Its X-Wing encapsulation key, hex
+     */
+    public let encryptionPubkey: String
+    /**
+     * The crypto_format the key belongs to (always 2)
+     */
+    public let format: UInt16
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The device's Ed25519 key, hex
+         */devicePubkey: String, 
+        /**
+         * Its X-Wing encapsulation key, hex
+         */encryptionPubkey: String, 
+        /**
+         * The crypto_format the key belongs to (always 2)
+         */format: UInt16) {
+        self.devicePubkey = devicePubkey
+        self.encryptionPubkey = encryptionPubkey
+        self.format = format
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ActiveDeviceKey: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeActiveDeviceKey: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ActiveDeviceKey {
+        return
+            try ActiveDeviceKey(
+                devicePubkey: FfiConverterString.read(from: &buf), 
+                encryptionPubkey: FfiConverterString.read(from: &buf), 
+                format: FfiConverterUInt16.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ActiveDeviceKey, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.devicePubkey, into: &buf)
+        FfiConverterString.write(value.encryptionPubkey, into: &buf)
+        FfiConverterUInt16.write(value.format, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeActiveDeviceKey_lift(_ buf: RustBuffer) throws -> ActiveDeviceKey {
+    return try FfiConverterTypeActiveDeviceKey.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeActiveDeviceKey_lower(_ value: ActiveDeviceKey) -> RustBuffer {
+    return FfiConverterTypeActiveDeviceKey.lower(value)
+}
+
+
+/**
  * A signed Ed25519 authentication token.
  */
 public struct AuthToken: Equatable, Hashable {
@@ -694,86 +774,6 @@ public func FfiConverterTypeBanDigestBlind_lower(_ value: BanDigestBlind) -> Rus
 
 
 /**
- * A device's current format-2 encryption key, as its `device_kem` (or v2
- * `device_add`) link names it.
- */
-public struct DeviceKemKey: Equatable, Hashable {
-    /**
-     * The device's Ed25519 key, hex
-     */
-    public let devicePubkey: String
-    /**
-     * Its X-Wing encapsulation key, hex
-     */
-    public let kemPubkey: String
-    /**
-     * The crypto_format the key belongs to (always 2)
-     */
-    public let format: UInt16
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(
-        /**
-         * The device's Ed25519 key, hex
-         */devicePubkey: String, 
-        /**
-         * Its X-Wing encapsulation key, hex
-         */kemPubkey: String, 
-        /**
-         * The crypto_format the key belongs to (always 2)
-         */format: UInt16) {
-        self.devicePubkey = devicePubkey
-        self.kemPubkey = kemPubkey
-        self.format = format
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension DeviceKemKey: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeDeviceKemKey: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceKemKey {
-        return
-            try DeviceKemKey(
-                devicePubkey: FfiConverterString.read(from: &buf), 
-                kemPubkey: FfiConverterString.read(from: &buf), 
-                format: FfiConverterUInt16.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: DeviceKemKey, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.devicePubkey, into: &buf)
-        FfiConverterString.write(value.kemPubkey, into: &buf)
-        FfiConverterUInt16.write(value.format, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDeviceKemKey_lift(_ buf: RustBuffer) throws -> DeviceKemKey {
-    return try FfiConverterTypeDeviceKemKey.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDeviceKemKey_lower(_ value: DeviceKemKey) -> RustBuffer {
-    return FfiConverterTypeDeviceKemKey.lower(value)
-}
-
-
-/**
  * Device key state exposed to callers (no secret material).
  */
 public struct DeviceKeyState: Equatable, Hashable {
@@ -791,11 +791,10 @@ public struct DeviceKeyState: Equatable, Hashable {
     public let encryptionPubkeyHex: String
     /**
      * X-Wing encapsulation (public) key, hex-encoded (1216 bytes / 2432 hex
-     * chars) — the device's crypto_format 2 encryption key (wire spec D16).
-     * `None` for a pilot device that has not yet been given one
-     * ([`add_device_kem_key`]).
+     * chars) — the device's crypto_format 2 encryption key (wire spec D16),
+     * fixed for the device's life.
      */
-    public let kemPubkeyHex: String?
+    public let kemPubkeyHex: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -811,10 +810,9 @@ public struct DeviceKeyState: Equatable, Hashable {
          */encryptionPubkeyHex: String, 
         /**
          * X-Wing encapsulation (public) key, hex-encoded (1216 bytes / 2432 hex
-         * chars) — the device's crypto_format 2 encryption key (wire spec D16).
-         * `None` for a pilot device that has not yet been given one
-         * ([`add_device_kem_key`]).
-         */kemPubkeyHex: String?) {
+         * chars) — the device's crypto_format 2 encryption key (wire spec D16),
+         * fixed for the device's life.
+         */kemPubkeyHex: String) {
         self.deviceId = deviceId
         self.signingPubkeyHex = signingPubkeyHex
         self.encryptionPubkeyHex = encryptionPubkeyHex
@@ -840,7 +838,7 @@ public struct FfiConverterTypeDeviceKeyState: FfiConverterRustBuffer {
                 deviceId: FfiConverterString.read(from: &buf), 
                 signingPubkeyHex: FfiConverterString.read(from: &buf), 
                 encryptionPubkeyHex: FfiConverterString.read(from: &buf), 
-                kemPubkeyHex: FfiConverterOptionString.read(from: &buf)
+                kemPubkeyHex: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -848,7 +846,7 @@ public struct FfiConverterTypeDeviceKeyState: FfiConverterRustBuffer {
         FfiConverterString.write(value.deviceId, into: &buf)
         FfiConverterString.write(value.signingPubkeyHex, into: &buf)
         FfiConverterString.write(value.encryptionPubkeyHex, into: &buf)
-        FfiConverterOptionString.write(value.kemPubkeyHex, into: &buf)
+        FfiConverterString.write(value.kemPubkeyHex, into: &buf)
     }
 }
 
@@ -865,63 +863,6 @@ public func FfiConverterTypeDeviceKeyState_lift(_ buf: RustBuffer) throws -> Dev
 #endif
 public func FfiConverterTypeDeviceKeyState_lower(_ value: DeviceKeyState) -> RustBuffer {
     return FfiConverterTypeDeviceKeyState.lower(value)
-}
-
-
-/**
- * An active member device with no `device_kem` link yet.
- */
-public struct DeviceMissingKem: Equatable, Hashable {
-    public let userPubkey: String
-    public let devicePubkey: String
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(userPubkey: String, devicePubkey: String) {
-        self.userPubkey = userPubkey
-        self.devicePubkey = devicePubkey
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension DeviceMissingKem: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeDeviceMissingKem: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceMissingKem {
-        return
-            try DeviceMissingKem(
-                userPubkey: FfiConverterString.read(from: &buf), 
-                devicePubkey: FfiConverterString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: DeviceMissingKem, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.userPubkey, into: &buf)
-        FfiConverterString.write(value.devicePubkey, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDeviceMissingKem_lift(_ buf: RustBuffer) throws -> DeviceMissingKem {
-    return try FfiConverterTypeDeviceMissingKem.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDeviceMissingKem_lower(_ value: DeviceMissingKem) -> RustBuffer {
-    return FfiConverterTypeDeviceMissingKem.lower(value)
 }
 
 
@@ -1082,9 +1023,8 @@ public struct EncryptedDeviceKeys: Equatable, Hashable {
      */
     public let nonce: String
     /**
-     * AES-256-GCM ciphertext of `signing_seed || encryption_seed` (64 bytes,
-     * a pilot device without an X-Wing key) or `signing_seed ||
-     * encryption_seed || kem_seed` (96 bytes), hex-encoded
+     * AES-256-GCM ciphertext of `signing_seed || encryption_seed || kem_seed`
+     * (96 bytes), hex-encoded
      */
     public let ciphertext: String
     /**
@@ -1114,9 +1054,8 @@ public struct EncryptedDeviceKeys: Equatable, Hashable {
          * AES-256-GCM nonce, hex-encoded (12 bytes)
          */nonce: String, 
         /**
-         * AES-256-GCM ciphertext of `signing_seed || encryption_seed` (64 bytes,
-         * a pilot device without an X-Wing key) or `signing_seed ||
-         * encryption_seed || kem_seed` (96 bytes), hex-encoded
+         * AES-256-GCM ciphertext of `signing_seed || encryption_seed || kem_seed`
+         * (96 bytes), hex-encoded
          */ciphertext: String, 
         /**
          * Device state (public info for identification)
@@ -1576,144 +1515,6 @@ public func FfiConverterTypeEphemeralKeyPair_lift(_ buf: RustBuffer) throws -> E
 #endif
 public func FfiConverterTypeEphemeralKeyPair_lower(_ value: EphemeralKeyPair) -> RustBuffer {
     return FfiConverterTypeEphemeralKeyPair.lower(value)
-}
-
-
-/**
- * An active member device that has a format-2 key, so it can be in a hub's
- * migration genesis device set.
- */
-public struct GenesisDevice: Equatable, Hashable {
-    public let userPubkey: String
-    public let devicePubkey: String
-    public let kemPubkey: String
-    public let format: UInt16
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(userPubkey: String, devicePubkey: String, kemPubkey: String, format: UInt16) {
-        self.userPubkey = userPubkey
-        self.devicePubkey = devicePubkey
-        self.kemPubkey = kemPubkey
-        self.format = format
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension GenesisDevice: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeGenesisDevice: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenesisDevice {
-        return
-            try GenesisDevice(
-                userPubkey: FfiConverterString.read(from: &buf), 
-                devicePubkey: FfiConverterString.read(from: &buf), 
-                kemPubkey: FfiConverterString.read(from: &buf), 
-                format: FfiConverterUInt16.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: GenesisDevice, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.userPubkey, into: &buf)
-        FfiConverterString.write(value.devicePubkey, into: &buf)
-        FfiConverterString.write(value.kemPubkey, into: &buf)
-        FfiConverterUInt16.write(value.format, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeGenesisDevice_lift(_ buf: RustBuffer) throws -> GenesisDevice {
-    return try FfiConverterTypeGenesisDevice.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeGenesisDevice_lower(_ value: GenesisDevice) -> RustBuffer {
-    return FfiConverterTypeGenesisDevice.lower(value)
-}
-
-
-/**
- * The genesis device set for a hub's members, and every active device left
- * out of it.
- */
-public struct GenesisDeviceSet: Equatable, Hashable {
-    /**
-     * Active devices with an X-Wing key: the genesis device set
-     */
-    public let included: [GenesisDevice]
-    /**
-     * Active devices WITHOUT one. The genesis tool lists these to the admin;
-     * they are never in the device set, and link again after genesis (§5)
-     */
-    public let missing: [DeviceMissingKem]
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(
-        /**
-         * Active devices with an X-Wing key: the genesis device set
-         */included: [GenesisDevice], 
-        /**
-         * Active devices WITHOUT one. The genesis tool lists these to the admin;
-         * they are never in the device set, and link again after genesis (§5)
-         */missing: [DeviceMissingKem]) {
-        self.included = included
-        self.missing = missing
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension GenesisDeviceSet: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeGenesisDeviceSet: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenesisDeviceSet {
-        return
-            try GenesisDeviceSet(
-                included: FfiConverterSequenceTypeGenesisDevice.read(from: &buf), 
-                missing: FfiConverterSequenceTypeDeviceMissingKem.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: GenesisDeviceSet, into buf: inout [UInt8]) {
-        FfiConverterSequenceTypeGenesisDevice.write(value.included, into: &buf)
-        FfiConverterSequenceTypeDeviceMissingKem.write(value.missing, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeGenesisDeviceSet_lift(_ buf: RustBuffer) throws -> GenesisDeviceSet {
-    return try FfiConverterTypeGenesisDeviceSet.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeGenesisDeviceSet_lower(_ value: GenesisDeviceSet) -> RustBuffer {
-    return FfiConverterTypeGenesisDeviceSet.lower(value)
 }
 
 
@@ -2399,11 +2200,11 @@ public struct SigchainVerifiedState: Equatable, Hashable {
      */
     public let activeDevicePubkeys: [String]
     /**
-     * The current X-Wing key of each ACTIVE device that has one, in
-     * `active_device_pubkeys` order. An active device absent here has no
-     * `device_kem` yet and is not in any v2 genesis device set (spec §5).
+     * The X-Wing key of every ACTIVE device, in `active_device_pubkeys`
+     * order — one per device, since `user_init` and `device_add` both
+     * require one.
      */
-    public let deviceKemKeys: [DeviceKemKey]
+    public let activeDeviceKeys: [ActiveDeviceKey]
     /**
      * Every public key the chain has ever named (signing keys, X25519 and
      * X-Wing encryption keys, removed devices included), sorted. Another
@@ -2430,10 +2231,10 @@ public struct SigchainVerifiedState: Equatable, Hashable {
          * All device pubkeys currently in the verified set
          */activeDevicePubkeys: [String], 
         /**
-         * The current X-Wing key of each ACTIVE device that has one, in
-         * `active_device_pubkeys` order. An active device absent here has no
-         * `device_kem` yet and is not in any v2 genesis device set (spec §5).
-         */deviceKemKeys: [DeviceKemKey], 
+         * The X-Wing key of every ACTIVE device, in `active_device_pubkeys`
+         * order — one per device, since `user_init` and `device_add` both
+         * require one.
+         */activeDeviceKeys: [ActiveDeviceKey], 
         /**
          * Every public key the chain has ever named (signing keys, X25519 and
          * X-Wing encryption keys, removed devices included), sorted. Another
@@ -2444,7 +2245,7 @@ public struct SigchainVerifiedState: Equatable, Hashable {
         self.headSeq = headSeq
         self.headHash = headHash
         self.activeDevicePubkeys = activeDevicePubkeys
-        self.deviceKemKeys = deviceKemKeys
+        self.activeDeviceKeys = activeDeviceKeys
         self.namedKeys = namedKeys
     }
 
@@ -2469,7 +2270,7 @@ public struct FfiConverterTypeSigchainVerifiedState: FfiConverterRustBuffer {
                 headSeq: FfiConverterUInt64.read(from: &buf), 
                 headHash: FfiConverterString.read(from: &buf), 
                 activeDevicePubkeys: FfiConverterSequenceString.read(from: &buf), 
-                deviceKemKeys: FfiConverterSequenceTypeDeviceKemKey.read(from: &buf), 
+                activeDeviceKeys: FfiConverterSequenceTypeActiveDeviceKey.read(from: &buf), 
                 namedKeys: FfiConverterSequenceString.read(from: &buf)
         )
     }
@@ -2480,7 +2281,7 @@ public struct FfiConverterTypeSigchainVerifiedState: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.headSeq, into: &buf)
         FfiConverterString.write(value.headHash, into: &buf)
         FfiConverterSequenceString.write(value.activeDevicePubkeys, into: &buf)
-        FfiConverterSequenceTypeDeviceKemKey.write(value.deviceKemKeys, into: &buf)
+        FfiConverterSequenceTypeActiveDeviceKey.write(value.activeDeviceKeys, into: &buf)
         FfiConverterSequenceString.write(value.namedKeys, into: &buf)
     }
 }
@@ -2656,6 +2457,16 @@ public enum CryptoError: Swift.Error, Equatable, Hashable, Foundation.LocalizedE
     case SigchainRejected(message: String)
     
     /**
+     * A device backup that does not carry the device's X-Wing seed — a v5 or
+     * older file, or a payload holding only the signing and X25519 seeds. It
+     * is never half-restored: the X-Wing key the user's chain names for the
+     * device would have no private half, so the restored device would sign in
+     * and decrypt nothing. Recover onto a new device identity instead
+     * (spec 2026-11-25-v2-device-linking-and-recovery L7; #3053).
+     */
+    case BackupMissingXwingSeed(message: String)
+    
+    /**
      * The hub has no admin reader to seal to. See [`crate::readers`].
      */
     case NoAdminReader(message: String)
@@ -2781,7 +2592,11 @@ public struct FfiConverterTypeCryptoError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 24: return .NoAdminReader(
+        case 24: return .BackupMissingXwingSeed(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 25: return .NoAdminReader(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -2842,8 +2657,10 @@ public struct FfiConverterTypeCryptoError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(22))
         case .SigchainRejected(_ /* message is ignored*/):
             writeInt(&buf, Int32(23))
-        case .NoAdminReader(_ /* message is ignored*/):
+        case .BackupMissingXwingSeed(_ /* message is ignored*/):
             writeInt(&buf, Int32(24))
+        case .NoAdminReader(_ /* message is ignored*/):
+            writeInt(&buf, Int32(25))
 
         
         }
@@ -3235,48 +3052,23 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeDeviceKemKey: FfiConverterRustBuffer {
-    typealias SwiftType = [DeviceKemKey]
+fileprivate struct FfiConverterSequenceTypeActiveDeviceKey: FfiConverterRustBuffer {
+    typealias SwiftType = [ActiveDeviceKey]
 
-    public static func write(_ value: [DeviceKemKey], into buf: inout [UInt8]) {
+    public static func write(_ value: [ActiveDeviceKey], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
-            FfiConverterTypeDeviceKemKey.write(item, into: &buf)
+            FfiConverterTypeActiveDeviceKey.write(item, into: &buf)
         }
     }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DeviceKemKey] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ActiveDeviceKey] {
         let len: Int32 = try readInt(&buf)
-        var seq = [DeviceKemKey]()
+        var seq = [ActiveDeviceKey]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeDeviceKemKey.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypeDeviceMissingKem: FfiConverterRustBuffer {
-    typealias SwiftType = [DeviceMissingKem]
-
-    public static func write(_ value: [DeviceMissingKem], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeDeviceMissingKem.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DeviceMissingKem] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [DeviceMissingKem]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeDeviceMissingKem.read(from: &buf))
+            seq.append(try FfiConverterTypeActiveDeviceKey.read(from: &buf))
         }
         return seq
     }
@@ -3302,31 +3094,6 @@ fileprivate struct FfiConverterSequenceTypeDevicePukEnvelope: FfiConverterRustBu
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeDevicePukEnvelope.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypeGenesisDevice: FfiConverterRustBuffer {
-    typealias SwiftType = [GenesisDevice]
-
-    public static func write(_ value: [GenesisDevice], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeGenesisDevice.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [GenesisDevice] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [GenesisDevice]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeGenesisDevice.read(from: &buf))
         }
         return seq
     }
@@ -3716,23 +3483,6 @@ public func getPublicKey(secretKeyHex: String)throws  -> String  {
 })
 }
 /**
- * Give a pilot device without an X-Wing key one, and load it (spec
- * 2026-11-25-v2-device-linking-and-recovery §5). Unlocks `data` with `pin`,
- * draws an X-Wing seed, re-encrypts all three seeds under the same PIN and
- * loads the result. Returns the new blob, which the caller stores IN PLACE OF
- * `data` before anything else, then publishes with a `device_kem` link
- * ([`mobile_device_kem_payload`]). Refused for a blob that already holds one —
- * call [`mobile_unlock`] for that.
- */
-public func mobileAddDeviceKemKeyAndLoad(data: EncryptedDeviceKeys, pin: String)throws  -> EncryptedDeviceKeys  {
-    return try  FfiConverterTypeEncryptedDeviceKeys_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
-    uniffi_llamenos_core_fn_func_mobile_add_device_kem_key_and_load(
-        FfiConverterTypeEncryptedDeviceKeys_lower(data),
-        FfiConverterString.lower(pin),$0
-    )
-})
-}
-/**
  * Build the canonical auth message bytes — the one construction path, exposed
  * so platform code never hand-builds the signed string.
  *
@@ -3858,6 +3608,18 @@ public func mobileCreateAuthTokenWithoutNonce(timestamp: UInt64, method: String,
 })
 }
 /**
+ * The loaded device's backup file (JSON): its three seeds, sealed under both
+ * `pin` (Argon2id) and `recovery_key` (HKDF). The seeds never leave Rust.
+ */
+public func mobileCreateBackup(pin: String, recoveryKey: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_create_backup(
+        FfiConverterString.lower(pin),
+        FfiConverterString.lower(recoveryKey),$0
+    )
+})
+}
+/**
  * Decrypt a call record's metadata (`LABEL_CALL_META`) as this device.
  * Takes the record's `encryptedContent` and all of its `adminEnvelopes`.
  */
@@ -3903,18 +3665,6 @@ public func mobileDecryptMessage(encryptedContent: String, envelopes: [Recipient
     uniffi_llamenos_core_fn_func_mobile_decrypt_message(
         FfiConverterString.lower(encryptedContent),
         FfiConverterSequenceTypeRecipientKeyEnvelope.lower(envelopes),$0
-    )
-})
-}
-/**
- * The `device_kem` payload JSON for this device (spec §5): its X-Wing key and
- * a possession signature for `user_pubkey`. Sign the link carrying it with
- * [`mobile_sigchain_create_link`] — the link must be signed by this device.
- */
-public func mobileDeviceKemPayload(userPubkey: String)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
-    uniffi_llamenos_core_fn_func_mobile_device_kem_payload(
-        FfiConverterString.lower(userPubkey),$0
     )
 })
 }
@@ -4025,24 +3775,22 @@ public func mobileGenerateEphemeralKey()throws  -> String  {
 })
 }
 /**
+ * A fresh 128-bit recovery key for display: base32, dash-grouped — the exact
+ * string [`mobile_create_backup`] expects back.
+ */
+public func mobileGenerateRecoveryKey() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_llamenos_core_fn_func_mobile_generate_recovery_key($0
+    )
+})
+}
+/**
  * Generate a wake key X25519 keypair entirely in Rust.
  * The secret is stored in Rust state; only the public key hex is returned.
  */
 public func mobileGenerateWakeKey()throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_generate_wake_key($0
-    )
-})
-}
-/**
- * The migration-genesis device set for a hub's members' chains (spec §5):
- * active devices with an X-Wing key, and every active device without one,
- * which the genesis tool lists and never includes.
- */
-public func mobileGenesisDeviceSet(chainsJson: String)throws  -> GenesisDeviceSet  {
-    return try  FfiConverterTypeGenesisDeviceSet_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
-    uniffi_llamenos_core_fn_func_mobile_genesis_device_set(
-        FfiConverterString.lower(chainsJson),$0
     )
 })
 }
@@ -4274,6 +4022,24 @@ public func mobileResolveAdminReaders(serverRecipients: [String])throws  -> [Str
 })
 }
 /**
+ * Restore a device from a backup file and load it. The restored seeds — all
+ * three, so the X-Wing key is the one the user's chain names (#3053) — go
+ * straight into the mobile state; the returned blob is the device re-encrypted
+ * under `new_pin`, for the caller to store. A backup without the X-Wing seed
+ * is refused as `BackupMissingXwingSeed`, never half-restored.
+ */
+public func mobileRestoreBackupAndLoad(backupJson: String, credential: String, isRecoveryKey: Bool, newPin: String, deviceId: String)throws  -> EncryptedDeviceKeys  {
+    return try  FfiConverterTypeEncryptedDeviceKeys_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_restore_backup_and_load(
+        FfiConverterString.lower(backupJson),
+        FfiConverterString.lower(credential),
+        FfiConverterBool.lower(isRecoveryKey),
+        FfiConverterString.lower(newPin),
+        FfiConverterString.lower(deviceId),$0
+    )
+})
+}
+/**
  * Seal a case ciphertext — a record's summary or fields, or a comment — as
  * this device, for this device plus `reader_pubkeys` (X25519, hex).
  *
@@ -4440,6 +4206,18 @@ public func mobileUnlock(data: EncryptedDeviceKeys, pin: String)throws  -> Devic
 })
 }
 /**
+ * This device's genesis `user_init` payload JSON (spec
+ * 2026-11-25-v2-device-linking-and-recovery §5 as revised 2026-11-26): its
+ * Ed25519, X25519 and X-Wing keys, `format: 2` and the possession signature,
+ * made in Rust. Sign the link carrying it with [`mobile_sigchain_create_link`].
+ */
+public func mobileUserInitPayload()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_user_init_payload($0
+    )
+})
+}
+/**
  * Verify an Ed25519 auth token (stateless).
  *
  * Exposed so platform tests can assert the domain-separation property
@@ -4549,9 +4327,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_get_public_key() != 4118) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_add_device_kem_key_and_load() != 3746) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_llamenos_core_checksum_func_mobile_build_auth_message() != 40360) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4582,6 +4357,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce() != 37994) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_create_backup() != 51234) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_call_metadata() != 6684) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4592,9 +4370,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_message() != 49000) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_llamenos_core_checksum_func_mobile_device_kem_payload() != 48727) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_ecdh_complete() != 49203) {
@@ -4621,10 +4396,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_generate_ephemeral_key() != 28329) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_generate_wake_key() != 33299) {
+    if (uniffi_llamenos_core_checksum_func_mobile_generate_recovery_key() != 4653) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_genesis_device_set() != 55106) {
+    if (uniffi_llamenos_core_checksum_func_mobile_generate_wake_key() != 33299) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_get_device_state() != 13863) {
@@ -4684,6 +4459,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_resolve_admin_readers() != 60217) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_restore_backup_and_load() != 37284) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4721,6 +4499,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_unlock() != 24233) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_user_init_payload() != 55107) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_verify_auth_token() != 22646) {

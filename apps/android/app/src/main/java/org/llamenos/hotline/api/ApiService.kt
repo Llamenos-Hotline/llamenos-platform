@@ -484,7 +484,7 @@ class ApiService @Inject constructor(
 
     /**
      * Append a signed link to the caller's own sigchain. The server verifies
-     * continuity, the canonical hash and the signature, and — for a device_kem
+     * continuity, the canonical hash and the signature, and — for a genesis
      * or device_add — the whole chain through packages/crypto (#2496).
      */
     suspend fun appendSigchainLink(userPubkey: String, body: AppendSigchainLinkBody): SigchainLinkRecord =

@@ -148,12 +148,7 @@ final class AuthService {
         }
 
         let encrypted = try JSONDecoder().decode(EncryptedDeviceKeys.self, from: jsonData)
-        let unlocked = try cryptoService.unlockWithPin(data: encrypted, pin: pin)
-        // A pilot blob just gained its X-Wing key (spec 2026-11-25 §5): it replaces
-        // the stored one before the key can be published.
-        if let upgraded = unlocked.upgradedKeys {
-            try keychainService.store(key: KeychainKey.encryptedKeys, data: try JSONEncoder().encode(upgraded))
-        }
+        _ = try cryptoService.unlockWithPin(data: encrypted, pin: pin)
     }
 
     // MARK: - Biometric Unlock

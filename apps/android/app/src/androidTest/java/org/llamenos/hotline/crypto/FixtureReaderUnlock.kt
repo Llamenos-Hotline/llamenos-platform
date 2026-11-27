@@ -1,9 +1,12 @@
 package org.llamenos.hotline.crypto
 
+import org.bouncycastle.crypto.digests.SHAKEDigest
 import org.bouncycastle.crypto.generators.Argon2BytesGenerator
 import org.bouncycastle.crypto.params.Argon2Parameters
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMParameters
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMPrivateKeyParameters
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -23,8 +26,10 @@ private const val FIXTURE_SIGNING_SEED_BYTE: Byte = 0x5a
  *
  * The FFI deliberately has no "import a raw secret" call, so this builds the
  * PIN-encrypted device-key blob `device_keys.rs` reads — AES-256-GCM, no AAD,
- * under an Argon2id KEK, over `signing_seed || encryption_seed` — around the
- * fixture's X25519 secret. The Argon2id parameters are taken from a blob the
+ * under an Argon2id KEK, over `signing_seed || encryption_seed || kem_seed` —
+ * around the fixture's X25519 secret. The X-Wing public key the blob's state
+ * names is derived here independently ([xwingPublicKeyHex]); unlock refuses a
+ * state that misnames it, so a wrong derivation fails loudly. The Argon2id parameters are taken from a blob the
  * native library just generated, so this follows whichever KDF build
  * (`test-kdf` or production) is loaded. If that blob format ever changes,
  * unlock fails loudly here; it cannot pass vacuously.
@@ -45,6 +50,7 @@ internal suspend fun unlockFixtureReader(name: String, x25519SecretHex: String, 
         X25519PrivateKeyParameters(encryptionSeed, 0).generatePublicKey().encoded.toFixtureHex(),
     )
     val signingSeed = ByteArray(32) { FIXTURE_SIGNING_SEED_BYTE }
+    val kemSeed = ByteArray(32).also { SecureRandom().nextBytes(it) }
     val salt = ByteArray(32).also { SecureRandom().nextBytes(it) }
     val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
     val kek = ByteArray(32)
@@ -61,7 +67,7 @@ internal suspend fun unlockFixtureReader(name: String, x25519SecretHex: String, 
     }.generateBytes(FIXTURE_PIN.toByteArray(Charsets.UTF_8), kek)
     val ciphertext = Cipher.getInstance("AES/GCM/NoPadding").run {
         init(Cipher.ENCRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, nonce))
-        doFinal(signingSeed + encryptionSeed)
+        doFinal(signingSeed + encryptionSeed + kemSeed)
     }
 
     val state = svc.unlockWithPin(
@@ -78,14 +84,14 @@ internal suspend fun unlockFixtureReader(name: String, x25519SecretHex: String, 
                 signingPubkeyHex = Ed25519PrivateKeyParameters(signingSeed, 0)
                     .generatePublicKey().encoded.toFixtureHex(),
                 encryptionPubkeyHex = x25519PubkeyHex,
+                kemPubkeyHex = xwingPublicKeyHex(kemSeed),
             ),
         ),
         FIXTURE_PIN,
-    ).state
-    // A 64-byte blob is a pilot device's: unlocking gives it an X-Wing key (#2496)
-    // and leaves its X25519 key as it was.
+    )
+    // The blob holds all three seeds; unlocking reads them and draws nothing (#2496).
     assertEquals(x25519PubkeyHex, state.encryptionPubkeyHex)
-    assertNotNull(state.kemPubkeyHex)
+    assertEquals(2432, state.kemPubkeyHex.length)
     assertNotNull(svc.encryptionPubkeyHex)
     return svc
 }
@@ -94,3 +100,20 @@ internal fun fixtureHexToBytes(hex: String): ByteArray =
     ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
 internal fun ByteArray.toFixtureHex(): String = joinToString("") { "%02x".format(it) }
+
+/**
+ * The X-Wing (draft-connolly-cfrg-xwing-kem-06) encapsulation key of a 32-byte
+ * decapsulation seed, as `device_keys::xwing_public_key` derives it:
+ * SHAKE256(seed) → 64-byte ML-KEM-768 seed ‖ 32-byte X25519 secret, and
+ * pk = pk_ML-KEM ‖ X25519(sk_X, base).
+ */
+internal fun xwingPublicKeyHex(seed: ByteArray): String {
+    val expanded = ByteArray(96)
+    SHAKEDigest(256).run {
+        update(seed, 0, seed.size)
+        doFinal(expanded, 0, expanded.size)
+    }
+    val mlKem = MLKEMPrivateKeyParameters(MLKEMParameters.ml_kem_768, expanded.copyOfRange(0, 64))
+    val x25519 = X25519PrivateKeyParameters(expanded, 64).generatePublicKey().encoded
+    return (mlKem.publicKey + x25519).toFixtureHex()
+}

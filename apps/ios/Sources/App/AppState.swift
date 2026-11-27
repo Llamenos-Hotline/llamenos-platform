@@ -35,7 +35,7 @@ final class AppState {
     let authService: AuthService
     let webSocketService: WebSocketService
     let wakeKeyService: WakeKeyService
-    /// Publishes this device in the user's sigchain: genesis/PUK if missing, then device_kem (#2496).
+    /// This device's sigchain identity: genesis/PUK if missing, then verification that the chain names its X-Wing key (#2496).
     let deviceIdentityService: DeviceIdentityService
     let transcriptionService: TranscriptionService
     let crashReportingService: CrashReportingService
@@ -410,8 +410,8 @@ final class AppState {
         offlineQueue.startMonitoring()
         // Registration is signed, so it can only happen now (#2201).
         wakeKeyService.registerDeviceIfUnlocked()
-        // Publish this device's X-Wing key (device_kem) before its hubs' migration
-        // genesis (spec 2026-11-25 §5, #2496).
+        // Genesis/PUK if the chain is empty, then check the chain names this
+        // device's X-Wing key (spec 2026-11-25 §5, #2496).
         deviceIdentityService.ensureIdentityInBackground()
         // Replay any queued operations now that we're authenticated
         Task { await offlineQueue.replay() }
