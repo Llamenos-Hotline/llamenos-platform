@@ -32,9 +32,10 @@ export const caseRecords = pgTable(
     hubId: text('hub_id').notNull(),
     entityTypeId: text('entity_type_id'),
     caseNumber: text('case_number'),
-    statusHash: text('status_hash').notNull(),
-    severityHash: text('severity_hash'),
-    categoryHash: text('category_hash'),
+    // RETIRED (#2779): the column stays declared, nullable and never read or
+    // written, until the contract release drops it. The gate refuses to forget
+    // a NOT NULL column in the release that relaxes it (docs/runbooks/migrations.md).
+    retiredStatus: text('status_hash'),
     assignedTo: text('assigned_to')
       .array()
       .notNull()
@@ -73,23 +74,11 @@ export const caseRecords = pgTable(
   (table) => [
     cryptoFormatCheck('case_records', table.cryptoFormat),
     index('case_records_hub_id_idx').on(table.hubId),
-    index('case_records_hub_id_status_hash_idx').on(
-      table.hubId,
-      table.statusHash,
-    ),
-    index('case_records_hub_id_severity_hash_idx').on(
-      table.hubId,
-      table.severityHash,
-    ),
     index('case_records_entity_type_id_idx').on(table.entityTypeId),
     uniqueIndex('case_records_hub_id_case_number_idx')
       .on(table.hubId, table.caseNumber)
       .where(sql`case_number IS NOT NULL`),
     index('case_records_assigned_to_idx').using('gin', table.assignedTo),
-    index('case_records_hub_id_category_hash_idx').on(
-      table.hubId,
-      table.categoryHash,
-    ),
     // The target of files' (case_record_id, hub_id) foreign key: a file can
     // only name a case record of its own hub. `id` is the primary key, so the
     // pair is unique by construction.
@@ -116,7 +105,8 @@ export const events = pgTable(
     locationPrecision: text('location_precision').default('neighborhood'),
     locationApproximate: text('location_approximate'),
     eventTypeHash: text('event_type_hash').notNull(),
-    statusHash: text('status_hash').notNull(),
+    // RETIRED (#2779): see case_records.status_hash.
+    retiredStatus: text('status_hash'),
     blindIndexes: jsonb('blind_indexes').notNull().default({}),
     encryptedDetails: text('encrypted_details'),
     detailEnvelopes: jsonb('detail_envelopes').notNull().default([]),
@@ -137,7 +127,6 @@ export const events = pgTable(
     cryptoFormatCheck('events', table.cryptoFormat),
     index('events_hub_id_idx').on(table.hubId),
     index('events_parent_event_id_idx').on(table.parentEventId),
-    index('events_hub_id_status_hash_idx').on(table.hubId, table.statusHash),
   ],
 )
 
@@ -230,8 +219,6 @@ export const caseInteractions = pgTable(
     contentEnvelopes: jsonb('content_envelopes'),
     authorPubkey: text('author_pubkey').notNull(),
     interactionTypeHash: text('interaction_type_hash').notNull(),
-    previousStatusHash: text('previous_status_hash'),
-    newStatusHash: text('new_status_hash'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

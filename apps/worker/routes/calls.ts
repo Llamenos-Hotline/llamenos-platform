@@ -333,7 +333,7 @@ calls.get('/identify/:identifierHash',
 
     // Fetch active cases linked to this contact
     let activeCaseCount = 0
-    let recentCases: Array<{ id: string; caseNumber?: string; status: string }> = []
+    let recentCases: Array<{ id: string; caseNumber?: string }> = []
 
     try {
       const casesResult = await services.cases.listByContact(contact.id, hubId)
@@ -341,7 +341,6 @@ calls.get('/identify/:identifierHash',
       recentCases = casesResult.records.slice(0, 5).map(r => ({
         id: r.id,
         caseNumber: r.caseNumber ?? undefined,
-        status: r.statusHash ?? '',
       }))
     } catch {
       // Non-fatal

@@ -6,9 +6,11 @@
  * All state is stored in PostgreSQL via Drizzle ORM.
  *
  * PostgreSQL indexes replace the DO's manual KV indexes:
- * - case_records: hub_id, status_hash, severity_hash, entity_type_id,
- *   case_number (unique), assigned_to (GIN), category_hash
- * - events: hub_id, parent_event_id, status_hash
+ * - case_records: hub_id, entity_type_id, case_number (unique), assigned_to (GIN)
+ * - events: hub_id, parent_event_id
+ *
+ * Status, severity and category are NOT server-visible: they live in the sealed
+ * summary and are filtered by the client (#2779).
  * - case_contacts: composite PK (case_id, contact_id)
  * - case_events: composite PK (case_id, event_id)
  * - report_events: composite PK (report_id, event_id)
@@ -87,9 +89,6 @@ export interface ListCasesInput {
   hubId: string
   page?: number
   limit?: number
-  statusHash?: string
-  severityHash?: string
-  categoryHash?: string
   assignedTo?: string
   entityTypeId?: string
   parentRecordId?: string
@@ -111,7 +110,6 @@ export interface ListEventsInput {
   page?: number
   limit?: number
   eventTypeHash?: string
-  statusHash?: string
   parentEventId?: string
   startAfter?: string
   startBefore?: string
@@ -205,9 +203,6 @@ export class CasesService {
         hubId: input.hubId,
         entityTypeId: input.entityTypeId,
         caseNumber: input.caseNumber ?? null,
-        statusHash: input.statusHash,
-        severityHash: input.severityHash ?? null,
-        categoryHash: input.categoryHash ?? null,
         assignedTo: input.assignedTo ?? [],
         blindIndexes: input.blindIndexes ?? {},
         encryptedSummary: input.encryptedSummary,
@@ -286,9 +281,6 @@ export class CasesService {
 
     const values: Record<string, unknown> = { updatedAt: now }
 
-    if (input.statusHash !== undefined) values.statusHash = input.statusHash
-    if (input.severityHash !== undefined) values.severityHash = input.severityHash
-    if (input.categoryHash !== undefined) values.categoryHash = input.categoryHash
     if (input.assignedTo !== undefined) values.assignedTo = input.assignedTo
     if (input.blindIndexes !== undefined) values.blindIndexes = input.blindIndexes
     if (input.encryptedSummary !== undefined) values.encryptedSummary = input.encryptedSummary
@@ -300,16 +292,16 @@ export class CasesService {
     if (input.parentRecordId !== undefined) values.parentRecordId = input.parentRecordId
     if (input.closedAt !== undefined) values.closedAt = new Date(input.closedAt)
 
-    // Auto-create status_change interaction when status changes
-    if (input.statusHash && input.statusHash !== record.statusHash) {
+    // The server cannot see the status, so it cannot tell that one changed: the
+    // client that re-sealed the summary says so by sending the interaction's
+    // type token, and the timeline entry carries no status (#2779).
+    if (input.statusChangeTypeHash !== undefined) {
       const isoNow = now.toISOString()
       await this.db.insert(caseInteractions).values({
         caseId: id,
         interactionType: 'status_change',
         authorPubkey: input.authorPubkey ?? '',
-        interactionTypeHash: input.statusChangeTypeHash ?? '',
-        previousStatusHash: record.statusHash,
-        newStatusHash: input.statusHash,
+        interactionTypeHash: input.statusChangeTypeHash,
         encryptedContent: input.statusChangeContent ?? null,
         contentEnvelopes: input.statusChangeEnvelopes ?? null,
         createdAt: new Date(isoNow),
@@ -496,15 +488,6 @@ export class CasesService {
       conditions.push(eq(caseRecords.hubId, input.hubId))
     }
 
-    if (input.statusHash) {
-      conditions.push(eq(caseRecords.statusHash, input.statusHash))
-    }
-    if (input.severityHash) {
-      conditions.push(eq(caseRecords.severityHash, input.severityHash))
-    }
-    if (input.categoryHash) {
-      conditions.push(eq(caseRecords.categoryHash, input.categoryHash))
-    }
     if (input.assignedTo) {
       conditions.push(
         sql`${caseRecords.assignedTo} @> ARRAY[${input.assignedTo}]::text[]`,
@@ -619,7 +602,6 @@ export class CasesService {
     recordId: string
     caseNumber: string | null
     entityTypeId: string | null
-    statusHash: string
     role: string | null
     createdAt: Date
   }>> {
@@ -628,7 +610,6 @@ export class CasesService {
         recordId: caseRecords.id,
         caseNumber: caseRecords.caseNumber,
         entityTypeId: caseRecords.entityTypeId,
-        statusHash: caseRecords.statusHash,
         role: caseContacts.role,
         createdAt: caseContacts.addedAt,
       })
@@ -837,7 +818,6 @@ export class CasesService {
         locationPrecision: input.locationPrecision ?? 'neighborhood',
         locationApproximate: input.locationApproximate ?? null,
         eventTypeHash: input.eventTypeHash,
-        statusHash: input.statusHash,
         blindIndexes: input.blindIndexes ?? {},
         encryptedDetails: input.encryptedDetails,
         detailEnvelopes: input.detailEnvelopes,
@@ -895,7 +875,6 @@ export class CasesService {
     if (input.locationPrecision !== undefined) values.locationPrecision = input.locationPrecision
     if (input.locationApproximate !== undefined) values.locationApproximate = input.locationApproximate
     if (input.eventTypeHash !== undefined) values.eventTypeHash = input.eventTypeHash
-    if (input.statusHash !== undefined) values.statusHash = input.statusHash
     if (input.blindIndexes !== undefined) values.blindIndexes = input.blindIndexes
     if (input.encryptedDetails !== undefined) values.encryptedDetails = input.encryptedDetails
     if (input.detailEnvelopes !== undefined) values.detailEnvelopes = input.detailEnvelopes
@@ -1001,9 +980,6 @@ export class CasesService {
 
     if (input.eventTypeHash) {
       conditions.push(eq(events.eventTypeHash, input.eventTypeHash))
-    }
-    if (input.statusHash) {
-      conditions.push(eq(events.statusHash, input.statusHash))
     }
     if (input.parentEventId) {
       conditions.push(eq(events.parentEventId, input.parentEventId))
@@ -1486,8 +1462,6 @@ export class CasesService {
         contentEnvelopes: input.contentEnvelopes ?? null,
         authorPubkey,
         interactionTypeHash: input.interactionTypeHash,
-        previousStatusHash: input.previousStatusHash ?? null,
-        newStatusHash: input.newStatusHash ?? null,
         ...(opts?.createdAt ? { createdAt: opts.createdAt } : {}),
       })
       .returning()
@@ -1897,9 +1871,8 @@ export class CasesService {
     hubId: string
     createdBy: string
     caseNumber?: string
-    defaultStatusHash?: string
   }): Promise<ConvertFromReportResponse> {
-    const { reportId, entityTypeId, hubId, createdBy, caseNumber, defaultStatusHash } = params
+    const { reportId, entityTypeId, hubId, createdBy, caseNumber } = params
 
     await this.assertEntityTypeInHub(hubId, entityTypeId)
 
@@ -1924,7 +1897,6 @@ export class CasesService {
           hubId,
           entityTypeId,
           caseNumber: caseNumber ?? null,
-          statusHash: defaultStatusHash ?? 'pending',
           assignedTo: [],
           blindIndexes: {},
           summaryEnvelopes: [],

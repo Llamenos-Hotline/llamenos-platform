@@ -39,12 +39,10 @@ export const contacts = pgTable(
     summaryEnvelopes: jsonb('summary_envelopes').notNull().default([]),
     encryptedPii: text('encrypted_pii'),
     piiEnvelopes: jsonb('pii_envelopes'),
-    contactTypeHash: text('contact_type_hash'),
     tagHashes: text('tag_hashes')
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
-    statusHash: text('status_hash'),
     blindIndexes: jsonb('blind_indexes').notNull().default({}),
     caseCount: integer('case_count').notNull().default(0),
     noteCount: integer('note_count').notNull().default(0),

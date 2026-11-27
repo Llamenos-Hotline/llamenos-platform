@@ -602,7 +602,6 @@ dev.post('/test-seed', async (c) => {
       const record = await outcome.run(`record ${tmpl.name}[${i}]`, () =>
         services.cases.create({
           entityTypeId,
-          statusHash: tmpl.defaultStatus,
           assignedTo: etSpec.assignTo,
           blindIndexes: {},
           encryptedSummary: btoa(isEvent
@@ -677,10 +676,9 @@ dev.post('/test-seed', async (c) => {
     const contact = await outcome.run(`contact ${contactSpec.displayName}`, () =>
       services.contacts.create({
         hubId,
-        identifierHashes: [contactSpec.displayName.toLowerCase().replace(/\s+/g, '-')],
+        identifierHashes: [],
         encryptedSummary: btoa(JSON.stringify({ displayName: contactSpec.displayName })),
         summaryEnvelopes: [dummyEnvelope],
-        contactTypeHash: contactSpec.contactType,
       }))
     if (contact) contactIds.push({ id: contact.id })
   }
