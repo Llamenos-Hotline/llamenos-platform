@@ -346,6 +346,23 @@ describe('break it — each class of trust defect moves the snapshot', () => {
     test('fail safe: braces that do not balance leave every wiring line in the snapshot', () => {
       expectMoves(edited({ [GRADLE]: swap('getByName("test") {', 'getByName("test") {\n            kotlin.srcDir("src/androidTest/more")\n            val unclosed = run {') }), /buildWiring/)
     })
+    test('fail safe: a test-only block that reaches another source set through the outer receiver', () => {
+      expectMoves(edited({ [GRADLE]: inSet('test', 'getByName("main").manifest.srcFile("src/insecure/AndroidManifest.xml")') }), /buildWiring/)
+      expectMoves(edited({ [GRADLE]: inSet('test', 'android.sourceSets["release"].res.srcDir("src/insecure/res")') }), /buildWiring/)
+    })
+    test('fail safe: a single-line chain on a test-only set that also does something else on the line stays', () => {
+      expectMoves(
+        edited({ [GRADLE]: swap('sourceSets {', 'sourceSets {\n        sourceSets.getByName("test").java.srcDir("x"); sourceSets.maybeCreate("main").manifest.srcFile("src/insecure/AndroidManifest.xml")') }),
+        /buildWiring/,
+      )
+    })
+    test('a char literal or a template holding a quote does not desynchronise the block tracking', () => {
+      expectMoves(
+        edited({ [GRADLE]: swap('sourceSets {', `sourceSets {\n        val c = '"'\n        val s = "\${listOf("{").size}"\n        getByName("main") { manifest.srcFile("src/insecure/AndroidManifest.xml") }`) }),
+        /buildWiring/,
+      )
+      expectUnchanged(edited({ [GRADLE]: inSet('test', `val s = "\${listOf("}").size}"; val c = '{'\n            kotlin.srcDir("src/androidTest/more")`) }))
+    })
     test('a build type wired to a different network security config', () => {
       expectMoves(edited({ [GRADLE]: swap('debug {', 'debug {\n            manifestPlaceholders["networkSecurityConfig"] = "@xml/open"') }), /buildWiring/)
     })

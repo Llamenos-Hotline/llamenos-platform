@@ -740,6 +740,9 @@ function selectedSourceSets(text: string): (string | null)[] {
   })
 }
 
+/** A whole statement that is a selector chain on one literal source set, ending in a call with no trailing expression. */
+const SINGLE_LINE_CHAIN_RE = /^(?:android\.)?sourceSets(?:\.(?:getByName|named)\(\s*"([^"$]+)"\s*\)|\[\s*"([^"$]+)"\s*\])(?:\.\w+)+\([^{}]*\)$/
+
 /** What a Gradle block says about itself: it is a `sourceSets { }` container, or it is one source set
  *  (`undefined` = neither, `null` = a source set whose name is not one string literal). */
 type GradleFrame = { container: boolean; sourceSet?: string | null }
@@ -755,6 +758,38 @@ function gradleFrame(header: string, parentIsContainer: boolean): GradleFrame {
   return { container: false, sourceSet: bare === null ? null : (bare[1] as string) }
 }
 
+/** Index just past the Kotlin string literal starting at `i` (templates `${ … }` may hold quotes), or -1 if it never closes. */
+function skipKotlinString(code: string, i: number): number {
+  const raw = code.startsWith('"""', i)
+  let j = i + (raw ? 3 : 1)
+  while (j < code.length) {
+    const c = code[j] as string
+    if (raw ? code.startsWith('"""', j) : c === '"') return j + (raw ? 3 : 1)
+    if (!raw && c === '\\') j += 2
+    else if (c === '$' && code[j + 1] === '{') {
+      let depth = 1
+      j += 2
+      while (j < code.length && depth > 0) {
+        const d = code[j] as string
+        if (d === '"') {
+          const end = skipKotlinString(code, j)
+          if (end < 0) return -1
+          j = end
+          continue
+        }
+        if (d === '{') depth += 1
+        else if (d === '}') depth -= 1
+        j += 1
+      }
+    } else j += 1
+  }
+  return -1
+}
+
+/** Text inside a non-shipping source set that could reach another source set or the build model.
+ *  Finding any means the attribution cannot be trusted. */
+const ESCAPES_ITS_SOURCE_SET_RE = /\b(?:sourceSets|android|extensions|project)\b/
+
 /** `code` with the text that sits inside a non-shipping source set blanked out, line structure kept. Text is
  *  attributed character by character, so a block opened and closed on one line (`androidTest { … }`) is
  *  attributed too. `undefined` when the braces do not balance: nothing can then be attributed. */
@@ -766,19 +801,32 @@ function withoutNonShippingSourceSets(code: string): string[] | undefined {
     return undefined
   }
   let header = ''
+  let dropped = ''
   const emit = (ch: string): void => {
     const o = owner()
     if (ch === '\n') lines.push('')
-    else if (!(typeof o === 'string' && !androidSourceSetShips(o))) lines[lines.length - 1] += ch
+    else if (typeof o === 'string' && !androidSourceSetShips(o)) dropped += ch
+    else lines[lines.length - 1] += ch
   }
   for (let i = 0; i < code.length; i += 1) {
     const c = code[i] as string
     if (c === '"') {
-      const end = skipString(code, i)
+      const end = skipKotlinString(code, i)
+      if (end < 0) return undefined
       for (const ch of code.slice(i, end)) emit(ch)
       header += code.slice(i, end)
       i = end - 1
       continue
+    }
+    if (c === "'") {
+      // A char literal (`'"'`, `'{'`, `'\n'`) opens no string and no block.
+      const len = code[i + 1] === '\\' ? 4 : 3
+      if (code[i + len - 1] === "'") {
+        for (const ch of code.slice(i, i + len)) emit(ch)
+        header += code.slice(i, i + len)
+        i += len - 1
+        continue
+      }
     }
     if (c === '{') {
       emit(c)
@@ -795,6 +843,9 @@ function withoutNonShippingSourceSets(code: string): string[] | undefined {
     emit(c)
     header = c === ';' ? '' : header + (c === '\n' ? ' ' : c)
   }
+  // Code in a test-only block that selects a source set or reaches the build model could be writing to a
+  // shipping one: do not trust the attribution of anything.
+  if (selectedSourceSets(dropped).length > 0 || ESCAPES_ITS_SOURCE_SET_RE.test(dropped)) return undefined
   return stack.length === 0 ? lines : undefined
 }
 
@@ -814,10 +865,12 @@ function gradleWiringLines(code: string, re: RegExp): string[] {
   return kept.flatMap((raw) => {
     const line = squash(raw)
     if (line === '' || !re.test(line)) return []
-    if (/\bsourceSets\b/.test(line) && !line.includes('{')) {
-      // `sourceSets.getByName("androidTest").java.srcDir("x")` — the selector is on the line itself.
-      const sel = selectedSourceSets(line)
-      if (sel.length === 1 && sel[0] !== null && !androidSourceSetShips(sel[0])) return []
+    // `sourceSets.getByName("androidTest").java.srcDir("x")` — a statement that is one selector chain on one
+    // source set; any other shape (a `;`, a block, a second selector, a trailing expression) stays.
+    const chain = SINGLE_LINE_CHAIN_RE.exec(line)
+    if (chain !== null && !line.includes(';') && selectedSourceSets(line).length === 1) {
+      const name = chain[1] ?? chain[2]
+      if (name !== undefined && !androidSourceSetShips(name)) return []
     }
     return [line]
   })
