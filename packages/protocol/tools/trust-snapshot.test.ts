@@ -361,7 +361,8 @@ describe('break it — each class of trust defect moves the snapshot', () => {
         edited({ [GRADLE]: swap('sourceSets {', `sourceSets {\n        val c = '"'\n        val s = "\${listOf("{").size}"\n        getByName("main") { manifest.srcFile("src/insecure/AndroidManifest.xml") }`) }),
         /buildWiring/,
       )
-      expectUnchanged(edited({ [GRADLE]: inSet('test', `val s = "\${listOf("}").size}"; val c = '{'\n            kotlin.srcDir("src/androidTest/more")`) }))
+      // …and a test-only block that holds anything but directory wiring is not trusted to be test-only.
+      expectMoves(edited({ [GRADLE]: inSet('test', `val s = "\${listOf("}").size}"; val c = '{'\n            kotlin.srcDir("src/androidTest/more")`) }), /buildWiring/)
     })
     test('a build type wired to a different network security config', () => {
       expectMoves(edited({ [GRADLE]: swap('debug {', 'debug {\n            manifestPlaceholders["networkSecurityConfig"] = "@xml/open"') }), /buildWiring/)

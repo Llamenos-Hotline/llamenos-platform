@@ -741,7 +741,7 @@ function selectedSourceSets(text: string): (string | null)[] {
 }
 
 /** A whole statement that is a selector chain on one literal source set, ending in a call with no trailing expression. */
-const SINGLE_LINE_CHAIN_RE = /^(?:android\.)?sourceSets(?:\.(?:getByName|named)\(\s*"([^"$]+)"\s*\)|\[\s*"([^"$]+)"\s*\])(?:\.\w+)+\([^{}]*\)$/
+const SINGLE_LINE_CHAIN_RE = /^(?:android\.)?sourceSets(?:\.(?:getByName|named)\(\s*"([^"$]+)"\s*\)|\[\s*"([^"$]+)"\s*\])\.(?:kotlin|java|res|resources|assets|aidl|renderscript|jniLibs|shaders|mlModels|manifest)\.(?:srcDirs?|srcFile)\(\s*"[^"\\]*"(?:\s*,\s*"[^"\\]*")*\s*\)$/
 
 /** What a Gradle block says about itself: it is a `sourceSets { }` container, or it is one source set
  *  (`undefined` = neither, `null` = a source set whose name is not one string literal). */
@@ -777,6 +777,12 @@ function skipKotlinString(code: string, i: number): number {
           j = end
           continue
         }
+        if (d === "'") {
+          const len = code[j + 1] === '\\' ? 4 : 3
+          if (code[j + len - 1] !== "'") return -1
+          j += len
+          continue
+        }
         if (d === '{') depth += 1
         else if (d === '}') depth -= 1
         j += 1
@@ -786,9 +792,16 @@ function skipKotlinString(code: string, i: number): number {
   return -1
 }
 
-/** Text inside a non-shipping source set that could reach another source set or the build model.
- *  Finding any means the attribution cannot be trusted. */
-const ESCAPES_ITS_SOURCE_SET_RE = /\b(?:sourceSets|android|extensions|project)\b/
+/**
+ * The only statements that may be blanked out of a test-only source set: adding a directory or a manifest
+ * to the set the block already names, or a nested accessor block (`kotlin { … }`) holding the same. An
+ * allowlist, not a search for what is dangerous: anything else inside the block (another selector, `android`,
+ * an assignment, a call on a different receiver) makes the attribution untrustworthy and nothing is dropped.
+ */
+const SAFE_SOURCE_SET_STATEMENT_RE = /^(?:(?:(?:kotlin|java|res|resources|assets|aidl|renderscript|jniLibs|shaders|mlModels|manifest)\.)?(?:srcDirs?|srcFile)\(\s*"[^"\\]*"(?:\s*,\s*"[^"\\]*")*\s*\)|(?:kotlin|java|res|resources|assets|aidl|renderscript|jniLibs|shaders|mlModels)\s*\{|\})$/
+
+const isSafeSourceSetText = (dropped: string): boolean =>
+  dropped.split(/[\n;]/).map(squash).every((st) => st === '' || SAFE_SOURCE_SET_STATEMENT_RE.test(st))
 
 /** `code` with the text that sits inside a non-shipping source set blanked out, line structure kept. Text is
  *  attributed character by character, so a block opened and closed on one line (`androidTest { … }`) is
@@ -804,9 +817,10 @@ function withoutNonShippingSourceSets(code: string): string[] | undefined {
   let dropped = ''
   const emit = (ch: string): void => {
     const o = owner()
+    const blanked = typeof o === 'string' && !androidSourceSetShips(o)
+    if (blanked) dropped += ch
     if (ch === '\n') lines.push('')
-    else if (typeof o === 'string' && !androidSourceSetShips(o)) dropped += ch
-    else lines[lines.length - 1] += ch
+    else if (!blanked) lines[lines.length - 1] += ch
   }
   for (let i = 0; i < code.length; i += 1) {
     const c = code[i] as string
@@ -835,6 +849,7 @@ function withoutNonShippingSourceSets(code: string): string[] | undefined {
       continue
     }
     if (c === '}') {
+      dropped += '\n' // a block's text is its own statement, however close the next one is
       if (stack.pop() === undefined) return undefined
       emit(c)
       header = ''
@@ -843,9 +858,8 @@ function withoutNonShippingSourceSets(code: string): string[] | undefined {
     emit(c)
     header = c === ';' ? '' : header + (c === '\n' ? ' ' : c)
   }
-  // Code in a test-only block that selects a source set or reaches the build model could be writing to a
-  // shipping one: do not trust the attribution of anything.
-  if (selectedSourceSets(dropped).length > 0 || ESCAPES_ITS_SOURCE_SET_RE.test(dropped)) return undefined
+  // Anything in a test-only block beyond adding its own directories could be writing to a shipping one.
+  if (!isSafeSourceSetText(dropped)) return undefined
   return stack.length === 0 ? lines : undefined
 }
 
