@@ -39,7 +39,7 @@ import { IN_VERIFICATION_ENV } from './review-and-merge-guards.js'
 import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
-  reviewNotRequestedAdvice, reviewGateFailsClosed,
+  reviewNotRequestedAdvice, reviewRerequestAdvice, reviewGateFailsClosed,
   ciContextFromEnv, ciDiff, ciChangedFiles, ciHeadTree,
   REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, VERIFY_JOB, QUEUE_CLEARED_LABEL,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
@@ -1840,6 +1840,27 @@ async function runCiGate(job: string, run: (ctx: CiContext) => Promise<CiVerdict
 }
 
 /**
+ * The remedy lines for a head with no verdict of its own (#3058). One place,
+ * so `unreviewed`, `tree-changed` and `carried` cannot drift apart again: all
+ * three used to print "request a review" with no check that the request could
+ * emit an event, and none said where the review it starts shows up.
+ */
+function writeRerequestAdvice(
+  ctx: CiContext,
+  event: ReturnType<typeof reviewRequestEventFromEnv>,
+  requestedReviewers: readonly string[] | undefined,
+): void {
+  const [ask] = reviewTriggerLogins(event)
+  for (const line of reviewRerequestAdvice({
+    pr: ctx.pr,
+    branch: ctx.branch,
+    ask,
+    isAuthorStandIn: ask !== REVIEW_REQUEST_LOGIN,
+    alreadyRequested: requestedReviewers,
+  })) process.stderr.write(`${REVIEW_JOB}: ${line}\n`)
+}
+
+/**
  * `review-gate` — the step `fleet-review.yml` runs BEFORE the review
  * engine, now that the job carries no job-level `if:` at all (#848's
  * fail-open bug — a job instantiated on an event and then skipped by `if:`
@@ -1990,22 +2011,18 @@ async function runReviewGate(): Promise<number> {
   // FAIL is still a FAIL, and a PASS for another tree is no verdict about
   // this one (#2014 — #1975 sat CLEAN on exactly that PASS).
   if (outcome.kind === 'carried') {
-    const [ask] = reviewTriggerLogins(event)
-    process.stderr.write(
-      `${REVIEW_JOB}: FAILED — ${outcome.earned.text}\n` +
-      `${REVIEW_JOB}: request a review from \`${ask}\` to have this head reviewed\n`,
-    )
+    process.stderr.write(`${REVIEW_JOB}: FAILED — ${outcome.earned.text}\n`)
+    writeRerequestAdvice(ctx, event, facts?.requestedReviewers)
     return 1
   }
   if (outcome.kind === 'tree-changed') {
-    const [ask] = reviewTriggerLogins(event)
     process.stderr.write(
       `${REVIEW_JOB}: FAILED — this head's tree (${outcome.cacheKey.headTree ?? 'unreadable'}) has no verdict: ` +
       `the last PASS was earned on ${outcome.earned.headSha}, a different tree, so it does not cover this head\n` +
       `${REVIEW_JOB}: ${outcome.earned.text}\n` +
-      `${REVIEW_JOB}: this is not a rejection of the code: request a review from \`${ask}\` and this check ` +
-      `goes green on the verdict it earns for this tree\n`,
+      `${REVIEW_JOB}: this is not a rejection of the code\n`,
     )
+    writeRerequestAdvice(ctx, event, facts?.requestedReviewers)
     return 1
   }
   // #1564: nothing has EVER reviewed this PR, so this check has nothing to
@@ -2015,13 +2032,12 @@ async function runReviewGate(): Promise<number> {
   // that really read the diff rejected it. The remedy is stated here,
   // because this red is not a finding about the code.
   if (outcome.kind === 'unreviewed') {
-    const [ask] = reviewTriggerLogins(event)
     process.stderr.write(
       `${REVIEW_JOB}: FAILED — no review has ever been earned on this PR, and a push never starts one, so ` +
       `NOTHING has judged this diff\n` +
-      `${REVIEW_JOB}: this is not a rejection of the code: request a review from \`${ask}\` and this check ` +
-      `goes green on the verdict it earns\n`,
+      `${REVIEW_JOB}: this is not a rejection of the code\n`,
     )
+    writeRerequestAdvice(ctx, event, facts?.requestedReviewers)
     return 1
   }
   if (outcome.kind === 'carry-unreadable') {
