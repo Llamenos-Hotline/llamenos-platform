@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   unstickStalledReviews, unstickCandidatesFrom, commentReviewAs, defaultCommentReviewIo,
-  MAX_EVALUATIONS_PER_HEAD, UNSTICK_GRACE_MS, PROCEDURAL_REVIEW_BODY,
+  MAX_EVALUATIONS_PER_HEAD, UNSTICK_GRACE_MS, PROCEDURAL_REVIEW_BODY, tickMayCommentAsReviewer, liveRerunDeps, UNSTICK_COMMENT_REVIEW_ENV,
   type UnstickDeps, type UnstickCandidate, type CommentReviewIo,
 } from '../../orchestrator/src/review-unstick.js'
 import { rerunReview, type RerunDeps, type RerunRun } from '../../orchestrator/src/review-rerun.js'
@@ -224,6 +224,10 @@ describe('unstickCandidatesFrom', () => {
     expect(unstickCandidatesFrom(facts([green, realFail]))).toEqual([])
   })
 
+  it("never names a PR the fleet bot did not author, whatever its branch is called", () => {
+    expect(unstickCandidatesFrom(facts([pr({ number: 7, authorLogin: 'a-stranger' })]))).toEqual([])
+  })
+
   it('never names a draft, a non-fleet branch, or the knope release branch', () => {
     expect(unstickCandidatesFrom(facts([
       pr({ number: 4, isDraft: true }), pr({ number: 5, headRefName: 'feature/x' }), pr({ number: 6, headRefName: 'release' }),
@@ -274,5 +278,24 @@ describe('commentReviewAs', () => {
     expect(src).not.toMatch(/APPROVE|REQUEST_CHANGES|--approve/)
     // and the live poster really does build that argv
     expect(defaultCommentReviewIo().postReview).toBeTypeOf('function')
+  })
+})
+
+describe('the tick borrows the codeowner only when the operator says so', () => {
+  it('is off by default and on only for the exact opt-in value', () => {
+    expect(tickMayCommentAsReviewer({})).toBe(false)
+    expect(tickMayCommentAsReviewer({ [UNSTICK_COMMENT_REVIEW_ENV]: '0' })).toBe(false)
+    expect(tickMayCommentAsReviewer({ [UNSTICK_COMMENT_REVIEW_ENV]: 'true' })).toBe(false)
+    expect(tickMayCommentAsReviewer({ [UNSTICK_COMMENT_REVIEW_ENV]: '1' })).toBe(true)
+  })
+
+  it('without an io the live deps carry no comment-review recovery at all', () => {
+    expect(liveRerunDeps(() => undefined).commentReviewAs).toBeUndefined()
+    expect(liveRerunDeps(() => undefined, io().real).commentReviewAs).toBeTypeOf('function')
+  })
+
+  it('the tick pass is wired through the opt-in, never unconditionally', () => {
+    const cli = readFileSync(join(__dirname, '../../orchestrator/src/cli.ts'), 'utf8')
+    expect(cli).toContain('{ commentReview: tickMayCommentAsReviewer() }')
   })
 })

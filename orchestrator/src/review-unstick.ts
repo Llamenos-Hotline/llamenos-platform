@@ -4,6 +4,7 @@ import { REPO, gh, describeGhFailure, commitSha } from './gh.js'
 import { REVIEW_RERUN_WORKFLOW, laneIdFromBranch } from './ci.js'
 import { buildBoard, type BoardFacts } from './board.js'
 import { ghLoginResolver, type LoginResolver } from './identity.js'
+import { FLEET_BOT_LOGIN } from './config.js'
 import { rerunReview, type RerunDeps, type RerunResult, type RerunRun } from './review-rerun.js'
 
 /**
@@ -48,6 +49,11 @@ import { rerunReview, type RerunDeps, type RerunResult, type RerunRun } from './
  * through its environment only, and is identity-checked before any write. A
  * machine that does not hold it reports the PR as stalled and names the
  * missing credential; it never falls back to anything else.
+ *
+ * Borrowing the codeowner's identity is a decision the operator takes, not a
+ * default: the tick does it only when `FLEET_UNSTICK_COMMENT_REVIEW=1` is set
+ * (`tickMayCommentAsReviewer`); the operator-invoked `review-unstick` command
+ * and `scripts/fleet-rereview.ts` are the operator acting and always may.
  */
 
 /** Evaluations a head may consume before the pass stops asking and reports. */
@@ -94,7 +100,11 @@ export function unstickCandidatesFrom(facts: BoardFacts): UnstickCandidate[] {
   return buildBoard(facts).rows.flatMap((row) => {
     if (row.action !== 'REQUEST_REVIEW') return []
     const pr = byNumber.get(row.number)
-    if (pr === undefined || pr.isDraft || laneIdFromBranch(pr.headRefName) === undefined) return []
+    // A branch name is anyone's to choose: the PR must also be the fleet bot's
+    // own, so a stranger's `fleet/x/y` branch cannot make the fleet request (or
+    // comment as the codeowner) on its behalf.
+    if (pr === undefined || pr.isDraft || pr.authorLogin.toLowerCase() !== FLEET_BOT_LOGIN.toLowerCase()) return []
+    if (laneIdFromBranch(pr.headRefName) === undefined) return []
     return [{ number: row.number, headSha: row.headRefOid, reason: row.reason }]
   })
 }
@@ -226,8 +236,22 @@ export function defaultCommentReviewIo(): CommentReviewIo {
   }
 }
 
-/** The live `RerunDeps`, with the comment-review recovery wired. */
-export function liveRerunDeps(log: (msg: string) => void, io: CommentReviewIo = defaultCommentReviewIo()): RerunDeps {
+/**
+ * Whether the UNATTENDED tick pass may submit the comment review as the
+ * codeowner. Off unless the operator turns it on: acting as the codeowner is
+ * the one step here that borrows a human's identity, so a fleet process does
+ * not take it by default (the operator-invoked script and `review-unstick`
+ * command are the operator acting, and always may). Off, the pass still
+ * re-requests wherever that works and reports the PR STALLED, naming the
+ * command to run, where it does not.
+ */
+export const UNSTICK_COMMENT_REVIEW_ENV = 'FLEET_UNSTICK_COMMENT_REVIEW'
+export function tickMayCommentAsReviewer(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[UNSTICK_COMMENT_REVIEW_ENV] === '1'
+}
+
+/** The live `RerunDeps`. `io` undefined = no comment-review recovery. */
+export function liveRerunDeps(log: (msg: string) => void, io?: CommentReviewIo): RerunDeps {
   return {
     async readPr(pr) {
       const j = JSON.parse(await gh(['pr', 'view', String(pr), '-R', REPO, '--json', 'number,headRefOid,headRefName,author,reviewRequests'])) as {
@@ -255,7 +279,7 @@ export function liveRerunDeps(log: (msg: string) => void, io: CommentReviewIo = 
     rerunRuns: (headSha) => runsOnHead(headSha),
     now: () => new Date(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    commentReviewAs: (pr, login, headSha) => commentReviewAs(io, pr, login, headSha),
+    ...(io === undefined ? {} : { commentReviewAs: (pr: number, login: string, headSha: string) => commentReviewAs(io, pr, login, headSha) }),
     log,
   }
 }
@@ -272,8 +296,9 @@ export async function runsOnHead(headSha: string): Promise<RerunRun[]> {
 export function defaultUnstickDeps(
   log: (msg: string) => void,
   fetchFacts: () => Promise<BoardFacts>,
+  opts: { commentReview: boolean },
 ): UnstickDeps {
-  const rerunDeps = liveRerunDeps(log)
+  const rerunDeps = liveRerunDeps(log, opts.commentReview ? defaultCommentReviewIo() : undefined)
   return {
     candidates: async () => unstickCandidatesFrom(await fetchFacts()),
     async headCommittedAt(headSha) {

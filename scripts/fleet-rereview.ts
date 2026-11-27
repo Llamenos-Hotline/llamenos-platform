@@ -15,13 +15,13 @@
 import { describeGhFailure } from '../orchestrator/src/gh.js'
 import { REVIEW_RERUN_WORKFLOW } from '../orchestrator/src/ci.js'
 import { rerunReview } from '../orchestrator/src/review-rerun.js'
-import { liveRerunDeps } from '../orchestrator/src/review-unstick.js'
+import { liveRerunDeps, defaultCommentReviewIo } from '../orchestrator/src/review-unstick.js'
 
 // The live deps are shared with the fleet's own review-unstick pass (#3113),
 // comment-review recovery included: when the plain request emits no event
 // (a pending CODEOWNER request), a COMMENT review is submitted as the
 // reviewer from the operator's keyring and the request is re-added.
-const deps = liveRerunDeps((msg) => console.error(msg))
+const deps = liveRerunDeps((msg) => console.error(msg), defaultCommentReviewIo())
 
 const pr = Number(process.argv[2])
 if (!Number.isInteger(pr) || pr < 1) {
