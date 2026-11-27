@@ -100,15 +100,24 @@ final class ContactsUITests: BaseUITest {
         and("the server holds one new contact, sealed, with an envelope for the hub's admin reader") {
             let created = persistedContacts().filter { !before.contains($0["id"] as? String ?? "") }
             XCTAssertEqual(created.count, 1, "Expected exactly one new contact, got \(created.count)")
-            guard let row = created.first,
-                  let rowData = try? JSONSerialization.data(withJSONObject: row) else { return }
+            // The list carries each contact's summary tier; the PII tier is on the contact itself.
+            guard let id = created.first?["id"] as? String,
+                  let data = TestAdminAPI.send("GET", "/api/hubs/\(testHubId)/directory/\(id)", baseURL: testHubURL),
+                  let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                XCTFail("The new contact could not be read back")
+                return
+            }
+            let rowData = data
 
             let stored = String(decoding: rowData, as: UTF8.self).lowercased()
             for secret in [name, phone, email, "gonzalez"] {
                 XCTAssertFalse(stored.contains(secret.lowercased()), "The stored contact carries \"\(secret)\"")
             }
             XCTAssertFalse((row["encryptedSummary"] as? String ?? "").isEmpty, "The summary was not stored")
-            XCTAssertFalse((row["encryptedPII"] as? String ?? "").isEmpty, "The PII was not stored")
+            // The route answers the raw row, whose property is `encryptedPii`; the contract says
+            // `encryptedPII` (#3109). Either spelling is the stored tier.
+            let storedPII = (row["encryptedPII"] ?? row["encryptedPii"]) as? String ?? ""
+            XCTAssertFalse(storedPII.isEmpty, "The PII was not stored; the row's keys: \(row.keys.sorted())")
             XCTAssertTrue(
                 pubkeys(of: row["summaryEnvelopes"]).contains(TestAdminAPI.x25519Hex),
                 "The hub's admin reader has no envelope for the summary"
