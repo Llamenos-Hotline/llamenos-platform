@@ -252,7 +252,8 @@ struct AdminTabView: View {
         .navigationTitle(NSLocalizedString("admin_title", comment: "Admin"))
         .navigationBarTitleDisplayMode(.large)
         .alert(
-            NSLocalizedString("admin_delete_confirm_title", comment: "Confirm Deletion"),
+            vm.pendingDeleteType?.confirmTitle
+                ?? NSLocalizedString("admin_delete_confirm_title", comment: "Confirm Deletion"),
             isPresented: Binding(
                 get: { vm.showDeleteConfirmation },
                 set: { vm.showDeleteConfirmation = $0 }
@@ -265,10 +266,7 @@ struct AdminTabView: View {
                 Task { await vm.executeDelete() }
             }
         } message: {
-            Text(NSLocalizedString(
-                "admin_delete_confirm_message",
-                comment: "Are you sure you want to delete this item? This action cannot be undone."
-            ))
+            Text(vm.pendingDeleteType?.confirmMessage ?? DeleteType.ban.confirmMessage)
         }
         .tint(Color.brandPrimary)
         .accessibilityElement(children: .contain)

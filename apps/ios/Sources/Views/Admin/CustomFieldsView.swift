@@ -55,7 +55,7 @@ struct CustomFieldsView: View {
                     }
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
-                            Task { await viewModel.deleteField(name: field.name) }
+                            viewModel.confirmDelete(id: field.name, type: .customField)
                         } label: {
                             Label(
                                 NSLocalizedString("delete", comment: "Delete"),
