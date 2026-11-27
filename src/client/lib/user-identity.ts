@@ -158,7 +158,7 @@ async function initializeUserIdentityNow(userPubkey: string): Promise<SigchainVe
     throw new Error('This user\'s sigchain was created by another device')
   }
 
-  if (!links.some(link => link.linkType === 'puk_epoch')) {
+  if (!holdsPukEpoch(links)) {
     const { pukState, envelope } = await pukCreateFromState()
     await distributePukEnvelopes({
       envelopes: [{ deviceId: device.deviceId, generation: pukState.generation, envelope }],
@@ -173,6 +173,17 @@ async function initializeUserIdentityNow(userPubkey: string): Promise<SigchainVe
   }
 
   return verifyDeviceIdentityNow(userPubkey)
+}
+
+/**
+ * A chain is initialised once it holds a `puk_epoch`: that link binds the PUK's
+ * public keys into the chain, so a device can tell a swapped PUK envelope from
+ * the real one. A genesis-only chain is an initialisation that stopped part-way
+ * (the envelope POST or the epoch append failed) and is resumed, never taken as
+ * finished.
+ */
+function holdsPukEpoch(links: SigchainLinkRecord[]): boolean {
+  return links.some(link => link.linkType === 'puk_epoch')
 }
 
 /**
@@ -225,17 +236,19 @@ async function recordVerifiedHead(verified: SigchainVerifiedState): Promise<void
 
 /**
  * Bring a signed-in device's identity up to date, on every start: the user's
- * genesis and first PUK if this is the user's identity device and its chain is
- * still empty (a user created before identity initialisation existed), then
- * verification that the chain authorises this device under the X-Wing key it
- * holds. A device that is not the user's identity device and finds no chain
- * cannot create one; it reports that rather than skipping.
+ * genesis and first PUK if this is the user's identity device and its chain
+ * holds no `puk_epoch` yet — an empty chain (a user created before identity
+ * initialisation existed) or a genesis-only one (an initialisation that stopped
+ * part-way), resumed from where it stopped — then verification that the chain
+ * authorises this device under the X-Wing key it holds. A device that is not
+ * the user's identity device and finds the chain uninitialised cannot finish it;
+ * it reports that rather than skipping.
  */
 export function ensureDeviceIdentity(userPubkey: string): Promise<SigchainVerifiedState> {
   return serialised(async () => {
     const { links } = await getSigchain(userPubkey)
     await assertExtendsVerifiedHead(userPubkey, links)
-    if (links.length === 0) return initializeUserIdentityNow(userPubkey)
+    if (!holdsPukEpoch(links)) return initializeUserIdentityNow(userPubkey)
     return verifyDeviceIdentityNow(userPubkey)
   })
 }
