@@ -25,7 +25,7 @@ vi.mock('../../services/webhook-replay', () => ({ checkWebhookReplay: vi.fn(asyn
 vi.mock('../../db', () => ({ getDb: vi.fn(() => ({})) }))
 import { freshHubDb } from './hub-shred-helpers'
 import { createServices, type Services } from '../../services'
-import { getHubTelephonyFromService, getTelephonyFromService } from '../../lib/service-factories'
+import { getHubTelephonyFromService, getTelephonyFromService, resolveHubTelephony } from '../../lib/service-factories'
 import { registerAllProviders } from '../../services/provider-setup'
 
 const fresh = freshHubDb('hub_numbers_routing')
@@ -70,10 +70,15 @@ function fakeProvider(): TelephonyAdapter {
 }
 
 let callCounter = 0
-/** `deliveredByHub`: the hub whose own provider account delivered the call (its webhook URL's `?hub=`). */
-async function incomingCall(adapter: TelephonyAdapter, to: string, deliveredByHub?: string): Promise<string> {
+/**
+ * `deliveredByHub`: the hub named by the webhook URL's `?hub=`. `ownAccount`
+ * says whether that hub has a provider account of its own (else the platform's
+ * serves it, and naming the hub proves nothing).
+ */
+async function incomingCall(adapter: TelephonyAdapter, to: string, deliveredByHub?: string, ownAccount = true): Promise<string> {
   vi.mocked(getTelephonyFromService).mockResolvedValue(adapter)
   vi.mocked(getHubTelephonyFromService).mockResolvedValue(adapter)
+  vi.mocked(resolveHubTelephony).mockResolvedValue({ adapter, source: ownAccount ? 'hub' : 'platform', provider: 'twilio' })
   const { default: telephony } = await import('../../routes/telephony')
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
@@ -211,6 +216,8 @@ describe('one store for the hotline number (#1331)', () => {
       expect(adapter.handleLanguageMenu).toHaveBeenLastCalledWith(expect.objectContaining({ hubId }))
       // Through the platform account: refused, so it cannot pull in a call that was never this hub's.
       expect(await incomingCall(adapter, '+15551000090')).toContain('<Reject')
+      // Naming the hub in the URL is not enough when the platform's account is the one that served it.
+      expect(await incomingCall(adapter, '+15551000090', hubId, false)).toContain('<Reject')
     })
 
     it('instance authority takes over a number a hub administrator squatted, instead of being blocked by it', async () => {

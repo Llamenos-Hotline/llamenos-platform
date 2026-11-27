@@ -1,7 +1,7 @@
 import { Hono, type Context, type Next } from 'hono'
 import { describeRoute } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { getTelephonyFromService, getHubTelephonyFromService } from '../lib/service-factories'
+import { getTelephonyFromService, getHubTelephonyFromService, resolveHubTelephony } from '../lib/service-factories'
 import type { SpeechUrlBuilder, TelephonyAdapter, TelephonyResponse } from '../telephony/adapter'
 import { SipBridgeAdapter } from '../telephony/sip-bridge-adapter'
 import type { Services } from '../services'
@@ -175,6 +175,20 @@ async function getHubAdapter(env: Env, services: Services, hubId: string | undef
     return getHubTelephonyFromService(env, services.providerConfig, hubId)
   }
   return getTelephonyFromService(env, services.providerConfig)
+}
+
+/**
+ * The hub whose OWN provider account delivered this call, or undefined when the
+ * platform's did. `?hub=` is only a label on the URL; what makes it trustworthy
+ * is that the webhook's signature was checked against that hub's own account. A
+ * hub with no account of its own is served by the platform's, so naming it
+ * proves nothing: such a call is the platform account's, and may reach only the
+ * numbers instance authority set (`hub_numbers.scope`).
+ */
+async function hubOwnAccountDelivering(c: Context<AppEnv>, services: Services, namedHubId: string | undefined): Promise<string | undefined> {
+  if (!namedHubId) return undefined
+  const resolved = await resolveHubTelephony(c.env, services.providerConfig, namedHubId)
+  return resolved?.source === 'hub' ? namedHubId : undefined
 }
 
 /**
@@ -488,7 +502,7 @@ telephony.post('/incoming',
   // The call belongs to the hub that owns the number it was placed to — and a
   // number no active hub owns is refused, unanswered and uncharged (#2460).
   // Nothing about the call is recorded: it has no hub to belong to.
-  const hubId = await hubForCalledNumber(services, calledNumber, namedHubId)
+  const hubId = await hubForCalledNumber(services, calledNumber, await hubOwnAccountDelivering(c, services, namedHubId))
   if (!hubId) {
     await signalUnroutedCall(services, !!calledNumber)
     return telephonyResponse(deliveringAdapter.rejectCall())
