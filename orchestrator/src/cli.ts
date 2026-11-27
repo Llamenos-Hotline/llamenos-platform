@@ -67,10 +67,11 @@ import type { WorkItem } from './source.js'
 import { renderDigest, resumeCommand, waitingOnHuman, type DigestInput, type LaneStatus } from './digest.js'
 import { salvageLine, summarizeSalvage } from './salvage-report.js'
 import { deriveItemStatus, renderItemStatus, type PrFacts, type PrState } from './status.js'
-import { runBoard } from './board.js'
+import { runBoard, fetchBoardFacts } from './board.js'
 import { runMissingChecks } from './missing-checks.js'
 import { runPrWhy } from './pr-why.js'
 import { defaultQueueSweepDeps, renderSweepInline, runQueueSweep, sweepQueueRuns } from './queue-sweep.js'
+import { unstickStalledReviews, defaultUnstickDeps, tickMayCommentAsReviewer } from './review-unstick.js'
 import { runQueueFeedWith, renderQueueFeed, defaultQueueFeedDeps } from './queue-feed.js'
 import { notify } from './notify.js'
 import { FLEET_DIR, LOG_FILE, HALT_REASON_FILE, DISPATCH_SCRIPT, FLEET_ENV_FILE } from './paths.js'
@@ -1134,6 +1135,19 @@ async function runTick(): Promise<number> {
     for (const e of sweep.errors) log(`queue-sweep error: ${e}`)
   } catch (e) {
     log(`queue-sweep failed: ${errMsg(e)}`)
+  }
+
+  // #3113: a fleet PR whose review request was consumed without a verdict has
+  // no event left that could start the engine again, so it waits for a human
+  // forever. Re-request it (comment-review recovery included) and confirm a run
+  // started — the comment-review recovery (a COMMENT as the codeowner) only
+  // when the operator has opted the tick into it. Like the sweep above: before the pass, even when halted — it asks
+  // GitHub for a review the fleet already owes and starts no worker — and
+  // best-effort, so a failure here is logged and never costs the dispatch.
+  try {
+    await unstickStalledReviews(defaultUnstickDeps(log, fetchBoardFacts, { commentReview: tickMayCommentAsReviewer() }))
+  } catch (e) {
+    log(`review-unstick failed: ${errMsg(e)}`)
   }
 
   const lanes = await loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger)
@@ -2575,6 +2589,17 @@ const HANDLERS: Record<string, CommandHandler> = {
   // a PASS verdict for the head tree, changes git merges onto the group,
   // iOS-only-when-alone), using the same enableAutoMerge the tick uses. Exit
   // 2 when a prerequisite read was undecidable.
+  // #3113: the tick's review-unstick pass, on demand. Re-requests the review
+  // on every fleet PR whose gate holds no verdict and has nothing evaluating
+  // it, and CONFIRMS a run started (falling back to a comment review as the
+  // reviewer when the request emits no event). Exit 1 when any PR could not be
+  // re-fired or has spent its evaluations.
+  'review-unstick': async () => {
+    // Operator-invoked: the operator is the one acting, so the comment review is on.
+    const outcomes = await unstickStalledReviews(defaultUnstickDeps(log, fetchBoardFacts, { commentReview: true }))
+    process.stdout.write(`review-unstick: ${outcomes.length} stalled PR(s) considered\n`)
+    return outcomes.some((o) => o.kind === 'failed' || o.kind === 'exhausted') ? 1 : 0
+  },
   'queue-feed': async () => {
     const result = await runQueueFeedWith(defaultQueueFeedDeps(REPO_ROOT, enableAutoMerge, log))
     process.stdout.write(`${renderQueueFeed(result)}\n`)
