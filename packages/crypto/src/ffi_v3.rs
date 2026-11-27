@@ -1174,19 +1174,11 @@ mod tests {
     use crate::encryption::{seal_record_for_readers, RecordReader};
     use crate::labels::{LABEL_CALL_META, LABEL_MESSAGE};
 
-    /// A device whose Ed25519 and X25519 keys are, as always, different keys.
-    fn fixed_device() -> (DeviceSecrets, DeviceKeyState) {
-        let secrets = DeviceSecrets {
-            signing_seed: [7u8; 32],
-            encryption_seed: [9u8; 32],
-            kem_seed: [0x4bu8; 32],
-        };
-        let ds = DeviceKeyState {
-            device_id: "stored-record-dev".into(),
-            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
-        };
+    /// A freshly generated device whose Ed25519 and X25519 keys are, as
+    /// always, different keys.
+    fn a_device() -> (DeviceSecrets, DeviceKeyState) {
+        let secrets = DeviceSecrets::generate();
+        let ds = DeviceKeyState::of("stored-record-dev", &secrets);
         assert_ne!(ds.signing_pubkey_hex, ds.encryption_pubkey_hex);
         (secrets, ds)
     }
@@ -1195,7 +1187,7 @@ mod tests {
 
     #[test]
     fn call_metadata_opens_whichever_device_key_the_envelope_is_addressed_to() {
-        let (secrets, ds) = fixed_device();
+        let (secrets, ds) = a_device();
         let (_, other_pk) = crate::hpke_envelope::generate_x25519_keypair();
         // The server and desktop address envelopes by the account (Ed25519) key;
         // iOS and Android address their own by the X25519 key. Either way the
@@ -1231,7 +1223,7 @@ mod tests {
     fn a_wrap_sealed_to_the_ed25519_key_does_not_open() {
         // Both keys are 64 hex chars; sealing to the signing key as though it were
         // X25519 (#1021, #1283) yields an envelope nobody can open.
-        let (secrets, ds) = fixed_device();
+        let (secrets, ds) = a_device();
         let record = seal_record_for_readers(
             CALL_META.as_bytes(),
             &[RecordReader {
@@ -1254,7 +1246,7 @@ mod tests {
 
     #[test]
     fn call_metadata_and_message_readers_are_bound_to_their_labels() {
-        let (secrets, ds) = fixed_device();
+        let (secrets, ds) = a_device();
         let reader = [RecordReader {
             address: ds.signing_pubkey_hex.clone(),
             encryption_pubkey: ds.encryption_pubkey_hex.clone(),
@@ -2169,20 +2161,20 @@ mod stored_record_vector_tests {
     }
 
     /// Load `reader` into this thread's mobile state, as an unlocked device.
+    /// The fixture publishes only the reader's X25519 secret; the device's
+    /// signing and X-Wing seeds play no part in opening a stored record, so
+    /// they are drawn fresh.
     fn load_reader(reader: &FixtureReader) {
-        let mut encryption_seed = [0u8; 32];
-        encryption_seed.copy_from_slice(&hex::decode(&reader.x25519_secret_hex).unwrap());
+        use rand::Rng;
         let secrets = DeviceSecrets {
-            signing_seed: [0x5au8; 32],
-            encryption_seed,
-            kem_seed: [0x4bu8; 32],
+            signing_seed: rand::rngs::OsRng.gen(),
+            encryption_seed: hex::decode(&reader.x25519_secret_hex)
+                .unwrap()
+                .try_into()
+                .expect("a fixture X25519 secret is 32 bytes"),
+            kem_seed: rand::rngs::OsRng.gen(),
         };
-        let ds = DeviceKeyState {
-            device_id: format!("vector-{}", reader.name),
-            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
-        };
+        let ds = DeviceKeyState::of(&format!("vector-{}", reader.name), &secrets);
         // The fixture's published pubkey must be the one its secret derives.
         assert_eq!(ds.encryption_pubkey_hex, reader.x25519_pubkey_hex);
         let mut guard = state().lock().unwrap();

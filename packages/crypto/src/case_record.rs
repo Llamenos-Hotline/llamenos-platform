@@ -349,17 +349,8 @@ mod tests {
 
     #[test]
     fn the_device_is_always_a_reader_and_its_account_key_is_not_sealed_to() {
-        let secrets = DeviceSecrets {
-            signing_seed: [7u8; 32],
-            encryption_seed: [8u8; 32],
-            kem_seed: [9u8; 32],
-        };
-        let device = DeviceKeyState {
-            device_id: "d".into(),
-            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
-        };
+        let secrets = DeviceSecrets::generate();
+        let device = DeviceKeyState::of("d", &secrets);
         let (other_sk, other_pk) = keypair(0x77);
         let sealed = seal_as_device(
             CasePurpose::Summary,

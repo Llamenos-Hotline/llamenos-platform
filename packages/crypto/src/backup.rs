@@ -160,7 +160,7 @@ const BACKUP_SALT_LEN: usize = 32;
 const BACKUP_NONCE_LEN: usize = 12;
 /// Sealed plaintext length: the 32-byte signing seed, the 32-byte X25519
 /// encryption seed, then the 32-byte X-Wing seed.
-const BACKUP_PLAINTEXT_LEN: usize = 96;
+const BACKUP_PLAINTEXT_LEN: usize = crate::device_keys::DEVICE_SEEDS_LEN;
 /// A payload of only the first two seeds — what v5 sealed.
 const TWO_SEED_PLAINTEXT_LEN: usize = 64;
 /// Sealed payload length: the plaintext plus the 16-byte GCM tag.
@@ -456,23 +456,15 @@ fn open_secrets(
             )
             .map_err(|_| CryptoError::DecryptionFailed)?,
     );
-    if plaintext.len() != BACKUP_PLAINTEXT_LEN {
-        return Err(CryptoError::InvalidFormat(format!(
+    let seeds: &[u8; BACKUP_PLAINTEXT_LEN] = plaintext.as_slice().try_into().map_err(|_| {
+        CryptoError::InvalidFormat(format!(
             "Backup payload must be {BACKUP_PLAINTEXT_LEN} bytes of device seeds, got {}",
             plaintext.len()
-        )));
-    }
-    // Seeds are copied straight into the zeroize-on-drop struct; no `Copy`
-    // array is left behind on any path.
-    let mut secrets = DeviceSecrets {
-        signing_seed: [0u8; 32],
-        encryption_seed: [0u8; 32],
-        kem_seed: [0u8; 32],
-    };
-    secrets.signing_seed.copy_from_slice(&plaintext[..32]);
-    secrets.encryption_seed.copy_from_slice(&plaintext[32..64]);
-    secrets.kem_seed.copy_from_slice(&plaintext[64..]);
-    Ok(secrets)
+        ))
+    })?;
+    // Each seed is built from its own bytes of the zeroizing plaintext; no
+    // zeroed or partly filled `DeviceSecrets` exists on any path.
+    Ok(DeviceSecrets::from_seeds(seeds))
 }
 
 /// Write a v6 backup of a device's secrets — all three seeds — protected by both
@@ -598,21 +590,11 @@ mod tests {
     /// key has. A fixture whose encryption seed were derived from its signing
     /// seed could not tell a working backup from the #2140 defect.
     fn secrets() -> DeviceSecrets {
-        let mut s = DeviceSecrets {
-            signing_seed: [0u8; 32],
-            encryption_seed: [0u8; 32],
-            kem_seed: [0u8; 32],
-        };
-        for (i, b) in s.signing_seed.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(7).wrapping_add(13);
+        DeviceSecrets {
+            signing_seed: std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(13)),
+            encryption_seed: std::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(101)),
+            kem_seed: std::array::from_fn(|i| (i as u8).wrapping_mul(5).wrapping_add(37)),
         }
-        for (i, b) in s.encryption_seed.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(11).wrapping_add(101);
-        }
-        for (i, b) in s.kem_seed.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(5).wrapping_add(37);
-        }
-        s
     }
 
     fn signing_pubkey_hex() -> String {

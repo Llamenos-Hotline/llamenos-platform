@@ -533,17 +533,28 @@ pub fn decrypt_provisioned_bundle(
         )));
     }
 
-    // DeviceSecrets zeroizes its seeds on drop — including on the rejection
-    // paths below; `plaintext` is Zeroizing.
-    let mut secrets = DeviceSecrets {
-        signing_seed: [0u8; 32],
-        encryption_seed: [0u8; 32],
-        kem_seed: [0u8; 32],
+    // This device's own X-Wing seed is drawn here, once, as the device is
+    // created (spec 2026-11-25-v2-device-linking-and-recovery §5 as revised
+    // 2026-11-26). It is never in the bundle — no private key travels in a
+    // provisioning payload — and it is never redrawn: unlocking only reads it
+    // back.
+    //
+    // While this path transports the primary's identity (seed transport, #3054),
+    // the chain names the primary's X-Wing key for that identity, so this key is
+    // not named for it; K-E (#2975) gives a linked device its own identity, whose
+    // `device_add` names this key from the device's claim.
+    //
+    // Each field is built from its own bytes; no zeroed or partly filled
+    // `DeviceSecrets` exists. It zeroizes its seeds on drop — including on the
+    // rejection paths below, which wipe the drawn X-Wing seed with the rest;
+    // `plaintext` is Zeroizing.
+    let bundle_seed = |range: std::ops::Range<usize>| -> Result<&[u8; 32], CryptoError> {
+        plaintext[range].try_into().map_err(|_| {
+            CryptoError::InvalidFormat("provisioning bundle seed is not 32 bytes".into())
+        })
     };
-    secrets.signing_seed.copy_from_slice(&plaintext[1..33]);
-    secrets
-        .encryption_seed
-        .copy_from_slice(&plaintext[33..BUNDLE_LEN]);
+    let secrets =
+        DeviceSecrets::with_fresh_kem_seed(bundle_seed(1..33)?, bundle_seed(33..BUNDLE_LEN)?);
 
     // The identity being transported must be the identity that authorized this
     // room's ephemeral key.
@@ -560,17 +571,6 @@ pub fn decrypt_provisioned_bundle(
             "provisioning ECDH used the long-term encryption key instead of an ephemeral".into(),
         ));
     }
-
-    // This device's own X-Wing seed, drawn here, once, as the device is created
-    // (spec 2026-11-25-v2-device-linking-and-recovery §5 as revised 2026-11-26).
-    // It is never in the bundle — no private key travels in a provisioning
-    // payload — and it is never redrawn: unlocking only reads it back.
-    //
-    // While this path transports the primary's identity (seed transport, #3054),
-    // the chain names the primary's X-Wing key for that identity, so this key is
-    // not named for it; K-E (#2975) gives a linked device its own identity, whose
-    // `device_add` names this key from the device's claim.
-    getrandom::getrandom(&mut secrets.kem_seed).expect("getrandom failed");
 
     // Test-only observability hook: record where the two seeds live, so the
     // zeroization test can read those exact slots after this frame is
