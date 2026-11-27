@@ -106,6 +106,7 @@ describe('blasts routes', () => {
       expect(res.status).toBe(200)
       const json = await res.json()
       expect(json.blasts).toHaveLength(2)
+      expect(json.blasts[0].content).toEqual({ body: 'Hello' })
       expect(json.total).toBe(2)
       expect(listBlastsSpy).toHaveBeenCalledWith('hub-1')
     })
@@ -181,6 +182,9 @@ describe('blasts routes', () => {
       })
 
       expect(res.status).toBe(201)
+      // The stored `{ text }` is answered as the wire `{ body }` (#2572).
+      const created = await res.json() as { blast: { content: unknown } }
+      expect(created.blast.content).toEqual({ body: 'Hello' })
       expect(createBlastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           hubId: 'hub-1',
@@ -222,6 +226,7 @@ describe('blasts routes', () => {
       expect(res.status).toBe(200)
       const json = await res.json()
       expect(json.id).toBe('blast-42')
+      expect(json.content).toEqual({ body: 'Hello' })
       expect(getBlastSpy).toHaveBeenCalledWith('blast-42')
     })
 
@@ -250,6 +255,7 @@ describe('blasts routes', () => {
       expect(res.status).toBe(200)
       const json = await res.json()
       expect((json as { blast: { status: string } }).blast.status).toBe('sending')
+      expect((json as { blast: { content: unknown } }).blast.content).toEqual({ body: 'Hello' })
       expect(sendSpy).toHaveBeenCalledWith('blast-1', 'hub-1')
     })
 

@@ -11,7 +11,7 @@ const MOCK_BLAST_DRAFT: Record<string, unknown> = {
   hubId: 'hub-1',
   status: 'draft',
   targetChannels: ['sms'],
-  content: { text: 'Hello from E2E test', mediaUrl: null },
+  content: { body: 'Hello from E2E test' },
   scheduledAt: null,
   stats: { totalRecipients: 3, sent: 0, delivered: 0, failed: 0, optedOut: 0 },
   createdAt: new Date().toISOString(),

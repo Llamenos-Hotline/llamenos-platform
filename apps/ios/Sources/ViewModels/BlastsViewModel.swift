@@ -65,15 +65,12 @@ final class BlastsViewModel {
         defer { isSending = false }
 
         do {
-            let channelContent = Dictionary(uniqueKeysWithValues: channels.map { ($0, message) })
             let body = CreateBlastRequest(
                 name: name,
-                content: ["en": channelContent],
-                targetChannels: channels,
-                targetTags: [],
-                targetLanguages: ["en"]
+                content: AppBlastMessage(body: message, mediaUrl: nil),
+                channels: channels
             )
-            let _: AppBlast = try await apiService.request(
+            let _: AppBlastEnvelope = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/blasts"),
                 body: body

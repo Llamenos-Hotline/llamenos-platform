@@ -4,7 +4,7 @@ import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
 import { listBlastsQuerySchema, listSubscribersQuerySchema, listDeliveriesQuerySchema, createBlastBodySchema, updateBlastBodySchema, scheduleBlastBodySchema, importSubscribersBodySchema, updateBlastSettingsBodySchema, blastResponseSchema, blastEnvelopeResponseSchema, subscriberStatsResponseSchema, blastStatsSchema, blastSettingsResponseSchema, subscriberListResponseSchema, blastListResponseSchema, blastDeliveryListResponseSchema, importSubscribersResponseSchema, blastDeliveryResponseSchema } from '@protocol/schemas/blasts'
-import type { BlastContent, MultiBlastContent } from '@shared/types'
+import { toStorageContent, toWireBlast } from '../lib/blast-content'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors } from '../openapi/helpers'
 import { createLogger } from '../lib/logger'
@@ -15,25 +15,6 @@ import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
 import { ServiceError } from '../services/service-error'
 
 const logger = createLogger('routes.blasts')
-
-/**
- * Convert protocol schema content (uses `body` field) to shared type content (uses `text` field).
- * Handles both single-language and multi-language formats.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toStorageContent(input: any): BlastContent | MultiBlastContent {
-  if (input && typeof input.body === 'string') {
-    // Single-language: { body, mediaUrl? }
-    return { text: input.body, mediaUrl: input.mediaUrl }
-  }
-  // Multi-language: Record<langCode, { body, mediaUrl? }>
-  const result: MultiBlastContent = {}
-  for (const [lang, entry] of Object.entries(input)) {
-    const e = entry as { body: string; mediaUrl?: string }
-    result[lang] = { text: e.body, mediaUrl: e.mediaUrl }
-  }
-  return result
-}
 
 const blasts = new Hono<AppEnv>()
 
@@ -260,7 +241,7 @@ blasts.get('/',
     // Apply pagination at route level (service returns all)
     const total = allBlasts.length
     const offset = (query.page - 1) * query.limit
-    const paged = allBlasts.slice(offset, offset + query.limit)
+    const paged = allBlasts.slice(offset, offset + query.limit).map(toWireBlast)
 
     return c.json({ blasts: paged, total, page: query.page, limit: query.limit })
   },
@@ -300,7 +281,7 @@ blasts.post('/',
     if (body.scheduledAt) {
       blast = await services.blasts.schedule(blast.id, body.scheduledAt)
     }
-    return c.json({ blast }, 201)
+    return c.json({ blast: toWireBlast(blast) }, 201)
   },
 )
 
@@ -326,7 +307,7 @@ blasts.get('/:id',
     const id = c.req.param('id')
     const services = c.get('services')
     const blast = await services.blasts.getBlast(id)
-    return c.json(blast)
+    return c.json(toWireBlast(blast))
   },
 )
 
@@ -358,7 +339,7 @@ blasts.patch('/:id',
     if (body.defaultLanguage !== undefined) updateInput.defaultLanguage = body.defaultLanguage
     if (body.channels !== undefined) updateInput.targetChannels = body.channels
     const blast = await services.blasts.updateBlast(id, updateInput)
-    return c.json({ blast })
+    return c.json({ blast: toWireBlast(blast) })
   },
 )
 
@@ -417,7 +398,7 @@ blasts.post('/:id/send',
       })
     )
 
-    return c.json({ blast })
+    return c.json({ blast: toWireBlast(blast) })
   },
 )
 
@@ -444,7 +425,7 @@ blasts.post('/:id/schedule',
     const services = c.get('services')
     const body = c.req.valid('json')
     const blast = await services.blasts.schedule(id, body.scheduledAt)
-    return c.json({ blast })
+    return c.json({ blast: toWireBlast(blast) })
   },
 )
 
@@ -469,7 +450,7 @@ blasts.post('/:id/cancel',
     const id = c.req.param('id')
     const services = c.get('services')
     const blast = await services.blasts.cancel(id)
-    return c.json({ blast })
+    return c.json({ blast: toWireBlast(blast) })
   },
 )
 

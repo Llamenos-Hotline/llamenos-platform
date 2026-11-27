@@ -23,14 +23,6 @@ export interface KnownViolation {
 }
 
 export const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
-  { method: 'POST', route: '/api/hubs/:hubId/blasts', status: 201, issue: 2572 },
-  { method: 'POST', route: '/api/hubs/:hubId/blasts/:id/send', status: 200, issue: 2572 },
-  // The reads of the same blast content shape (#2572): measured by the every-GET sweep
-  // (core/openapi-spec.feature) once it covered routes no scenario read.
-  { method: 'GET', route: '/api/blasts', status: 200, issue: 2572 },
-  { method: 'GET', route: '/api/blasts/:id', status: 200, issue: 2572 },
-  { method: 'GET', route: '/api/hubs/:hubId/blasts', status: 200, issue: 2572 },
-  { method: 'GET', route: '/api/hubs/:hubId/blasts/:id', status: 200, issue: 2572 },
   { method: 'GET', route: '/api/hubs/:hubId/notes/:id/replies', status: 200, issue: 2300 },
   { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/register', status: 200, issue: 2571 },
   { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/verify', status: 200, issue: 2571 },
