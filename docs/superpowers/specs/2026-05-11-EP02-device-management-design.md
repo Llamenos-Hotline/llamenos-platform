@@ -2,11 +2,25 @@
 epic: EP02
 title: Device & Identity Management
 status: specced
+superseded-in-part-by: 2026-11-25-v2-device-linking-and-recovery.md (§7, L6)
 depends-on: [EP01]
 phase: 2
 ---
 
 # EP02: Device & Identity Management
+
+> **SUPERSEDED IN PART (#3065) — read before building anything that revokes a device.**
+> The **device-revocation cascade and the emergency-lockdown cascade** in this document are
+> **not buildable**. They specify the pre-v2 model: rotating a per-hub *hub key* through an
+> orchestrated server transaction. The operator signed off a different design for the same
+> behaviour on 2026-11-25: `2026-11-25-v2-device-linking-and-recovery.md` §7 (decision **L6**,
+> **SIGNED OFF**). Per-hub hub keys are the object reader groups (#2961) replaced, so there is
+> nothing for the cascade below to rotate. See
+> [Superseded: the revocation and lockdown cascade](#superseded-the-revocation-and-lockdown-cascade).
+>
+> Every other EP02 item is **still in force** and still specced: the `/security/*` route tree,
+> device list and rename, session management, passkeys, the `security_events` timeline,
+> admin device oversight (SAS), and the user-role picker.
 
 **Date:** 2026-05-12
 **Status:** Specced
@@ -17,8 +31,8 @@ phase: 2
 This epic ports v1's device and identity management features to v2 and extends them with v2's per-device Ed25519/X25519 crypto architecture:
 
 1. Adding a dedicated `/security/*` route tree with tabbed navigation for user device, session, passkey, and security history management
-2. Implementing device list, device revocation (with sigchain + PUK + hub key rotation), and device rename across all platforms
-3. Building active session management (view, terminate, sign-out-everywhere, emergency lockdown)
+2. Implementing device list, device revocation (~~with sigchain + PUK + hub key rotation~~ — that cascade is superseded; the v2 cascade is L6), and device rename across all platforms
+3. Building active session management (view, terminate, sign-out-everywhere, emergency lockdown — the lockdown *cascade* is superseded)
 4. Enhancing WebAuthn passkey management with rename, transport badges, and backup status
 5. Creating a security event timeline with append-only `security_events` table
 6. Adding admin device oversight section in the admin shell (hub-scoped device inventory, SAS emoji verification)
@@ -63,11 +77,11 @@ Lockdown means "my account is compromised." There is no per-hub lockdown — com
 1. User triggers lockdown from `/security/sessions` via `LockdownModal`
 2. Requires fresh PIN unlock or WebAuthn assertion (elevated auth)
 3. **Phase 1 (server):** Terminate all sessions except current, create `account_lockdown` security event
-4. **Phase 2 (client-driven):** Client rotates PUK (re-seal to current device only), then iterates all user's hubs and rotates each hub key. Each hub key rotation is an individual operation — partial failure is acceptable (retried on next app launch). The server cannot generate hub keys (zero-knowledge).
+4. ~~**Phase 2 (client-driven):** Client rotates PUK (re-seal to current device only), then iterates all user's hubs and rotates each hub key. Each hub key rotation is an individual operation — partial failure is acceptable (retried on next app launch). The server cannot generate hub keys (zero-knowledge).~~ **SUPERSEDED — do not build.** Phase 2 is the L6 removal run for every other device (see the superseded section below); "partial failure is acceptable" is **not** the v2 rule.
 5. All other devices receive 401 on next request and must re-authenticate
 6. Post-lockdown: user should review device list and revoke any unknown devices
 
-**Endpoint:** `POST /api/account/lockdown` — requires elevated auth. Server terminates sessions and returns `{ sessionsTerminated: number, hubIds: string[] }`. Client then performs PUK rotation and hub key rotations client-side, reporting completion via `POST /api/account/lockdown/complete`.
+**Endpoint:** `POST /api/account/lockdown` — requires elevated auth. Server terminates sessions and returns `{ sessionsTerminated: number, hubIds: string[] }`. ~~Client then performs PUK rotation and hub key rotations client-side, reporting completion via `POST /api/account/lockdown/complete`.~~ **Superseded:** phase 2 is chain appends by the user's own device, not a server-reported completion; `/complete` has no v2 meaning.
 
 ### D4: SAS emoji table from `packages/crypto`
 
@@ -146,8 +160,7 @@ AdminShell (from EP01)
    b. Server (atomic transaction):
       - Append device_remove sigchain link (signed by requesting device)
       - Delete device record
-      - Rotate PUK (exclude removed device from re-sealing)
-      - Rotate hub keys for all user's hubs
+      - ~~Rotate PUK (exclude removed device from re-sealing)~~ ~~Rotate hub keys for all user's hubs~~  [SUPERSEDED — see L6]
       - Create security_event { type: 'device_remove', deviceId }
       - Push notification to remaining devices
    c. Client invalidates device list + session queries
@@ -177,18 +190,18 @@ AdminShell (from EP01)
 | Create `security_events` table | `apps/worker/db/schema/security.ts` (new) | `id`, `userPubkey`, `eventType`, `deviceId`, `metadata` (JSONB), `ipHash`, `createdAt` — append-only |
 | Create `device_verifications` table | `apps/worker/db/schema/security.ts` | `id`, `verifierPubkey`, `targetDeviceId`, `targetPubkey`, `signedAuditEntry`, `verifiedAt` |
 | Populate `sessions.deviceInfo` | `apps/worker/services/identity.ts` | On session creation: `{ deviceId, platform, userAgent, ipHash }` |
-| Orchestrated revoke endpoint | `apps/worker/routes/devices.ts` | `POST /api/devices/:id/revoke` — transaction: sigchain + delete + PUK rotation + hub key rotation |
+| Orchestrated revoke endpoint | `apps/worker/routes/devices.ts` | `POST /api/devices/:id/revoke` — ~~transaction: sigchain + delete + PUK rotation + hub key rotation~~ **SUPERSEDED (L6): the server cannot perform the rotation.** What survives: removing the device record and emitting the `device_remove` security event, driven by the client's `device_remove` chain append |
 | Device rename endpoint | `apps/worker/routes/devices.ts` | `PATCH /api/devices/:id` — owner only |
 | Device verify endpoint | `apps/worker/routes/devices.ts` | `POST /api/devices/:id/verify` — admin only, stores signed audit entry |
 | Session CRUD | `apps/worker/routes/sessions.ts` (new) | `GET /api/sessions`, `DELETE /api/sessions/:token`, `POST /api/sessions/terminate-others` |
 | Security events | `apps/worker/routes/security-events.ts` (new) | `GET /api/security-events?limit=50&offset=0` (user, own events only), `GET /api/admin/security-events` (admin) |
-| Account lockdown | `apps/worker/routes/account.ts` (new) | `POST /api/account/lockdown` + `POST /api/account/lockdown/complete` — elevated auth required |
+| Account lockdown | `apps/worker/routes/account.ts` (new) | `POST /api/account/lockdown` + ~~`POST /api/account/lockdown/complete`~~ — elevated auth required. Session termination stands; the key-rotation phase and `/complete` are **SUPERSEDED** |
 | Admin device overview | `apps/worker/routes/admin/devices.ts` (new) | `GET /api/admin/devices/overview?hubId=X&limit=50&offset=0` — paginated hub-scoped aggregate stats |
 | Emit security events | Various services | Wire event creation into device register, sigchain append, WebAuthn auth, session create/terminate |
 | Accept device metadata | `apps/worker/routes/devices.ts` | Extend `POST /api/devices/register` body to accept metadata fields |
 | Add `users:manage-devices` permission | `packages/shared/permissions.ts` | Gates admin device oversight and verification |
 | Add `LABEL_SAS_DERIVE` | `packages/protocol/crypto-labels.json` | Domain separation for SAS derivation |
-| New Zod schemas | `packages/protocol/schemas/device-management.ts` (new) | `deviceMetadata`, `revokeDeviceBody`, `revokeDeviceResponse`, `securityEvent`, `sessionResponse`, `adminDeviceOverview` |
+| New Zod schemas | `packages/protocol/schemas/device-management.ts` (new) | `deviceMetadata`, `revokeDeviceBody`, `revokeDeviceResponse` (shape to be redone against L6 — it must not report hub-key rotation), `securityEvent`, `sessionResponse`, `adminDeviceOverview` |
 | User-role assignment UI | `src/client/components/user-role-assignment.tsx` (new) | Multi-select picker for admin user management views |
 
 ### User-role assignment UI
@@ -201,13 +214,39 @@ EP01 established the role definitions, permission engine, and backend support fo
 
 **Behavior:** Checkboxes per role, grouped by scope (hub roles vs platform roles). Shows permission count per role. Submits as an array of role IDs via `PATCH /api/users/:pubkey` (existing endpoint, already accepts `roles` array).
 
+## Superseded: the revocation and lockdown cascade
+
+**Added for #3065 (2026-11-26).** The operator signed off the v2 design for removing a device on
+2026-11-25 (`2026-11-25-v2-device-linking-and-recovery.md` §7, **L6**). It replaces the parts of
+EP02 struck through above. Where the two disagree, **L6 governs**.
+
+| | EP02 as written (superseded) | L6 (in force) |
+|---|---|---|
+| What rotates | PUK **and per-hub hub keys**, "iterates all user's hubs and rotates each hub key" | `device_remove` on the user chain, then a **user-group `group_epoch`** (`reason: device`) in each hub. Role and permission groups get new epochs |
+| Who does it | one orchestrated server endpoint: "transaction: sigchain + delete + PUK rotation + hub key rotation" | the user's **remaining device** appends the chain records; role and permission epochs are **pending jobs run by admin clients** (#2961 §6) |
+| Partial failure | "acceptable (retried on next app launch)" | the hub shows **"rotation pending"**; declared-sensitive tiers **refuse writes to the stale epoch** |
+| Scope | the user's hubs, lockdown only | **always rotate**, every group the user is in, lost or retired alike |
+
+What this means for an implementer:
+
+- **Do not build** a server transaction that rotates keys, a hub-key rotation loop, or
+  `POST /api/account/lockdown/complete`. The server cannot generate or rotate these keys, and hub
+  keys are the object reader groups (#2961) removed.
+- **Emergency lockdown** keeps its global scope (D3) and its elevated-auth and session-termination
+  phase. Its key phase is the L6 removal run for each of the user's other devices.
+- **Still to be settled by the L6 / wire work, not by this document:** what happens to the PUK
+  itself on removal. §7 does not say, and EP02's "rotate PUK" line must not be read as
+  confirmed by it. Settle it there before anyone implements it here.
+- The surviving revoke endpoint's response schema (`revokeDeviceResponse`) must be redone against
+  L6; it must not report a hub-key rotation that does not exist.
+
 ## Scope
 
 ### In scope
 
 - `/security/*` route tree with tabbed layout (devices, sessions, passkeys, history)
 - Device list view with metadata (name, platform, model, last seen, current badge, PUK generation)
-- Device revocation with sigchain link + PUK rotation + hub key rotation
+- Device revocation ~~with sigchain link + PUK rotation + hub key rotation~~ (cascade SUPERSEDED by L6; the confirmation UI, elevated auth and `device_remove` event stand)
 - Device rename (inline edit)
 - Device fingerprint display (truncated Ed25519 pubkey with copy)
 - Active session management (list, terminate, sign-out-everywhere)
@@ -217,7 +256,7 @@ EP01 established the role definitions, permission engine, and backend support fo
 - Admin device oversight section (hub-scoped device list, verification badges, SAS verification modal)
 - SAS emoji verification ceremony with `packages/crypto` derivation
 - DB migrations: device metadata columns, `security_events` table, `device_verifications` table, `sessions.deviceInfo` population
-- New endpoints: revoke, rename, verify, sessions CRUD, security events, lockdown, admin overview
+- New endpoints: revoke (record removal and event only — cascade superseded), rename, verify, sessions CRUD, security events, lockdown, admin overview
 - New Zod schemas in `packages/protocol/schemas/device-management.ts` + codegen
 - New domain separation label: `LABEL_SAS_DERIVE`
 - New permission: `users:manage-devices`
@@ -273,7 +312,7 @@ EP01 established the role definitions, permission engine, and backend support fo
 - **Zero-knowledge admin boundary**: Admins see hub-scoped device lists with verification status and aggregate stats. Admins cannot view user sessions, session tokens, or session activity — that would violate the zero-knowledge principle.
 - **Security events are append-only**: The `security_events` table has no UPDATE or DELETE operations. For GDPR erasure, `userPubkey` is set to `'deleted'` — events are anonymized, not removed, preserving audit integrity.
 - **Device metadata is self-reported**: `deviceModel`, `osVersion`, `appVersion` come from the client. Never trusted for security decisions — used only for display and observability.
-- **Revocation cascades**: Device revocation atomically creates a `device_remove` sigchain link, rotates PUK (excluding revoked device), and rotates hub keys for all hubs. Forward secrecy is maintained — the revoked device cannot decrypt any content encrypted after revocation.
+- **Revocation cascades — SUPERSEDED by L6.** ~~Device revocation atomically creates a `device_remove` sigchain link, rotates PUK (excluding revoked device), and rotates hub keys for all hubs.~~ The property to preserve is unchanged: the revoked device cannot read anything written after removal (the gate L6 shares with #2961). How it is achieved is the superseded section below, and it is not atomic.
 - **Rate limiting**: Device revocation (3/hour), session termination (10/hour), device registration (5/hour per user), WebAuthn registration (3/hour), security event queries (30/minute), admin overview (10/minute).
 
 ## Open Questions (Resolved)
@@ -282,7 +321,7 @@ EP01 established the role definitions, permission engine, and backend support fo
 
 2. **Admin device verification scope — per-hub or per-user?** → D2: Per-user (global). SAS verification confirms the device's Ed25519 pubkey which is bound to the user's sigchain, not to any hub.
 
-3. **Emergency lockdown scope — per-hub or global?** → D3: Global. Lockdown means "account is compromised" and terminates all sessions, rotates PUK, rotates all hub keys.
+3. **Emergency lockdown scope — per-hub or global?** → D3: Global. Lockdown means "account is compromised" and terminates all sessions, ~~rotates PUK, rotates all hub keys~~ and runs the L6 removal for every other device (the *scope* decision — global — stands; the rotation mechanism is superseded).
 
 4. **SAS emoji table — custom table or from packages/crypto?** → D4: From `packages/crypto`. The emoji table is a constant in the Rust crate, available on all platforms via UniFFI/WASM/IPC.
 
