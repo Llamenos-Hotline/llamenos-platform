@@ -947,6 +947,9 @@ function stripSwiftConvenienceExtensions(lines: string[]): string {
   // `CustomFieldDefinition` conflicts with the iOS app's local CustomField.swift model —
   // rename to ProtocolCustomFieldDefinition. Only match the standalone type declaration.
   output = output.replace(/^(struct |\/\/ MARK: - )CustomFieldDefinition\b(?![A-Z])/gm, '$1ProtocolCustomFieldDefinition')
+  // …and every property referencing it: the custom-field list and report types hold it by
+  // name (`REFERENCED_BY_NAME`), so `[CustomFieldDefinition]` must follow the rename.
+  output = output.replace(/(: \[?)CustomFieldDefinition\b(?![A-Za-z])/g, '$1ProtocolCustomFieldDefinition')
 
   // Types that conflict with iOS app's local model files. The generated types have different
   // shapes from the local models (iOS app uses the local versions for API decoding).
