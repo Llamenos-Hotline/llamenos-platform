@@ -112,6 +112,11 @@
     "setup": "bash scripts/setup.sh",
     "cert-pins:extract": "bash scripts/extract-cert-pins.sh",
     "cert-pins:inject": "bun scripts/inject-cert-pins.ts",
+    "trust:snapshot": "bun packages/protocol/tools/trust-snapshot-cli.ts snapshot",
+    "trust:check": "bun packages/protocol/tools/trust-snapshot-cli.ts check",
+    "trust:diff": "bun packages/protocol/tools/trust-snapshot-cli.ts diff",
+    "trust:release-check": "bun packages/protocol/tools/trust-snapshot-cli.ts release-check",
+    "trust:signoff": "bun packages/protocol/tools/trust-snapshot-cli.ts signoff",
     "lint": "eslint src/ apps/worker/ orchestrator/ tests/orchestrator/",
     "supervisors": "scripts/supervisors.sh",
     "supervisors:kill": "scripts/supervisors.sh --kill"

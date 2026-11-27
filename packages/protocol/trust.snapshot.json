@@ -1,0 +1,338 @@
+{
+  "android": {
+    "buildWiring": {
+      "apps/android/app/build.gradle.kts": [
+        "buildTypes {",
+        "sourceSets {",
+        "kotlin.srcDir(\"${rootProject.projectDir}/../../packages/protocol/generated/kotlin\")",
+        "resources.srcDir(\"${layout.buildDirectory.get().asFile}/generated/testFixtures\")"
+      ]
+    },
+    "manifests": {
+      "apps/android/app/src/main/AndroidManifest.xml": {
+        "applications": [
+          {
+            "android:networkSecurityConfig": "@xml/network_security_config"
+          }
+        ],
+        "manifestToolsAttributes": {}
+      }
+    },
+    "networkSecurityConfigs": {
+      "apps/android/app/src/main/res/xml/network_security_config.xml": {
+        "baseConfig": {
+          "cleartextTrafficPermitted": "false",
+          "trustAnchors": [
+            "certificates:system"
+          ]
+        },
+        "debugOverrides": [],
+        "domainConfigs": [
+          {
+            "cleartextTrafficPermitted": null,
+            "domains": [
+              "llamenos-hotline.org|includeSubdomains=true"
+            ],
+            "nested": [],
+            "pinSet": {
+              "expiration": "2028-01-01",
+              "pins": [
+                "SHA-256:C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+                "SHA-256:diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+                "SHA-256:fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+                "SHA-256:sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+              ]
+            },
+            "trustAnchors": []
+          }
+        ],
+        "elements": [
+          "base-config",
+          "certificates",
+          "domain",
+          "domain-config",
+          "network-security-config",
+          "pin",
+          "pin-set",
+          "trust-anchors"
+        ]
+      }
+    }
+  },
+  "connections": {
+    "android": {
+      "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt": {
+        "clients": [
+          "OkHttpClient.Builder() pinner=[certificatePinner]"
+        ],
+        "derived": [
+          "newBuilder pinner=[pinner]"
+        ],
+        "other": {}
+      },
+      "apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt": {
+        "clients": [
+          "OkHttpClient.Builder() pinner=[none]"
+        ],
+        "derived": [
+          "newBuilder pinner=[ApiService.buildPinner(host)]"
+        ],
+        "other": {}
+      },
+      "apps/android/app/src/main/java/org/llamenos/hotline/CrashReporter.kt": {
+        "clients": [
+          "OkHttpClient.Builder() pinner=[none]"
+        ],
+        "derived": [],
+        "other": {}
+      }
+    },
+    "desktop": {
+      "apps/desktop/src/cert_pin.rs": {
+        "clients": [
+          "builder.timeout.redirect.build",
+          "builder.timeout.redirect.use_preconfigured_tls.build"
+        ],
+        "other": {
+          ".dangerous()": 1,
+          "ClientConfig::builder": 1,
+          "ServerCertVerifier": 2,
+          "with_custom_certificate_verifier": 1
+        },
+        "plainClients": 0,
+        "websocketConnects": []
+      },
+      "apps/desktop/src/net.rs": {
+        "clients": [],
+        "other": {},
+        "plainClients": 0,
+        "websocketConnects": [
+          "connect_async_tls_with_config"
+        ]
+      }
+    },
+    "ios": {
+      "apps/ios/Sources/App/AppState.swift": {
+        "challengeHandlers": 0,
+        "other": {},
+        "sessions": [],
+        "sharedSessionUses": 1,
+        "validatorCalls": 0
+      },
+      "apps/ios/Sources/Services/APIService.swift": {
+        "challengeHandlers": 1,
+        "other": {},
+        "sessions": [
+          "URLSession(configuration: bootstrapConfig, delegate: pinningDelegate, delegateQueue: nil)",
+          "URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)"
+        ],
+        "sharedSessionUses": 0,
+        "validatorCalls": 1
+      },
+      "apps/ios/Sources/Services/CertificatePinning.swift": {
+        "challengeHandlers": 0,
+        "other": {
+          "SecPolicyw*": 1,
+          "SecTrustw*": 4
+        },
+        "sessions": [],
+        "sharedSessionUses": 0,
+        "validatorCalls": 0
+      },
+      "apps/ios/Sources/Services/CrashReportingService.swift": {
+        "challengeHandlers": 0,
+        "other": {},
+        "sessions": [],
+        "sharedSessionUses": 1,
+        "validatorCalls": 0
+      },
+      "apps/ios/Sources/Services/SecurityEventService.swift": {
+        "challengeHandlers": 0,
+        "other": {},
+        "sessions": [
+          "URLSession(configuration: config)"
+        ],
+        "sharedSessionUses": 0,
+        "validatorCalls": 0
+      },
+      "apps/ios/Sources/Services/WebSocketService.swift": {
+        "challengeHandlers": 0,
+        "other": {},
+        "sessions": [
+          "URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)"
+        ],
+        "sharedSessionUses": 0,
+        "validatorCalls": 0
+      }
+    }
+  },
+  "ios": {
+    "infoPlists": {
+      "apps/ios/Sources/App/Info.plist": {
+        "NSAllowsArbitraryLoads": false
+      }
+    },
+    "projectYml": {
+      "Llamenos": {
+        "appTransportSecurity": {
+          "NSAllowsArbitraryLoads": false
+        },
+        "configFiles": null,
+        "infoPath": "Sources/App/Info.plist",
+        "infoPlistSettings": {
+          "GENERATE_INFOPLIST_FILE": false,
+          "INFOPLIST_FILE": "Sources/App/Info.plist"
+        }
+      },
+      "LlamenosTests": {
+        "appTransportSecurity": null,
+        "configFiles": null,
+        "infoPath": null,
+        "infoPlistSettings": {
+          "GENERATE_INFOPLIST_FILE": "YES"
+        }
+      },
+      "LlamenosUITests": {
+        "appTransportSecurity": null,
+        "configFiles": null,
+        "infoPath": null,
+        "infoPlistSettings": {
+          "GENERATE_INFOPLIST_FILE": "YES"
+        }
+      }
+    }
+  },
+  "logic": {
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt::buildPinner#0": "a1788385388bd164",
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt::configurePinning#0": "7ec41c036dbf200b",
+    "apps/android/app/src/main/java/org/llamenos/hotline/telephony/LinphoneService.kt::applyTlsTrustAnchor#0": "4d0cb1b36c921719",
+    "apps/desktop/src/api_config.rs::check_backend_url#0": "667b3f54c4427e5d",
+    "apps/desktop/src/api_config.rs::configured_pins#0": "f62c61f51da93f7b",
+    "apps/desktop/src/api_config.rs::is_loopback_host#0": "8579133c4d757919",
+    "apps/desktop/src/api_config.rs::is_plausible_spki_pin#0": "f7bc1cea58a3cbe3",
+    "apps/desktop/src/api_config.rs::store_pins#0": "84255232c7d4766f",
+    "apps/desktop/src/cert_pin.rs::anchor_pin#0": "9ed36a3eea448d2d",
+    "apps/desktop/src/cert_pin.rs::build_pinned_reqwest_client#0": "7e30c82620200366",
+    "apps/desktop/src/cert_pin.rs::build_probe_client#0": "6c1e363741ae0460",
+    "apps/desktop/src/cert_pin.rs::capture_pins_with#0": "add2071c161c9793",
+    "apps/desktop/src/cert_pin.rs::capture_pins#0": "3be8d658d5d83455",
+    "apps/desktop/src/cert_pin.rs::cert_pin#0": "139cb6fe322e8e55",
+    "apps/desktop/src/cert_pin.rs::enforced_pins#0": "fb7635535108458d",
+    "apps/desktop/src/cert_pin.rs::path_matches_pin#0": "7cf8374bd3eff6c5",
+    "apps/desktop/src/cert_pin.rs::production_pins#0": "df9611ef6ed05806",
+    "apps/desktop/src/cert_pin.rs::verify_server_cert#0": "9a99f3dfd7f34b99",
+    "apps/ios/Sources/Services/APIService.swift::urlSession#0": "0d206b3b59fb270d",
+    "apps/ios/Sources/Services/CertificatePinning.swift::der#0": "2e4d646d66ce2fc4",
+    "apps/ios/Sources/Services/CertificatePinning.swift::evaluate#0": "e2688f8742077381",
+    "apps/ios/Sources/Services/CertificatePinning.swift::isLoopback#0": "06a8a4f00006d3f4",
+    "apps/ios/Sources/Services/CertificatePinning.swift::pin#0": "acf6ee382a94a399",
+    "apps/ios/Sources/Services/CertificatePinning.swift::sha256Base64#0": "32544788941f4af0"
+  },
+  "loopbackExemptions": {
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt": [
+      "val certificatePinner: CertificatePinner = CertificatePinner.DEFAULT",
+      "val isLocalhost = hostname == \"localhost\" || hostname == \"127.0.0.1\"",
+      "val pinner = if (isLocalhost) CertificatePinner.DEFAULT else buildPinner(hostname, hashes)"
+    ],
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt": [
+      "val wsClient = if (host == null || host == \"localhost\" || host == \"127.0.0.1\") {"
+    ],
+    "apps/android/app/src/main/java/org/llamenos/hotline/RelayUrlValidator.kt": [
+      "if (lower == \"localhost\" || lower == \"127.0.0.1\" || lower == \"::1\") return false"
+    ],
+    "apps/desktop/src/api_config.rs": [
+      "\"http\" if allow_loopback_http && is_loopback_host(&host) => {}",
+      "Host::Domain(d) => d.eq_ignore_ascii_case(\"localhost\"),",
+      "Host::Ipv4(ip) => *ip == Ipv4Addr::LOCALHOST,",
+      "Host::Ipv6(ip) => *ip == Ipv6Addr::LOCALHOST,",
+      "check_backend_url(&url, allow_loopback_http)?;",
+      "let origin = validate_backend_origin(&raw, ALLOW_LOOPBACK_HTTP)",
+      "let origin = validate_backend_origin(&url, ALLOW_LOOPBACK_HTTP)?;",
+      "pub const ALLOW_LOOPBACK_HTTP: bool = cfg!(debug_assertions);",
+      "pub fn check_backend_url(url: &Url, allow_loopback_http: bool) -> Result<(), String> {",
+      "pub fn is_loopback_host(host: &Host<&str>) -> bool {",
+      "pub fn validate_backend_origin(raw: &str, allow_loopback_http: bool) -> Result<String, String> {"
+    ],
+    "apps/desktop/src/cert_pin.rs": [
+      "fn loopback_http_client(origin: &Url, timeout: Duration) -> Result<reqwest::Client, String> {",
+      "if !api_config::is_loopback_host(&host) {",
+      "let client = loopback_http_client(origin, timeout)?;",
+      "return Err(\"refusing plaintext http:// to a non-loopback host\".to_string());",
+      "return loopback_http_client(target, timeout);"
+    ],
+    "apps/desktop/src/net.rs": [
+      "api_config::check_backend_url(&url, allow_loopback_http)?;",
+      "fn probe_target(candidate: &str, allow_loopback_http: bool) -> Result<Url, String> {",
+      "let target = probe_target(&url, api_config::ALLOW_LOOPBACK_HTTP)?;"
+    ],
+    "apps/ios/Sources/Services/APIService.swift": [
+      "case .loopbackExempt:",
+      "if urlString.lowercased().hasPrefix(\"http://\"), !isLocalhost {",
+      "let isLocalhost = host == \"localhost\" || host == \"127.0.0.1\"",
+      "urlString = isLocalhost ? \"http://\\(urlString)\" : \"https://\\(urlString)\""
+    ],
+    "apps/ios/Sources/Services/CertificatePinning.swift": [
+      "case \"localhost\", \"127.0.0.1\", \"::1\", \"[::1]\": return true",
+      "case loopbackExempt",
+      "if isLoopback(host: host) { return .loopbackExempt }",
+      "static func isLoopback(host: String) -> Bool {"
+    ],
+    "apps/ios/Sources/Services/WebSocketService.swift": [
+      "case \"ws\": return isLoopbackHost(url.host)",
+      "guard isLoopbackHost(components.host) else { return nil }",
+      "private static func isLoopbackHost(_ host: String?) -> Bool {",
+      "return host == \"localhost\" || host == \"127.0.0.1\" || host == \"::1\" || host == \"[::1]\""
+    ]
+  },
+  "pins": {
+    "android": {
+      "literals": [
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+        "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+      ],
+      "okhttp": [
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+        "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+      ],
+      "osPinSets": [
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+        "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+      ]
+    },
+    "desktop": {
+      "effective": [
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+        "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+      ],
+      "literals": [
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+        "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+      ]
+    },
+    "ios": {
+      "effective": [
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+        "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+      ],
+      "literals": [
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+        "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+      ]
+    }
+  },
+  "schema": 1
+}
