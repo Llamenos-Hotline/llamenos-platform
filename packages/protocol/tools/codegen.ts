@@ -238,6 +238,10 @@ const REFERENCED_BY_NAME = new Set([
   // #878 — once the custom-field list item became a `$ref`, the PUT body's `fields` item was
   // the only inline `fields` item left and quicktype dropped its parent prefix (`Field`).
   'CustomFieldsBodyField',
+  // #878 — a report is a conversation stamped `metadata.type: 'report'`. Inline under
+  // `reportListResponse.conversations` it no longer matched the conversation list's item and
+  // quicktype named it a bare `Conversation`; it is `ReportConversation`, its own schema's name.
+  'ReportConversation',
 ])
 
 /**

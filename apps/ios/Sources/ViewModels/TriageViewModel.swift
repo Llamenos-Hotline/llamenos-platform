@@ -41,7 +41,7 @@ final class TriageViewModel {
     private let apiService: APIService
     private let cryptoService: CryptoService
 
-    var reports: [SharedConversation] = []
+    var reports: [ReportConversation] = []
     var total: Int = 0
     var isLoading = false
     var isActionInProgress = false
@@ -51,7 +51,7 @@ final class TriageViewModel {
     var selectedFilter: TriageStatusFilter = .pending
 
     /// Filtered reports based on selected conversion status.
-    var filteredReports: [SharedConversation] {
+    var filteredReports: [ReportConversation] {
         guard selectedFilter != .all else { return reports }
         // The conversionStatus filter is applied server-side, but for client-side
         // filtering of already-loaded data:
@@ -135,7 +135,7 @@ final class TriageViewModel {
     ///   - entityTypeId: The target entity type ID selected by the user.
     /// - Returns: `true` if conversion succeeded.
     @discardableResult
-    func convertToEntity(report: SharedConversation, entityTypeId: String) async -> Bool {
+    func convertToEntity(report: ReportConversation, entityTypeId: String) async -> Bool {
         isActionInProgress = true
         errorMessage = nil
 

@@ -5,7 +5,7 @@ import SwiftUI
 /// Detail view for a single report. Shows title, status, category, metadata,
 /// and action buttons (claim/close) for authorized users.
 struct ReportDetailView: View {
-    let report: SharedConversation
+    let report: ReportConversation
     let viewModel: ReportsViewModel
 
     @Environment(AppState.self) private var appState
@@ -231,7 +231,7 @@ struct ReportDetailView: View {
 #Preview("Report Detail") {
     NavigationStack {
         ReportDetailView(
-            report: SharedConversation(
+            report: ReportConversation(
                 assignedTo: nil,
                 channelType: "reports",
                 contactIdentifierHash: "hash",
@@ -239,7 +239,7 @@ struct ReportDetailView: View {
                 id: "preview-1",
                 lastMessageAt: nil,
                 messageCount: 0,
-                metadata: Metadata(
+                metadata: SharedReportConversationMetadata(
                     conversionStatus: nil,
                     customFieldValues: nil,
                     linkedCallID: nil,

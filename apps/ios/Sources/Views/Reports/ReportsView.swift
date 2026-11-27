@@ -305,7 +305,7 @@ struct ReportsView: View {
 
 /// A single report row in the list, showing title, status badge, category or type label, and date.
 struct ReportRowView: View {
-    let report: SharedConversation
+    let report: ReportConversation
     var reportTypeLabel: String?
 
     var body: some View {
