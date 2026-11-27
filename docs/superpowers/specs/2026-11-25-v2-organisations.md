@@ -7,7 +7,7 @@
 - the named-owner-scope decision (`docs/architecture/named-owner-scope.md`), which reserved an `organization` scope;
 - org search (#3027), which ships inside this spec's contract. §10.2 amends its X3 policy body.
 
-**Status:** DRAFT for operator decisions G1–G12. Revised after an independent review (§14).
+**Status:** SIGNED OFF by the operator, 2026-11-26: G1–G11 as recommended. G12 is decided as **no data migration** (§11). Revised after an independent review (§14).
 
 #2294 asked for an organisation above hubs that owns hubs and shared provider accounts, without
 weakening D1: **an organisation admin is not a reader of hub data by default.** A6 already settled
@@ -18,7 +18,7 @@ is crypto-free). This spec settles the rest:
 - what a shared provider account is, and who sees what of it;
 - opt-out scope;
 - deletion;
-- the pilot migration.
+- existing data, of which none is migrated (§11).
 
 **The principle every decision follows: anything an org does that affects a hub needs that hub's own consent in the hub's own chain.**
 
@@ -34,12 +34,12 @@ is crypto-free). This spec settles the rest:
 | G4 | Creating a hub for someone else | **A hand-over that leaves the founder nothing:** a short list of setup links, then the new admin's client rotates every epoch and sets escrow before the hub accepts data | 4.2 |
 | G5 | Shared provider accounts | **Org-owned accounts with write-only credentials.** Every address is assigned to at most one hub, and **the hub accepts each address in its own chain**. Holding an account's credentials makes you a reader of its traffic at the provider, and the hub's dialog says so | 5 |
 | G6 | Inbound message routing | **By the receiving address.** The `?hub=` parameter on *messaging* webhooks is deleted. Telephony call legs keep their per-call hub binding | 5.4 |
-| G7 | Opt-out scope | **Per address, scoped by the address value,** so opt-outs survive reassignment and re-adding. **Pre-migration opt-outs stay deployment-wide forever**, because their identifiers can't be recovered to re-scope them | 6 |
+| G7 | Opt-out scope | **Per address, scoped by the address value,** so opt-outs survive reassignment and re-adding. | 6 |
 | G8 | What the platform operator sees | Org ids, hub and address attachments, account kinds and quotas. **Not** org names and not hub data | 7 |
 | G9 | Moving and leaving | **The receiving org invites, and the hub accepts. A hub can leave on its own.** An address leaves a hub only by the hub's release, or after an alerted 7-day notice | 8 |
 | G10 | Org-scoped configuration | Templates and ban lists take the `organization` owner scope. Every hub opt-in names the org it applies to, and is void after a move | 10 |
 | G11 | Deleting an org | **Each hub must have left first, by its own link.** Numbers a hub used aren't released at the provider for 90 days | 9 |
-| G12 | The pilot migration | **One org. Each hub gets its own messaging sender before cutover,** and duplicate numbers are resolved first. Old paths are deleted in the same release | 11 |
+| G12 | Existing data | **Nothing is migrated** (operator, 2026-11-26). The release replaces the deployment-wide model outright, and every hub starts inside an org | 11 |
 
 ---
 
@@ -68,7 +68,7 @@ is crypto-free). This spec settles the rest:
 
 ---
 
-## 2. G1: the org chain — OPERATOR DECISION
+## 2. G1: the org chain — decided
 
 **Envelope:** wire §5.1 with `org` in place of `hub`, stored in `org_chain_links(org_id, seq, prev_hash, entry_hash, link_json, appended_at)`. It uses:
 - the D10 canonical profile, computed only in the crate;
@@ -103,7 +103,7 @@ is crypto-free). This spec settles the rest:
 
 ---
 
-## 3. G2: membership is signed by both sides — OPERATOR DECISION
+## 3. G2: membership is signed by both sides — decided
 
 ### 3.1 The rule
 A hub **H** is in org **O** when:
@@ -134,7 +134,7 @@ Unchanged by this spec. Hub membership stays per hub, and a user rings from ever
 
 ---
 
-## 4. G3 and G4: org permissions, and creating things — OPERATOR DECISION
+## 4. G3 and G4: org permissions, and creating things — decided
 
 ### 4.1 G3: permissions
 | Permission | Allows |
@@ -166,7 +166,7 @@ Keeping the founder as an admin is allowed, but it's a choice the creation dialo
 
 ---
 
-## 5. G5: shared provider accounts — OPERATOR DECISION
+## 5. G5: shared provider accounts — decided
 
 ### 5.1 One shape for every provider account
 ```
@@ -211,22 +211,19 @@ The `address` field is `H(lp(kind) ‖ lp(canonical value))`, so the server can'
 
 ---
 
-## 6. G7: opt-outs per address — OPERATOR DECISION
+## 6. G7: opt-outs per address — decided
 
 - **A STOP applies to the address the person messaged.** That is what a person means by replying STOP, and what carriers expect of a sender.
 - **The scope is the address value, not its row:** `messagingContactHash(id, "suppression:" ‖ hex(address_hash), MESSAGING_HASH_KEY)`.
   - Reassigning the address, moving it with its hub, or removing it and adding it back all keep its opt-outs.
   - A new hub can never inherit a sender and message people who stopped it.
 - **A STOP to an address that is known but not currently assigned** is still recorded under that address, and answered with the provider's standard acknowledgement.
-- **Pre-migration opt-outs can't be re-scoped.** They exist only as HMACs under the deployment-wide scope, with no identifier to re-hash (§1).
-  - **Recommended:** keep that set as a permanent, read-only `legacy` scope, checked on **every** send from every address, alongside the per-address check.
-  - Nobody who said STOP before the migration is ever messaged again by any hub on the deployment. That is at least as strict as what they had.
-  - New STOPs go only to their address's scope.
+- **Every STOP goes only to its address's scope.** There is no deployment-wide set. The old deployment-wide suppression rows aren't carried over (G12), and their table is deleted.
 - **Alternative:** org-wide opt-outs, where a STOP to one sender stops every sender in the org. That is broader than the person asked for, and it tells each hub about opt-outs from others. It stays available as a future hub-side opt-in, not a default.
 
 ---
 
-## 7. G8: what the platform operator sees — OPERATOR DECISION
+## 7. G8: what the platform operator sees — decided
 
 - **Visible to the server and the platform operator, by necessity:** org ids, hub and address attachments as both chains claim them, accounts, quotas and counts.
 - **Sealed:** org names and descriptions, account display names and org settings. These are org documents under `org-members` (#2191). The platform's org list is ids with counts.
@@ -235,7 +232,7 @@ The `address` field is `H(lp(kind) ‖ lp(canonical value))`, so the server can'
 
 ---
 
-## 8. G9: moving, leaving, and losing an address — OPERATOR DECISION
+## 8. G9: moving, leaving, and losing an address — decided
 
 ### 8.1 Moving a hub
 1. **The receiving org invites:** it appends `hub_attach` and sends the invite (§3.2).
@@ -260,7 +257,7 @@ So an org can take back its number, but never silently, and never straight onto 
 
 ---
 
-## 9. G11: deleting an organisation — OPERATOR DECISION
+## 9. G11: deleting an organisation — decided
 
 - **Refused until every hub has left by its own link** (a move or an `org_leave`). A `hub_detach` by the org doesn't count: an org can't clear its own hubs out in order to delete itself. Each hub's admins are notified when deletion is requested.
 - **Numbers are not released at the provider** for **90 days** after they last routed to any hub. Until then, a deleted org's numbers are parked: they answer with a fixed "this line has moved" message and are not resold, so a crisis line can't be bought by someone else the day it's released. A number can be transferred out to a hub's own account before then.
@@ -269,7 +266,7 @@ So an org can take back its number, but never silently, and never straight onto 
 
 ---
 
-## 10. G10: org-scoped configuration — OPERATOR DECISION
+## 10. G10: org-scoped configuration — decided
 
 ### 10.1 Templates and ban lists
 - **Templates** take `owner_scope = organization`. Hub creation copies the template into the hub's own rows, as it already does for platform templates.
@@ -287,21 +284,18 @@ Hub-chain opt-ins that concern an org carry `{org, orgGenesis}`:
 
 ---
 
-## 11. G12: migrating the pilot — OPERATOR DECISION
+## 11. G12: existing data — decided
 
-One admin-client job, run after #2963's hub chains exist. **The release that deletes the old paths waits until every step passes on the pilot.**
-
-1. **Pre-checks, reported and never auto-resolved:**
-   - duplicate `hubs.phone_number` values (§1). The operator assigns each number to one hub.
-   - hubs that share the one messaging sender. **Each one needs its own sender** (number, bot or channel), provisioned before cutover. A hub without one keeps its calls, but has no messaging until it has one. The job lists them.
-2. **Create one org.** The founder is the admin running the job.
-3. **Move the accounts:** the null-hub telephony row and the messaging accounts, already sealed under #3031, become `organization`-scope accounts. Each hub's own `provider_configs` rows become `hub`-scope accounts.
-4. **Attach and offer:** the org appends `hub_attach` per hub, and `address_offer` per address. The hub side (the org policy, and an address policy per address) is a pending job for each hub's admins: "confirm your organisation and your numbers".
-5. **Until a hub's admins confirm:** its numbers keep routing to it. They were its own before the migration, which the job records as the bootstrap acceptance. It has no org search or org ban list.
-6. **Re-point messaging webhooks** to the address-routed endpoint through the provider API, where it allows that. Otherwise the job prints a checklist, and the release waits on it.
-7. **Opt-outs:** the deployment-wide set becomes the `legacy` scope (§6). Nothing is copied or re-hashed.
-
-**Nothing reads the deleted deployment-wide paths after this release.**
+**The operator decided on 2026-11-26 that no existing data is migrated.** There is no migration job, no pre-check and no bootstrap acceptance. The release replaces the deployment-wide model outright:
+- **Deleted, not converted:**
+  - `system_settings.messaging_config`;
+  - the deployment-wide `provider_configs` row (`hub_id` null) and the `TWILIO_*` env fallback;
+  - the deployment-wide suppression set;
+  - the messaging `?hub=` parameter;
+  - `hubs.phone_number` and `getHubByPhone`.
+- **Duplicate numbers can't recur:** `provider_addresses` holds each address once (`UNIQUE(kind, value)`, §5.1), and an address routes only to the one hub that accepted it (§5.2).
+- **A deployment starts empty.** Its first admin founds an org (§2, `genesis`) and creates the first hub through it (§4.2). Every hub exists inside an org from the start, so the "unattached" state comes only from leaving or being detached (§3.1).
+- **#3031 still ships first.** It protects the messaging secrets on deployments running until this release, and it doesn't wait on it.
 
 ---
 
@@ -319,7 +313,7 @@ One admin-client job, run after #2963's hub chains exist. **The release that del
 - **Worker:**
   - `organizations`, `org_chain_links` and the provider tables (named-owner-scope CHECK);
   - address routing for messages;
-  - the `legacy` suppression scope beside per-address scopes;
+  - per-address suppression scopes, with the deployment-wide set deleted;
   - hub `setup` status;
   - the address withdraw notice;
   - the 90-day number parking;
@@ -349,7 +343,7 @@ Mobile gets the invite, acceptance, alerts and read-only org views. iOS is verif
 - On real clients, an org admin with no hub role can't read any record in their org's hubs, and can't append a valid hub link.
 - An address offered by an org but not accepted by a hub never delivers traffic to that hub. Moving an address between hubs needs the losing hub's release, or the 7-day alerted notice.
 - A hub created through a hand-over has no founder-held escrow, connector or epoch secret that still opens new data.
-- A STOP to one address doesn't suppress another. It survives reassignment and re-adding. Every pre-migration opt-out still blocks every send.
+- A STOP to one address doesn't suppress another. It survives reassignment and re-adding. There is no deployment-wide suppression set.
 - A messaging webhook with `?hub=` and no matching address is refused. Calls in progress across the release are unaffected.
 - Moving a hub needs no re-encryption, and its records open on every client afterwards.
 
@@ -370,7 +364,7 @@ An independent review found 4 high, 8 medium and 1 low severity defects in the f
   - org-only address assignment let an org admin redirect a hub's number (§5.2, §8.3);
   - the founder hand-over left escrow, connectors and epoch secrets with the founder (§4.2);
   - the opt-out copy couldn't run against HMAC-only storage (§6);
-  - the shared sender had no migration path (§11).
+  - the shared sender had no migration path (§11; moot since G12 decided that nothing is migrated).
 - **Medium:**
   - the provider-console exposure was understated (§5.3);
   - hub opt-ins weren't bound to an org (§10.2);
@@ -380,11 +374,11 @@ An independent review found 4 high, 8 medium and 1 low severity defects in the f
   - a STOP to an unassigned address, and address ids by row (§6);
   - `org-members` had no derivable membership, and invites showed only an id (§3.2, §4.1);
   - the credential and address commitments were unverifiable (§5.1, §5.2).
-- **Low:** duplicate phone numbers, and multi-org ringing (§1, §3.3, §11).
+- **Low:** duplicate phone numbers, and multi-org ringing (§1, §3.3, §11; duplicates are now prevented by `UNIQUE(kind, value)`).
 - **Lesser:** the genesis fields, the bundle label, and the org head anchor (§2).
 
 ---
 
 ## 15. Sign-off
 
-The operator signs off G1–G12 on #2294. That includes the §10.2 amendment to #3027 X3.
+The operator signed off G1–G11 on #2294 on 2026-11-26, every decision as recommended, including the §10.2 amendment to #3027 X3. G12 was decided as no data migration (§11). Build briefs are on #2294.
