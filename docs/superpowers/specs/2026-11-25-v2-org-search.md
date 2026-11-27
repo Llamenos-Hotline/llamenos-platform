@@ -27,7 +27,7 @@ for. **The server must not be able to tell that two hubs hold the same value** (
 ## 1. Today, measured
 
 - `GET /records?crossHub=true` lists records across every hub where the caller holds `cases:read-cross-hub` (`apps/worker/routes/records.ts:169-190`). It matches blind-index tokens in SQL.
-- Whether any of this is allowed is a **deployment-wide** switch, `platform_settings.cross_hub_sharing_enabled`, set with `settings:manage-cms` (`apps/worker/routes/entity-schema.ts:144-190`, `apps/worker/db/schema/settings.ts:40-45`). That is the platform operator deciding hub data access, which goes against D1.
+- Whether any of this is allowed is a **deployment-wide** switch, `platform_settings.cross_hub_sharing_enabled`, set with `settings:manage-cms` (`apps/worker/routes/entity-schema.ts:144-190`, `apps/worker/db/schema/settings.ts:41`). That is the platform operator deciding hub data access, which goes against D1.
 - Today's tokens come from each hub's key (`blind_index.rs`), and in practice they are plaintext status values (#2779). Cross-hub token matching therefore compares values directly.
 - Desktop, iOS and Android all call the cross-hub listing (`src/client/routes/cases.tsx`, `CaseManagementViewModel.swift`, `CaseManagementViewModel.kt`).
 
