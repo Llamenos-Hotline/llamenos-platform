@@ -1007,7 +1007,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     return result
   },
 
-  // --- Backup generation / restore (v5 container) ---
+  // --- Backup generation / restore (v6 container) ---
   //
   // These honour their arguments and really encrypt, so an E2E can round-trip a
   // backup and a wrong credential is actually rejected. The container shape
