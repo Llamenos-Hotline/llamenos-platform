@@ -27,19 +27,48 @@ const ROOT = resolve(import.meta.dirname, '..', '..', '..')
 
 const git = (root: string, ...args: string[]): string => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim()
 
-/** The newest `v*` tag reachable from `ref` whose commit is not `ref` itself — the previous release.
- *  Throws when the answer cannot be trusted: a shallow clone with no tags reads as "no previous
- *  release", which would turn an unchanged snapshot into a demand for a sign-off — or hide a changed one. */
+const SEMVER = /^v?(\d+)\.(\d+)\.(\d+)$/
+const semverOf = (v: string): [number, number, number] | undefined => {
+  const m = SEMVER.exec(v)
+  return m === null ? undefined : [Number(m[1]), Number(m[2]), Number(m[3])]
+}
+const semverLess = (a: [number, number, number], b: [number, number, number]): boolean =>
+  a[0] !== b[0] ? a[0] < b[0] : a[1] !== b[1] ? a[1] < b[1] : a[2] < b[2]
+
+/** The version the candidate is: its own tag name, or the `package.json` version of its tree. */
+function candidateVersion(ref: string, root: string): [number, number, number] | undefined {
+  const fromTag = semverOf(ref)
+  if (fromTag !== undefined) return fromTag
+  try {
+    const pkg = JSON.parse(execFileSync('git', ['-C', root, 'show', `${ref}:package.json`], { encoding: 'utf8' })) as { version?: string }
+    return semverOf(pkg.version ?? '')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The previous release: the newest whole `vX.Y.Z` tag reachable from `ref` whose version is STRICTLY LOWER
+ * than the candidate's and whose commit is not the candidate. Tags are mutable, so the baseline is never
+ * "the newest tag" — a forged high tag cannot be chosen as the baseline for a lower candidate. (Protecting
+ * `v*` tags in the repository settings is still the control that stops a tag being moved.) Throws when the
+ * answer cannot be trusted: a shallow clone with no tags reads as "no previous release", which would turn
+ * an unchanged snapshot into a demand for a sign-off — or hide a changed one.
+ */
 export function previousReleaseTag(ref = 'HEAD', root = ROOT): string | undefined {
   const head = git(root, 'rev-parse', `${ref}^{commit}`)
   // Whole releases only: `v0.21.25`, not the per-platform `v0.21.25-android` tags cut beside it.
-  const tags = git(root, 'tag', '--merged', ref, '--list', 'v[0-9]*', '--sort=-v:refname').split('\n').filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
+  const tags = git(root, 'tag', '--merged', ref, '--list', 'v[0-9]*', '--sort=-v:refname').split('\n').filter((t) => SEMVER.test(t))
   if (tags.length === 0 && git(root, 'rev-parse', '--is-shallow-repository') === 'true') {
     throw new TrustExtractionError(
       'this is a shallow clone with no release tags, so the previous release cannot be found — fetch with full history and tags (git fetch --unshallow --tags) and re-run',
     )
   }
-  return tags.find((t) => git(root, 'rev-parse', `${t}^{commit}`) !== head)
+  const own = candidateVersion(ref, root)
+  return tags.find((t) => {
+    const v = semverOf(t) as [number, number, number]
+    return (own === undefined || semverLess(v, own)) && git(root, 'rev-parse', `${t}^{commit}`) !== head
+  })
 }
 
 /** True for the two CI contexts that PRODUCE a release: the release PR and a release tag push. */

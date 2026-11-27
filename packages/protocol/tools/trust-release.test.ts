@@ -67,6 +67,8 @@ describe('the release boundary, end to end in a throwaway repo', () => {
     mkdirSync(dirname(join(dir, f)), { recursive: true })
     cpSync(join(real, f), join(dir, f))
   }
+  // The tree is the NEXT release (1.1.0); v1.0.0 is the one before it.
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ version: '1.1.0' }))
   run('init', '-q', '-b', 'main')
   run('add', '-A')
   run('commit', '-q', '-m', 'release 1')
@@ -116,6 +118,11 @@ describe('the release boundary, end to end in a throwaway repo', () => {
     const { verdict } = runReleaseCheck({ root: dir, candidate: 'HEAD' })
     expect(verdict.ok).toBe(true)
     expect(verdict.changed).toBe(true)
+  })
+
+  test('a forged HIGHER tag is never the baseline: only versions strictly below the candidate count', () => {
+    run('tag', 'v9.9.9') // cut by someone with tag access, on the weakened tree, to make the weakening look like the status quo
+    expect(previousReleaseTag('HEAD', dir)).toBe('v1.0.0')
   })
 
   test('the local publish scripts call the check before they sign or upload', () => {

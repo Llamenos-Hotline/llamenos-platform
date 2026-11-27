@@ -194,6 +194,15 @@ digest. It runs:
 - **Weakest point: the release boundary is local.** CI never publishes, so the release check in the
   publish scripts is easier to skip than a required check. The mitigation is the second copy in CI on
   the release PR / tag; neither stops an operator who deliberately bypasses both.
+- **The baseline is a tag, and tags move.** The previous release is the newest whole `vX.Y.Z` tag
+  strictly below the candidate's version, never "the newest tag", so a forged high tag cannot be picked.
+  Protecting `v*` tags in the repository settings is still the control that stops one being moved or
+  planted below the candidate; that is a repository setting, not something this check can enforce.
+- **The check reads the tag, not the artifact.** `sign-artifacts.sh` / `promote-release.sh` derive the
+  version from the release work directory's name and check `vX.Y.Z`. Nothing in the artifacts records the
+  commit they were built from, so "these binaries were built from that tag" rests on the release
+  procedure (`fetch-staging.sh` pulls the artifacts CI built for that tag). Build provenance recorded in
+  the artifacts would close it.
 - **The sign-off ledger is a record, not a proof of identity.** `trust:signoff` writes a name; what makes
   it mean something is that the ledger is a CODEOWNERS file the write gate holds, so a PR that adds an
   entry lands only with the approver's own sign-off on that exact head.
