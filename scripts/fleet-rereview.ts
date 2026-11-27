@@ -12,44 +12,16 @@
  * Acts as whichever `gh` identity is active: it must be one GitHub accepts as
  * a requester (not the PR's author).
  */
-import { gh, describeGhFailure, REPO } from '../orchestrator/src/gh.js'
+import { describeGhFailure } from '../orchestrator/src/gh.js'
 import { REVIEW_RERUN_WORKFLOW } from '../orchestrator/src/ci.js'
-import { rerunReview, type RerunDeps, type RerunRun } from '../orchestrator/src/review-rerun.js'
+import { rerunReview } from '../orchestrator/src/review-rerun.js'
+import { liveRerunDeps } from '../orchestrator/src/review-unstick.js'
 
-const deps: RerunDeps = {
-  async readPr(pr) {
-    const j = JSON.parse(await gh(['pr', 'view', String(pr), '-R', REPO, '--json', 'number,headRefOid,headRefName,author,reviewRequests'])) as {
-      number: number; headRefOid: string; headRefName: string; author: { login: string }
-      reviewRequests: Array<{ login?: string }>
-    }
-    return {
-      number: j.number, headSha: j.headRefOid, branch: j.headRefName, author: j.author.login,
-      requestedReviewers: j.reviewRequests.flatMap((r) => (r.login === undefined ? [] : [r.login])),
-    }
-  },
-  async reviewRequestEvents(pr, login) {
-    const out = await gh([
-      'api', '--paginate', `repos/${REPO}/issues/${pr}/events?per_page=100`, '--jq',
-      `.[] | select(.event=="review_requested" and (.requested_reviewer.login|ascii_downcase)=="${login.toLowerCase()}") | .created_at`,
-    ])
-    return out.split('\n').filter((l) => l.length > 0)
-  },
-  async removeReviewer(pr, login) {
-    await gh(['api', '-X', 'DELETE', `repos/${REPO}/pulls/${pr}/requested_reviewers`, '-f', `reviewers[]=${login}`, '--silent'])
-  },
-  async addReviewer(pr, login) {
-    await gh(['api', '-X', 'POST', `repos/${REPO}/pulls/${pr}/requested_reviewers`, '-f', `reviewers[]=${login}`, '--silent'])
-  },
-  async rerunRuns(headSha) {
-    const out = await gh([
-      'api', `repos/${REPO}/actions/workflows/${REVIEW_RERUN_WORKFLOW}/runs?event=pull_request&head_sha=${headSha}&per_page=20`,
-      '--jq', '.workflow_runs',
-    ])
-    return JSON.parse(out) as RerunRun[]
-  },
-  now: () => new Date(),
-  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-}
+// The live deps are shared with the fleet's own review-unstick pass (#3113),
+// comment-review recovery included: when the plain request emits no event
+// (a pending CODEOWNER request), a COMMENT review is submitted as the
+// reviewer from the operator's keyring and the request is re-added.
+const deps = liveRerunDeps((msg) => console.error(msg))
 
 const pr = Number(process.argv[2])
 if (!Number.isInteger(pr) || pr < 1) {

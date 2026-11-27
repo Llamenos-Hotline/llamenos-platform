@@ -24,6 +24,8 @@ export interface RerunRun {
   head_sha: string
   created_at: string
   html_url: string
+  /** `queued` | `in_progress` | `completed` — absent on a hand-built row. */
+  status?: string
 }
 
 export interface RerunPr {
@@ -45,9 +47,28 @@ export interface RerunDeps {
   rerunRuns(headSha: string): Promise<RerunRun[]>
   now(): Date
   sleep(ms: number): Promise<void>
+  /**
+   * The recovery for a request that emitted no event (#3113): submit a
+   * COMMENT review on `headSha` as `login`, the requested reviewer. A review
+   * the reviewer SUBMITTED really empties the pending list (a CODEOWNER's
+   * request is re-added only against a REST DELETE, not against a submitted
+   * review), after which the next POST is a true add and emits
+   * `review_requested`. Optional because acting as `login` takes that
+   * login's credential, which only some callers hold; absent, the no-event
+   * outcome stays the failure it always was, naming this very remedy.
+   * THROWS when it could not post (no credential, wrong identity, GitHub
+   * refused) — the caller reports it, never swallows it.
+   */
+  commentReviewAs?(pr: number, login: string, headSha: string): Promise<void>
+  /** Says what the recovery did, so a PR it touched never looks idle (rule V). */
+  log?(msg: string): void
 }
 
-export type RerunResult = { ok: true; run: RerunRun } | { ok: false; reason: string }
+export type RerunResult =
+  /** `viaCommentReview` is present (and true) ONLY when the plain request
+   *  emitted no event and the comment-review recovery is what got it going. */
+  | { ok: true; run: RerunRun; viaCommentReview?: true }
+  | { ok: false; reason: string }
 
 /** GitHub's clock and ours are not the same clock. */
 export const RERUN_CLOCK_SKEW_MS = 15_000
@@ -72,19 +93,35 @@ export async function rerunReview(deps: RerunDeps, prNumber: number): Promise<Re
   if (pr.requestedReviewers.some((l) => l.toLowerCase() === ask.toLowerCase())) await deps.removeReviewer(prNumber, ask)
   await deps.addReviewer(prNumber, ask)
 
-  const after = (await deps.reviewRequestEvents(prNumber, ask)).length
+  let after = (await deps.reviewRequestEvents(prNumber, ask)).length
+  let viaCommentReview = false
+  if (after <= before && deps.commentReviewAs !== undefined) {
+    // The CODEOWNER dead end (#1471, #3113): the request is still pending, so
+    // nothing the requester can do emits an event. A comment review submitted
+    // AS the reviewer empties the list for real; the POST that follows is then
+    // a true add. Comment, never approve: it asserts nothing about the code.
+    deps.log?.(
+      `review-rerun: #${prNumber} request for ${ask} emitted no event (${before} -> ${after}) — ` +
+      `submitting a comment review as ${ask} to clear the pending request, then re-requesting (#3113)`,
+    )
+    await deps.commentReviewAs(prNumber, ask, pr.headSha)
+    await deps.addReviewer(prNumber, ask)
+    viaCommentReview = true
+    after = (await deps.reviewRequestEvents(prNumber, ask)).length
+  }
   if (after <= before) {
     return {
       ok: false,
       reason: `requesting \`${ask}\` emitted no review_requested event on #${prNumber} (${before} before, ${after} after), ` +
         'so nothing started — GitHub re-adds a CODEOWNER request the instant it is removed (#1471); submit a ' +
-        'comment review as that login, then re-add it',
+        'comment review as that login, then re-add it' +
+        (viaCommentReview ? ' — that comment review WAS submitted and the re-add still emitted no event' : ''),
     }
   }
 
   for (let i = 0; i < RERUN_POLL_ATTEMPTS; i++) {
     const run = runStartedForRequest(await deps.rerunRuns(pr.headSha), pr.headSha, since)
-    if (run !== undefined) return { ok: true, run }
+    if (run !== undefined) return viaCommentReview ? { ok: true, run, viaCommentReview: true } : { ok: true, run }
     await deps.sleep(RERUN_POLL_MS)
   }
   return {
