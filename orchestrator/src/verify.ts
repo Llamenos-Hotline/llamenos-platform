@@ -2,16 +2,13 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve as resolvePath, sep } from 'node:path'
 import { checkScopeRouting } from './scope.js'
 import { reviewLanesFor } from './route.js'
 import { classifyImpact, isGeneratedArtifactPath } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS, TRUST_ANCHOR_APPROVERS } from './config.js'
-import {
-  comparesBaseContent, isShippedClientSource, secretFinding, secretRefusal, trustAnchorEntry, trustAnchorFinding,
-  trustAnchorRefusal,
-  type WriteFinding,
-} from './write-gate.js'
+import { secretFinding, secretRefusal, trustAnchorFinding, trustAnchorRefusal, type WriteFinding } from './write-gate.js'
+import type { TrustSnapshotChange } from '../../packages/protocol/tools/trust-snapshot.js'
 import { scrubSecrets } from './github-app.js'
 import { withVerificationMarker } from './review-and-merge-guards.js'
 import { resolveVitestNode, withNodeOnPath, type NodeResolutionDeps } from './node-runtime.js'
@@ -129,6 +126,14 @@ export interface VerifyReport {
    *  sign-off let it pass — present only when it touched one. Description:
    *  the decision is already in `passed`/`reasons`. */
   trustAnchors?: { files: string[]; approvedBy: string[] }
+  /**
+   * How the trust snapshot (`packages/protocol/tools/trust-snapshot.ts`) moved
+   * between the merge base and the head — present only when the diff touches a
+   * file the extractor reads. Information, not a gate: a changed snapshot is
+   * shown here and in the PR's own diff of `trust.snapshot.json`, and the human
+   * sign-off is asked for where a client artifact is produced (#3069).
+   */
+  trustSnapshot?: TrustSnapshotChange
   /**
    * The other lanes whose files this diff touches, each with the files that
    * name it — who should REVIEW the PR (#3056). Routing metadata only: a
@@ -316,6 +321,72 @@ export function isSafeTestPath(p: string, repoRoot?: string): boolean {
   if (!SAFE_TEST_PATH_RE.test(p)) return false
   if (repoRoot !== undefined && !resolvesWithinRoot(repoRoot, p)) return false
   return true
+}
+
+/**
+ * The trust-snapshot CLI of the checkout this gate runs from — trusted code,
+ * never the head's (#3069). Run as a child process, not imported: nothing in
+ * `orchestrator/src` imports from outside it (the credential-boundary rail in
+ * `tests/orchestrator/forgery-rails.ts`), so the extractor cannot become a
+ * path by which a credential export is re-exported back into the gate.
+ */
+const TRUST_SNAPSHOT_CLI = resolvePath(import.meta.dirname, '..', '..', 'packages', 'protocol', 'tools', 'trust-snapshot-cli.ts')
+
+/** The child's whole environment: enough to find `bun` and its cache — no
+ *  token, no agent socket, nothing that authenticates as anyone. */
+function trustSnapshotEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG']) {
+    const value = process.env[key]
+    if (value !== undefined) env[key] = value
+  }
+  return env
+}
+
+function isTrustSnapshotChange(v: unknown): v is TrustSnapshotChange {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  const optString = (k: string): boolean => o[k] === undefined || typeof o[k] === 'string'
+  return typeof o['changed'] === 'boolean'
+    && Array.isArray(o['changes']) && o['changes'].every((c) => typeof c === 'string')
+    && optString('baseDigest') && optString('headDigest') && optString('error')
+    && (o['committedStale'] === undefined || typeof o['committedStale'] === 'boolean')
+}
+
+/**
+ * How the trust snapshot moved between the merge base of `base` and `head`, and `head`, in `worktree`, or
+ * `undefined` when no changed file is one the extractor reads. Both sides are
+ * read from git objects, so the head is data and none of its code runs. Never
+ * throws: a comparison that could not run is reported in `error`, never read
+ * as "nothing changed".
+ */
+async function trustSnapshotChange(
+  worktree: string, base: string, head: string, changedFiles: readonly string[],
+): Promise<TrustSnapshotChange | undefined> {
+  const failed = (why: string): TrustSnapshotChange => ({ changed: false, changes: [], error: `the trust snapshot could not be read: ${why}` })
+  const result = await new Promise<{ code: number | null; stdout: string; stderr: string } | { spawnError: string }>((done) => {
+    const child = spawn('bun', [TRUST_SNAPSHOT_CLI, 'compare', '--root', resolvePath(worktree), base, head], {
+      cwd: dirname(TRUST_SNAPSHOT_CLI), env: trustSnapshotEnv(), stdio: ['pipe', 'pipe', 'pipe'], timeout: 5 * 60_000,
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8').on('data', (d: string) => { stdout += d })
+    child.stderr.setEncoding('utf8').on('data', (d: string) => { stderr += d })
+    child.on('error', (e) => done({ spawnError: e.message }))
+    child.on('close', (code) => done({ code, stdout, stderr }))
+    child.stdin.on('error', () => { /* the child exited early; its exit status says why */ })
+    child.stdin.end(JSON.stringify(changedFiles))
+  })
+  if ('spawnError' in result) return failed(`the extractor could not be started (${result.spawnError})`)
+  if (result.code !== 0) return failed(`the extractor exited ${String(result.code)}: ${scrubSecrets(result.stderr.trim().split('\n').slice(-3).join(' '))}`)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(result.stdout)
+  } catch {
+    return failed('the extractor printed something that is not JSON')
+  }
+  if (parsed === null) return undefined
+  return isTrustSnapshotChange(parsed) ? parsed : failed('the extractor printed a result of the wrong shape')
 }
 
 async function runGit(worktree: string, args: string[]): Promise<string | undefined> {
@@ -1022,8 +1093,6 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   // The files the head still HAS — everything changed except deletions.
   // Their bytes are what the secret class reads; a deleted file has none.
   const presentRaw = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, '--name-only', '--diff-filter=d', range])
-  // ...and the ones this diff CREATES, which have no earlier bytes to compare.
-  const addedRaw = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, '--name-only', '--diff-filter=A', range])
 
   const reasons: string[] = []
   // If the present-file list itself could not be computed, every changed
@@ -1052,37 +1121,15 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   }
   if (secrets.length > 0) reasons.push(secretRefusal(secrets))
 
-  // CLASS 2 — trust anchors. Not a scope question (the owning lane still
-  // owns the file): a human sign-off on this exact commit is the remedy.
-  // Registered files need no bytes; every other changed file under a
-  // shipped-client root is judged by comparing its trust lines at the merge
-  // base against the head (`trustAnchorFinding`), from blobs — never from
-  // diff hunks, which a binary file does not have.
-  // Files whose earlier bytes the trust check compares: every changed
-  // shipped-client file outside the registry, registered files knope bumps
-  // (`releaseBump`), whose version-only change is not held, and registered
-  // files judged by a content rule (`contentRule`).
-  const shippedOthers = changedFiles.filter((f) => {
-    const entry = trustAnchorEntry(f)
-    return entry === undefined ? isShippedClientSource(f) : comparesBaseContent(entry)
-  })
-  const added = new Set(changedFilesFrom(addedRaw ?? ''))
-  const mergeBase = shippedOthers.length === 0 ? undefined : (await runGit(worktree, ['merge-base', baseRef, branch]))?.trim()
-  const baseBytes = mergeBase === undefined ? new Map<string, Buffer>() : await readHeadBlobs(worktree, mergeBase, shippedOthers)
+  // CLASS 2 — the files that implement the trust control (`TRUST_ANCHOR_FILES`,
+  // #3069): the sign-off ledger and the snapshot extractor and its tests. A
+  // change to one is invisible to the snapshot it governs, so a human signs off
+  // on this exact commit. Not a scope question (the owning lane still owns the
+  // file). A file that merely CARRIES a pin is not judged here — see
+  // `trustSnapshot` below: what changed is a value, and a value is compared.
   const trust: WriteFinding[] = []
   for (const f of changedFiles) {
-    // A content-judged registered file (`contentRule`) is compared like an
-    // unregistered one, so it needs the same guard: an unreadable base must
-    // not read as "the file is new".
-    const entry = trustAnchorEntry(f)
-    const comparedByContent = entry === undefined || entry.contentRule !== undefined
-    if (comparedByContent && shippedOthers.includes(f) && (addedRaw === undefined || (!added.has(f) && !baseBytes.has(f)))) {
-      // The file existed before this diff but its earlier bytes cannot be
-      // read, so a trust line it REMOVED would be invisible — hold it.
-      trust.push({ file: f, why: 'its content at the merge base could not be read, so a removed trust line could not be ruled out' })
-      continue
-    }
-    const why = trustAnchorFinding(f, baseBytes.get(f), headBytes.get(f))
+    const why = trustAnchorFinding(f)
     if (why !== undefined) trust.push({ file: f, why })
   }
   let trustAnchors: VerifyReport['trustAnchors']
@@ -1097,6 +1144,10 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     trustAnchors = { files: trust.map((t) => t.file), approvedBy }
     if (approvedBy.length === 0) reasons.push(trustAnchorRefusal(trust, verifiedCommit, read))
   }
+  // The trust snapshot: shown, never gated. Read from git objects at the merge
+  // base and at the head, so the head is data and no code from it runs. Only
+  // computed when the diff touches something the extractor reads.
+  const trustSnapshot = await trustSnapshotChange(worktree, baseRef, branch, changedFiles)
   // CLASS 3 — supply chain. CI, deploy and the files that decide what the
   // scanners accept, written by a PR whose own lane does not own them. The one
   // outside-the-lane class that stays a refusal (see `checkScopeRouting`): only
@@ -1117,7 +1168,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   // Scope failure is immediate and unconditional: do not spend time running
   // tests for a diff that already touched what it must not have.
   if (scopeFailed) {
-    return { passed: false, reasons, changedFiles, addedLines, impact, impactReasons, verifiedCommit, trustAnchors, ...(reviewLanes === undefined ? {} : { reviewLanes }) }
+    return { passed: false, reasons, changedFiles, addedLines, impact, impactReasons, verifiedCommit, trustAnchors, trustSnapshot, ...(reviewLanes === undefined ? {} : { reviewLanes }) }
   }
 
   const routes = input.skipTests === true ? [] : routesFor(changedFiles)
@@ -1185,6 +1236,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     testResults,
     verifiedCommit,
     trustAnchors,
+    trustSnapshot,
     ...(reviewLanes === undefined ? {} : { reviewLanes }),
   }
 }

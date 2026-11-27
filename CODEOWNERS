@@ -275,19 +275,17 @@ tests/orchestrator/                 @rhonda-rodododo
 **/.vault-pass*                     @rhonda-rodododo
 **/*.vault-pass                     @rhonda-rodododo
 
-# ─── A shipped client's TLS trust anchors ──────────────────────────────
-# Mirrors TRUST_ANCHOR_FILES (orchestrator/src/config.ts), #2556. The fleet's
-# write gate holds a PR touching any of these until the operator signs off on
-# its exact head; this is the half GitHub enforces, so the operator sees the
-# change even on a route the fleet gate does not judge. A wrong pin here
-# disconnects every installed client, and only an app-store release undoes it.
-# guards.test.ts fails if a registry entry is not owned here.
-apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt @rhonda-rodododo
-apps/android/app/src/main/res/xml/network_security_config.xml @rhonda-rodododo
-apps/android/app/src/main/AndroidManifest.xml @rhonda-rodododo
-apps/ios/Sources/Services/CertificatePinning.swift @rhonda-rodododo
-apps/ios/Sources/App/Info.plist     @rhonda-rodododo
-apps/ios/project.yml                @rhonda-rodododo
-apps/desktop/src/cert_pin.rs        @rhonda-rodododo
-apps/desktop/src/api_config.rs      @rhonda-rodododo
-apps/desktop/src/net.rs             @rhonda-rodododo
+# ─── The control over a shipped client's TLS trust (#3069) ─────────────
+# Mirrors TRUST_ANCHOR_FILES (orchestrator/src/config.ts). What a client trusts
+# is a VALUE now, tracked in packages/protocol/trust.snapshot.json and gated where
+# an artifact is produced — so the files that merely CARRY a pin (ApiService.kt,
+# the manifest, Info.plist, project.yml, net.rs …) are no longer owned here, and
+# touching them costs nobody a signature. What stays owned is the control itself:
+# a change to the extractor, the release check, the tests that break them, or the
+# sign-off ledger is invisible to the snapshot it governs. guards.test.ts fails if
+# a registry entry is not owned here.
+docs/security/trust-signoffs.json   @rhonda-rodododo
+packages/protocol/tools/trust-snapshot.ts      @rhonda-rodododo
+packages/protocol/tools/trust-snapshot-cli.ts  @rhonda-rodododo
+packages/protocol/tools/trust-snapshot.test.ts @rhonda-rodododo
+packages/protocol/tools/trust-release.test.ts  @rhonda-rodododo

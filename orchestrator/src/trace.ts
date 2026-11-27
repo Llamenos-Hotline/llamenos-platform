@@ -95,6 +95,32 @@ export function buildGateTrace(input: GateTraceInput): string {
  * stage. Empty when the report names no other lane, so a single-lane PR's
  * summary is unchanged.
  */
+/** Most snapshot changes one summary lists; the rest are in `bun run trust:diff`. */
+const MAX_SNAPSHOT_LINES = 40
+
+/**
+ * What the trust snapshot did, stated plainly (#3069): silent when it did not
+ * move (no gate, no noise); otherwise what moved and what happens next. Shown,
+ * never a failure — the sign-off is asked for where a client artifact ships.
+ */
+export function trustSnapshotLines(report: Pick<VerifyReport, 'trustSnapshot'>): string[] {
+  const t = report.trustSnapshot
+  if (t === undefined) return []
+  if (t.error !== undefined) {
+    return [`- trust snapshot: ${t.error}. The repo test \`trust-snapshot.test.ts\` fails until the extractor or the source is fixed (#3069)`]
+  }
+  if (!t.changed) return []
+  const shown = t.changes.slice(0, MAX_SNAPSHOT_LINES).map((c) => `    ${c}`)
+  const more = t.changes.length > MAX_SNAPSHOT_LINES ? [`    … and ${t.changes.length - MAX_SNAPSHOT_LINES} more (bun run trust:diff <base>)`] : []
+  return [
+    `- trust snapshot CHANGED ${t.baseDigest?.slice(0, 12)} → ${t.headDigest?.slice(0, 12)} (${t.changes.length} change${t.changes.length === 1 ? '' : 's'}) — shown here, not gated:` +
+      ` no client artifact is produced from it until a human records a sign-off naming digest ${t.headDigest} (bun run trust:release-check)` +
+      (t.committedStale === true ? '. packages/protocol/trust.snapshot.json is NOT updated to match — run bun run trust:snapshot' : ''),
+    ...shown,
+    ...more,
+  ]
+}
+
 export function reviewLanesLines(report: Pick<VerifyReport, 'reviewLanes'>): string[] {
   const lanes = report.reviewLanes ?? []
   if (lanes.length === 0) return []

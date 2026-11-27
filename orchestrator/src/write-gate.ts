@@ -1,9 +1,8 @@
 import {
-  CERTIFICATE_ONLY_PATTERNS, matchesPath, matchesSecretPath, publicCertificateVerdict,
+  CERTIFICATE_ONLY_PATTERNS, matchesSecretPath, publicCertificateVerdict,
 } from './fragments.js'
 import { SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type TrustAnchorFile } from './config.js'
-import { findPrivateKeyMaterial, latin1, textViews } from './key-material.js'
-import { xcodegenTrustFinding } from './xcodegen-trust.js'
+import { findPrivateKeyMaterial, latin1 } from './key-material.js'
 
 /**
  * The write gate's classification of a changed file (#2556). Three answers,
@@ -15,12 +14,13 @@ import { xcodegenTrustFinding } from './xcodegen-trust.js'
  *    key material (`findPrivateKeyMaterial`), wherever it sits — `tests/`,
  *    `testdata/` and a `.ts` source file included. A path is a guess; the
  *    bytes are the fact, so both are checked.
- * 2. **trust anchor** — a file that decides which certificates a shipped
- *    client accepts (`TRUST_ANCHOR_FILES`), or a change to a trust line in
- *    any other shipped client file (`TRUST_SIGNATURES`, `trustProjection`).
- *    Writable, but it lands only once a human in `TRUST_ANCHOR_APPROVERS` has
- *    signed off on the exact commit under judgement (`trustAnchorApprovers`). A pin list is source code, not a key,
- *    so no content rule could put it here — the registry does.
+ * 2. **trust anchor** — a file that IS the trust control (`TRUST_ANCHOR_FILES`:
+ *    the sign-off ledger, the snapshot extractor and its tests). Writable, but
+ *    it lands only once a human in `TRUST_ANCHOR_APPROVERS` has signed off on
+ *    the exact commit under judgement (`trustAnchorApprovers`). Since #3069 a
+ *    file that merely CARRIES a pin is not here: what a shipped client trusts
+ *    is a value, tracked by the trust snapshot and gated where a client
+ *    artifact is produced, not by which file a diff happens to touch.
  * 3. **writable** — everything else, including a public certificate chain
  *    used as test input, which is published data and carries no secret.
  *
@@ -100,241 +100,23 @@ export function secretFinding(
 // Trust anchors.
 // ---------------------------------------------------------------------------
 
-/**
- * Where shipped client code lives — the only places a trust SIGNATURE means a
- * shipped trust decision. Tests, debug variants (`apps/android/app/src/debug/`
- * carries its own `network_security_config.xml` with no pins, by design) and
- * tooling are excluded: they do not ship, and their trust code is test input.
- */
-export const SHIPPED_CLIENT_SOURCE_ROOTS: readonly string[] = [
-  // EVERY Android source set, not just `main/`: a `release/` (or flavour)
-  // source set overrides `main/` resources in the build that ships, so a
-  // `src/release/res/xml/network_security_config.xml` would replace the pin
-  // set without touching the registered file. The non-shipping sets are
-  // excluded by `ANDROID_NON_SHIPPING_SOURCE_SET` below.
-  'apps/android/app/src/',
-  // The Android build script decides which manifest, resources and
-  // BuildConfig values ship, so a pin injected or a config swapped there ships.
-  'apps/android/app/build.gradle.kts',
-  'apps/ios/Sources/',
-  // XcodeGen adds every file under a target's source paths to the build, so
-  // the app target's `Resources/` paths ship exactly as `Sources/` does — a
-  // `.swift` file dropped in `Resources/Fonts` is compiled into the app.
-  'apps/ios/Resources/',
-  // XcodeGen's spec writes Info.plist keys — App Transport Security included —
-  // and says which sources and which Info.plist the app is built from.
-  'apps/ios/project.yml',
-  'apps/desktop/src/',
-]
-
-/**
- * The Android source sets that never reach an installed release build, by
- * EXACT name: unit and instrumentation tests (each, and per declared build
- * type), test fixtures, and the `debug` build type (`src/debug/` carries its
- * own pin-free `network_security_config.xml` by design). An allowlist of
- * exclusions, never a prefix: a product flavour called `debugger` or
- * `testing` ships, so it is shipped source. Every other set — `release`, a
- * flavour, a flavour+release combination — ships. The build types are the
- * two `apps/android/app/build.gradle.kts` declares; a new one ships until it
- * is deliberately added here.
- */
-const ANDROID_NON_SHIPPING_SOURCE_SETS: ReadonlySet<string> = new Set([
-  'test', 'androidTest', 'testFixtures', 'debug',
-  'testDebug', 'testRelease', 'androidTestDebug', 'androidTestRelease',
-])
-
-const ANDROID_SRC = 'apps/android/app/src/'
-
-/** A line shape that carries a TLS trust decision in client source. */
-export interface TrustSignature {
-  /** Shown in the refusal: what the changed line is. */
-  name: string
-  re: RegExp
-}
-
-/**
- * The line shapes that MAKE a TLS trust decision in shipped client source:
- * a pin literal, or the API through which a client chooses which
- * certificates to accept. A diff that adds or removes one of these lines in
- * a file under `SHIPPED_CLIENT_SOURCE_ROOTS` is a trust-anchor change even
- * when the file is not in `TRUST_ANCHOR_FILES` — this is how "any future
- * equivalent" (#2556 property 3) is caught at the gate, not just in review:
- * a new `NewPinner.kt`, a `.certificatePinner(…)` call removed from a socket
- * builder, an `X509TrustManager` that trusts everything.
- *
- * Specific on purpose. Each was checked against the tracked shipped sources
- * (the discovery rail in `write-gate-properties.test.ts`): only the
- * registered files and a handful of named call sites contain any of them,
- * so an ordinary client change does not trip this.
- *
- * Deliberately NOT here: TLS library versions and features in `Cargo.toml`
- * or Gradle dependency blocks. A `rustls` bump is a supply-chain change with
- * its own gate (lockfiles, CODEOWNERS on manifests), not a change to which
- * certificates the client accepts.
- */
-export const TRUST_SIGNATURES: readonly TrustSignature[] = [
-  { name: 'an SPKI pin literal (sha256/…)', re: /sha256\/[A-Za-z0-9+/]{43}=/ },
-  {
-    // The manifest's `networkSecurityConfig` pointer is as load-bearing as the
-    // file it points at: deleting it silently drops every pin.
-    // The element itself, too: an override config with no pins at all is the
-    // shortest way to drop them.
-    name: 'an Android network-security setting',
-    re: /<(network-security-config|pin-set|pin\b|trust-anchors|certificates\b)|networkSecurityConfig|usesCleartextTraffic|cleartextTrafficPermitted/,
-  },
-  {
-    name: 'an OkHttp/JSSE trust hook',
-    re: /CertificatePinner|certificatePinner\(|X509\w*TrustManager|TrustManagerFactory|SSLContext|SSLSocketFactory|sslSocketFactory\(|HostnameVerifier|hostnameVerifier\(/,
-  },
-  {
-    name: 'an Apple Security trust API or App Transport Security key',
-    re: /\bSecTrust[A-Za-z]*|serverTrust|CertificatePinValidator|CertificatePins|NSAppTransportSecurity|NSAllowsArbitraryLoads|NSExceptionDomains|NSPinnedDomains/,
-  },
-  {
-    name: 'a rustls/reqwest trust hook',
-    re: /ServerCertVerifier|RootCertStore|danger_accept_invalid|add_root_certificate|tls_built_in_root_certs|\.dangerous\(\)|with_custom_certificate_verifier|ClientConfig::builder|\bwebpki|rustls::|cert_pin::/,
-  },
-  { name: 'a SIP TLS trust anchor', re: /[Tt]lsTrustAnchor/ },
-  {
-    // Indirection: which manifest, resource directories and Info.plist the
-    // shipped build is made from. Re-pointing one swaps every setting above
-    // without changing a line that names them.
-    name: 'a build-wiring setting that chooses what ships',
-    re: new RegExp([
-      // Gradle: source sets, the variants they belong to, and injected values.
-      // (XcodeGen's `project.yml` is registered with a structural content rule
-      // instead, `xcodegenTrustFinding`: YAML is not line-shaped, so no line
-      // rule could read it faithfully.)
-      'sourceSets', 'srcDirs?\\(', 'setSrcDirs', 'manifest\\.srcFile', 'manifestPlaceholders', 'resValue\\(',
-      'buildTypes', 'productFlavors', 'flavorDimensions', 'initWith\\(',
-    ].join('|')),
-  },
-]
+// ---------------------------------------------------------------------------
+// Trust anchors: the files that implement the control (#3069).
+// ---------------------------------------------------------------------------
 
 export function trustAnchorEntry(file: string): TrustAnchorFile | undefined {
   return TRUST_ANCHOR_FILES.find((e) => e.path === file)
 }
 
-/** True when a registered file's verdict depends on its bytes at BOTH sides
- *  (a release-bump allowance or a content rule), so the caller must read its
- *  merge-base bytes as well as the head's. */
-export function comparesBaseContent(entry: TrustAnchorFile): boolean {
-  return entry.releaseBump !== undefined || entry.contentRule !== undefined
-}
-
-/** True for a file under `SHIPPED_CLIENT_SOURCE_ROOTS`. */
-export function isShippedClientSource(file: string): boolean {
-  if (file.startsWith(ANDROID_SRC)) {
-    const set = file.slice(ANDROID_SRC.length).split('/')[0] ?? ''
-    if (ANDROID_NON_SHIPPING_SOURCE_SETS.has(set)) return false
-  }
-  return SHIPPED_CLIENT_SOURCE_ROOTS.some((r) => matchesPath(file, r))
-}
-
-const MAX_QUOTED_LINE = 100
-
-/** One trust signature line and the line after it, as `trustProjection`
- *  extracts them. */
-interface TrustGroup {
-  name: string
-  line: string
-  next: string
-}
-
 /**
- * The trust-relevant lines of a file: every line carrying a
- * `TRUST_SIGNATURES` match, each paired with the line that follows it.
- *
- * The following line is what makes this a projection of the trust DECISION
- * rather than of the keyword. A plist writes a key and its value on separate
- * lines — flipping `<key>NSAllowsArbitraryLoads</key>` from `<false/>` to
- * `<true/>` changes only the value line, which carries no signature at all —
- * and an XML attribute or a builder call can continue onto the next line the
- * same way. Pairing each signature with its successor puts that value inside
- * the projection, so it is compared.
- *
- * Read from BYTES (a latin1 view), not from diff hunks: a file git calls
- * binary has no hunks, and a trust decision must not become invisible just
- * because its file contains a NUL.
+ * Why changing `file` is a trust-anchor change, or `undefined`: the file is one
+ * of the few that implement the trust control (`TRUST_ANCHOR_FILES`), and any
+ * change to one — deleting or renaming it included — is held, whatever the
+ * diff does. A file that only CARRIES a trust value is not judged here at all.
  */
-export function trustProjection(content: FileContent | undefined): TrustGroup[] {
-  if (content === undefined) return []
-  const out: TrustGroup[] = []
-  // Every text view of the bytes (key-material.ts's `textViews`): a UTF-16
-  // re-encoding must not make a trust line vanish from the comparison.
-  const views = typeof content === 'string' ? [content] : textViews(content)
-  for (const view of views) {
-    const lines = view.split('\n').map((l) => l.trim())
-    lines.forEach((line, i) => {
-      const sig = TRUST_SIGNATURES.find((s) => s.re.test(line))
-      if (sig !== undefined) out.push({ name: sig.name, line, next: lines[i + 1] ?? '' })
-    })
-  }
-  return out
-}
-
-/** The file's text with every knope version value replaced by a fixed
- *  token, so two sides that differ ONLY in that value compare equal. */
-function maskReleaseVersions(text: string, bump: RegExp): string {
-  const re = new RegExp(bump.source, bump.flags.includes('g') ? bump.flags : `${bump.flags}g`)
-  return text.replace(re, (match: string, ...rest: unknown[]) => {
-    const groups = rest.at(-1) as Record<string, string> | undefined
-    const version = groups?.['version']
-    return version === undefined ? match : match.replace(version, '<version>')
-  })
-}
-
-/**
- * True when a registered file's only change is knope's release version bump.
- * Both sides must exist and the pattern must match on both — a file whose
- * version line was deleted or added is not "only a bump".
- */
-function isOnlyReleaseBump(entry: TrustAnchorFile, before?: FileContent, after?: FileContent): boolean {
-  if (entry.releaseBump === undefined || before === undefined || after === undefined) return false
-  const a = asText(before)
-  const b = asText(after)
-  if (a === b || !entry.releaseBump.test(a) || !entry.releaseBump.test(b)) return false
-  return maskReleaseVersions(a, entry.releaseBump) === maskReleaseVersions(b, entry.releaseBump)
-}
-
-const quote = (s: string): string => (s.length > MAX_QUOTED_LINE ? `${s.slice(0, MAX_QUOTED_LINE)}…` : s)
-
-/**
- * Why changing `file` from `before` to `after` is a trust-anchor change, or
- * `undefined`. `before`/`after` are the file's bytes at the merge base and at
- * the head; `undefined` for a side where the file does not exist.
- *
- * A registered file is a trust anchor whatever changed — deleting or renaming
- * it included — unless it names a `contentRule`, which then decides (and holds
- * whatever it cannot read). Any other file under `SHIPPED_CLIENT_SOURCE_ROOTS` is one when
- * its `trustProjection` differs between the two sides: a trust line added,
- * removed, reordered, or its value changed. An edit that leaves every trust
- * line and its successor alone is not.
- */
-export function trustAnchorFinding(file: string, before?: FileContent, after?: FileContent): string | undefined {
+export function trustAnchorFinding(file: string): string | undefined {
   const entry = trustAnchorEntry(file)
-  if (entry !== undefined) {
-    if (isOnlyReleaseBump(entry, before, after)) return undefined
-    if (entry.contentRule === 'xcodegen-spec') {
-      const why = xcodegenTrustFinding(before, after)
-      return why === undefined ? undefined : `${why}; it is ${entry.anchors}`
-    }
-    return `it is ${entry.anchors}`
-  }
-  if (!isShippedClientSource(file)) return undefined
-  const a = trustProjection(before)
-  const b = trustProjection(after)
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    const x = a[i]
-    const y = b[i]
-    if (x !== undefined && y !== undefined && x.line === y.line && x.next === y.next) continue
-    const g = (y ?? x) as TrustGroup
-    const shown = x !== undefined && y !== undefined && x.line === y.line
-      ? `${g.line} ${x.next} → ${y.next}`
-      : g.line
-    return `its diff changes ${g.name} in shipped client source: \`${quote(shown)}\``
-  }
-  return undefined
+  return entry === undefined ? undefined : `it is ${entry.anchors}`
 }
 
 /** One review on a pull request, as `GET /repos/{r}/pulls/{n}/reviews`
@@ -481,7 +263,7 @@ export function trustAnchorRefusal(
   // The sign-off format is DESCRIBED, never written as a line on its own:
   // this text is published in check output and review reports, and must not
   // itself parse as a sign-off (`TRUST_ANCHOR_SIGN_OFF` is line-anchored).
-  return `${TRUST_ANCHOR_REASON_PREFIX} — a shipped client's TLS trust decision, which lands only with a human ` +
+  return `${TRUST_ANCHOR_REASON_PREFIX} — the control over a shipped client's TLS trust decision, which lands only with a human ` +
     `sign-off: ${listFindings(findings)}. ${state}. A wrong value here disconnects every installed client and ` +
     'only a client release can undo it, so no automated review clears it: a human checks the change, then posts ' +
     'a NEW, unedited PR comment with a line reading "trust-anchor sign-off:" followed by this full head SHA (or, ' +

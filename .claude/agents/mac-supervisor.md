@@ -249,24 +249,22 @@ enforced lists are `SECRET_PATH_PATTERNS` and `TRUST_ANCHOR_FILES` in
   `vars-production.yml`), except a committed `.example`/`.sample`/`.template` and a `*.pem`
   that is provably public certificate material. AND any private key in ANY file, read from
   its bytes — a `.ts` test, a `testdata/` file, a `.der`. Generate test keys at test time.
-- **Trust anchor — lands only after a human signs off on the exact head.** The files that decide
-  which certificates a shipped client accepts, and any diff adding or removing a pin literal
-  or TLS trust hook in shipped client source. A wrong value disconnects every installed client
-  and only an app-store release undoes it. If the issue needs one, change it, say so in the
-  PR and in your status `notes:`, and expect the gate to hold the PR — `fleet/review` reports
+- **Trust control — lands only after a human signs off on the exact head.** What a shipped client
+  trusts for TLS is a VALUE, tracked in `packages/protocol/trust.snapshot.json` (`bun run trust:snapshot`),
+  not a file: touching `ApiService.kt`, the manifest, `Info.plist` or `project.yml` is free. A diff that
+  moves the snapshot (a pin, an ATS key, a cleartext setting, a client built without the pinner, a widened
+  loopback exemption) is shown in the PR and needs no signature to merge — but no client artifact is
+  produced from it until a human records a sign-off naming the new digest (`bun run trust:release-check`).
+  Say so in the PR when your diff moves it. What IS held is the control itself — the files that would
+  hide a weakening from the snapshot. If the issue needs one, change it, say so in the PR and in your
+  status `notes:`, and expect the gate to hold the PR — `fleet/review` reports
   `NO-VERDICT:sign-off-pending`, which is the hold, not a defect to fix. Never post the sign-off
   yourself — it is the operator's statement that they checked the values. Never incidentally:
-  - `apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt`
-  - `apps/android/app/src/main/res/xml/network_security_config.xml`
-  - `apps/ios/Sources/Services/CertificatePinning.swift`
-  - `apps/desktop/src/cert_pin.rs`
-  - `apps/desktop/src/api_config.rs`
-  - `apps/desktop/src/net.rs`
-  - `apps/android/app/src/main/AndroidManifest.xml`
-  - `apps/ios/Sources/App/Info.plist` (knope's release version bump alone is not held)
-  - `apps/ios/project.yml` (parsed, not held whole (#2579): test-target sources/settings, scheme test lists,
-    remote Swift packages and the Xcode-version option are routine. Any other change is held, and so is
-    a file the rule cannot parse)
+  - `docs/security/trust-signoffs.json`
+  - `packages/protocol/tools/trust-snapshot.ts`
+  - `packages/protocol/tools/trust-snapshot-cli.ts`
+  - `packages/protocol/tools/trust-release.test.ts`
+  - `packages/protocol/tools/trust-snapshot.test.ts`
 - **Everything else is writable** — including public certificates and annotated chains used
   as test input.
 
