@@ -235,6 +235,13 @@ carries device secrets (#1972) seals with X-Wing too. Pilot devices hold X25519 
 They get an X-Wing key through a user-sigchain link before their hub's migration genesis (§3.2).
 That link type is decided with #1972, not here.
 
+*Revised 2026-11-26 (operator: no real data before M2; see the note under §3).* **The user-sigchain
+genesis `user_init` is on that list too.** It names the first device's encryption key, and no
+`device_add` can ever name the first device. In format 2, `user_init` carries the device's X-Wing
+`encryptionPubkey`, `format: 2`, and the same `pop` as `device_add` (linking spec L5). After the
+reset every chain is new, so changing the genesis shape costs no migration. The pilot-device link
+(linking spec L4) is then not needed.
+
 **Under either option:**
 
 - The suite is `suite(crypto_format)`, a closed table in the crate. No field names a suite. Each
@@ -530,6 +537,15 @@ Which fields are indexed, and how tokens are built, stay with #2947 and the defi
 
 ## 3. `crypto_format` and the M1 pilot migration (#2964)
 
+> **Conditional on real data (operator, 2026-11-26).** Real-world use and data aren't expected before early spring 2027, which is
+> after M2. The current deployment holds only test data. **Unless real data exists when a type is
+> ported, the migration in this section is not built:** no migration genesis (§3.2 step 1), no
+> re-encryption job (§3.3), no `migrate` route, and no `format-migration.json` vectors. Instead, the
+> deployment is reset and seeded again, hubs start from a new-hub genesis, and **each type's format-1
+> reader and writer are deleted in that type's own port PR.** §3.5's "zero format-1 rows" holds once
+> the deployment is reset. D8's values stand, so a row carrying `1` is refused like any unknown
+> format. If real data does exist when a stage lands, this section applies as written.
+
 ### 3.1 D8: values — OPERATOR DECISION
 
 | Value | Meaning |
@@ -603,7 +619,7 @@ Properties:
 - Per #2974 stage 3, "the legacy envelope path is no longer written": **for a type ported to v2 on
   all three clients, the server refuses format-1 writes** for that type. #1618 stays until messages,
   notes, call records and files are ported (#2961 Sequencing).
-- **The format-1 readers are deleted** once the migration job reports zero format-1 rows on every
+- **The format-1 readers are deleted** (in each type's port PR when the deployment was reset instead of migrated; see the note under §3) once the migration job reports zero format-1 rows on every
   hub of the deployment. There is no legacy fallback after that point (root `CLAUDE.md`). Their
   fixtures (§6) are deleted in the same PR.
 

@@ -242,6 +242,10 @@ The UI says "verified" only when all five pass, and names the step that failed o
 
 ## 8. Migration from format 1
 
+> **Conditional on real data (operator, 2026-11-26).** This migration is built only if real data exists when files are ported. With no
+> real data before M2, the deployment is reset, and the format-1 file reader (including #3009's
+> desktop read path) is deleted in F-A.
+
 Format-1 files (one-shot GCM, label-only AAD, per-file envelopes) are rows of the same
 re-encryption job as spec #2996 §3.3. An admin client:
 
@@ -287,7 +291,7 @@ The volume is small before the pilot. A file that no current admin or escrow can
 The operator signed off F1–F8 on #2974. The work ships as **one full-stack PR**: the crate,
 `packages/protocol`, the worker, the vectors, the bindings **and all three clients**, including the
 download paths iOS and Android lack today. A contract bug found while adopting is fixed in that PR.
-Server-sealed files (F8) and the format-1 migration follow as their own PRs, because they have their
+Server-sealed files (F8) and the format-1 migration (only if real data exists; §8) follow as their own PRs, because they have their
 own dependencies.
 
 *Revised 2026-11-25 by operator decision.* The original text said "followed by one adoption PR per

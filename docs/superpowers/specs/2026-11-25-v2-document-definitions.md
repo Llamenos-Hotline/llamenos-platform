@@ -300,6 +300,13 @@ from the policy *type*, not per definition.
 `(format, hub, type, doc, tier, schema version)` (wire §2.4), so byte parity can't hold.
 #2947's own later comment already noted that binding the new AAD is a full re-encryption.
 
+> **Conditional on real data (operator, 2026-11-26).** The **pilot job** parts below (point 1 for real rows, the per-row reader diff in
+> point 2, and point 3's unopenable rows and their operator sign-off, which is D-E) run only if real
+> data exists when case records are ported. With no real data before M2, the deployment is reset,
+> **D-E is not built**, and the format-1 reader is deleted in the port PR. Point 1 against the
+> format-1 fixtures still runs. The declared reader changes below are behaviour changes and still
+> hold.
+
 **The gate instead (in CI, against the real crate, never a mock; #2947 comment 4):**
 1. **Values.** For every format-1 fixture, and in the pilot job for every real row: open it with the format-1 reader, seal it with `seal_document`, open that, and compare the field values. The plaintext-derived values are compared too: status, severity, category, events, reports, case number and assignees come from columns, not envelopes. All must be equal.
 2. **Readers (review finding 10).** For every row: diff the format-1 recipients against the members of the v2 groups the row is sealed to. Every difference must be one of the declared changes below. Any other difference fails the gate.
@@ -370,7 +377,7 @@ while adopting is fixed in that PR.
   - a server-served stale definition that clients must refuse.
 
 **Clients, in the same PR:** desktop, iOS and Android, each ported fully, with its old reader
-composition deleted. Only the per-row pilot decisions (D-E on #2974) follow as their own PR, because
+composition deleted. Only the per-row pilot decisions (D-E on #2974, built only if real data exists; see §11) follow as their own PR, because
 they wait on the operator.
 
 *Revised 2026-11-25 by operator decision.* The original text said "Then adoption, one PR per client". E1–E12 are unchanged.
@@ -378,7 +385,7 @@ they wait on the operator.
 **Gates (#2974 stage 3):**
 - Case records and contacts written by each client open on the other two under v2 headers, on real clients.
 - The legacy envelope path is no longer written.
-- The semantic-parity job reports zero unopenable pilot rows, or names them.
+- The semantic-parity job reports zero unopenable pilot rows, or names them (only if real data was migrated; see §11).
 - A write missing a declared group's header is refused by the server.
 - A definition served at an older version is refused by every client.
 

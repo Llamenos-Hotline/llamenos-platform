@@ -104,6 +104,28 @@ data that isn't secret.
 
 ## 5. L4: giving pilot devices an X-Wing key — decided
 
+> **Conditional on real data (operator, 2026-11-26).** `device_kem` exists only for devices that predate v2,
+> ahead of a migration genesis (wire §3). With no real data before M2, the deployment is reset and
+> **`device_kem` is not built, and is deleted where K-A already built it.** Its replacement:
+> - **The first device's key comes from genesis.** `user_init` carries the device's X-Wing
+>   `encryptionPubkey`, `format: 2` and `pop` (L5), exactly as `device_add` does for later devices.
+>   No `device_add` can name the first device, so without this a single-device user's chain names
+>   no X-Wing key and L1 has nothing to wrap the PUK to (wire §1.4, revised).
+> - **A device's X-Wing key is fixed for its life.** It's created once, with the device, named in
+>   `user_init` or by the primary's `device_add` from the device's claim (§2), and the device stores
+>   it; it's never redrawn at unlock. A linked device that drew a fresh key would hold a key the chain
+>   doesn't name. Rotating a device key means removing the device and linking it again (L6). There is
+>   no in-place replacement link, so the alternating-overwrite failure found in K-A's review can't
+>   occur. Don't fix it by carrying a seed in the provisioning bundle.
+>   **The device's backup carries its X-Wing seed** (#3053), next to the signing and X25519 seeds it
+>   already holds. The backup is user-held and PIN-protected, and already holds this device's secrets,
+>   so this changes nothing about what it's trusted with. A restore reconstitutes the same key the
+>   chain names. **A backup without the X-Wing seed is refused** by name. It's never half-restored to
+>   a device that authenticates but can't decrypt. Recovery then goes through L7 onto a new device
+>   identity. Older backup versions hold only test data after the reset, so they aren't read.
+>
+> If real data exists when stage 1 lands, this section applies as written.
+
 Pilot devices hold X25519 encryption keys (D16). Before their hub's migration genesis (wire §3.2),
 each needs an X-Wing key that grants and headers can be sealed to.
 
