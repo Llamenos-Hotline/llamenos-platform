@@ -9,7 +9,7 @@ import {
   diffHash, hasCacheKey, isClaimDigest, isTreeSha, reviewBinding, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
 import { join } from 'node:path'
-import { buildGateTrace, reviewLanesLines } from './trace.js'
+import { buildGateTrace, reviewLanesLines, trustSnapshotLines } from './trace.js'
 import { TRUST_ANCHOR_REASON_PREFIX } from './write-gate.js'
 import { tierFor, type ImpactTier } from './impact.js'
 import { isReviewerLabel, type ReviewerProfile, type ReviewerResolution } from './specialist.js'
@@ -1333,7 +1333,7 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
   if (!gate.passed) {
     return {
       ok: false,
-      summary: [buildGateTrace({ report: gate }), ...gate.reasons.map((r) => `- ${r}`), ...reviewLanesLines(gate)].join('\n'),
+      summary: [buildGateTrace({ report: gate }), ...gate.reasons.map((r) => `- ${r}`), ...reviewLanesLines(gate), ...trustSnapshotLines(gate)].join('\n'),
     }
   }
 
@@ -1352,6 +1352,7 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
       ...(withTests.testResults ?? []).map((r) => `- ${r}`),
       ...withTests.reasons.map((r) => `- ${r}`),
       ...reviewLanesLines(withTests),
+      ...trustSnapshotLines(withTests),
     ].join('\n'),
   }
 }

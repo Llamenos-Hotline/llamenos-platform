@@ -1,8 +1,7 @@
 import {
-  SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type Lane, type TrustAnchorFile,
+  SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type Lane,
 } from './config.js'
 import type { ReviewOutcomeToken } from './ci.js'
-import { ROUTINE_XCODEGEN_PATHS } from './xcodegen-trust.js'
 import { SECRET_TEMPLATE_SUFFIXES } from './fragments.js'
 import type { WorkItem } from './source.js'
 
@@ -27,11 +26,6 @@ export function renderBrief(brief: Brief): string {
   return brief.sections.map((s) => `## ${s.heading}\n\n${s.body}`).join('\n\n')
 }
 
-/** What a content-judged trust anchor's rule holds, as a worker is told it. */
-const CONTENT_RULE_SUMMARY: Record<NonNullable<TrustAnchorFile['contentRule']>, string> = {
-  'xcodegen-spec': `held only when it changes something outside ${ROUTINE_XCODEGEN_PATHS.map((r) => `\`${r.path}\``).join(', ')}`,
-}
-
 /** The token a held trust-anchor PR shows (#2559) — named so a worker reads it as the hold it was told about. */
 const SIGN_OFF_PENDING: ReviewOutcomeToken = 'NO-VERDICT:sign-off-pending'
 
@@ -46,18 +40,20 @@ const SIGN_OFF_PENDING: ReviewOutcomeToken = 'NO-VERDICT:sign-off-pending'
 export function writeGateRules(): string {
   const patterns = SECRET_PATH_PATTERNS.map((p) => `\`${p}\``).join(', ')
   const templates = SECRET_TEMPLATE_SUFFIXES.map((t) => `\`${t}\``).join('/')
-  const anchors = TRUST_ANCHOR_FILES.map((a) =>
-    `  - \`${a.path}\` — ${a.anchors}${a.contentRule === undefined ? '' : ` (${CONTENT_RULE_SUMMARY[a.contentRule]})`}`,
-  ).join('\n')
+  const anchors = TRUST_ANCHOR_FILES.map((a) => `  - \`${a.path}\` — ${a.anchors}`).join('\n')
   return (
     `- Never write secret material. A file whose path matches a secret pattern (${patterns}) is refused — ` +
     `except a committed ${templates} template and a \`*.pem\` that is provably public certificate material — and ` +
     `so is a private key in ANY file, whatever its name, tests and fixtures included. No approval clears this: ` +
     `generate a test key at test time instead of committing one.\n` +
-    `- A change to a shipped client's trust anchors lands only after a human (${TRUST_ANCHOR_APPROVERS.join(', ')}) ` +
-    `signs off on the exact head commit. These files, and any diff that adds or removes a pin literal or TLS trust ` +
-    `hook in shipped client source:\n${anchors}\n` +
-    `  If your issue genuinely needs such a change, make it, say so in the PR description, and say so in your ` +
+    `- What a shipped client trusts for TLS is a VALUE, tracked by the trust snapshot ` +
+    `(\`packages/protocol/trust.snapshot.json\`, \`bun run trust:snapshot\`), not a file: touching ApiService.kt, ` +
+    `the manifest, Info.plist or project.yml is free. A change that moves the snapshot (a pin, an ATS key, a cleartext ` +
+    `setting, a client built without the pinner, a widened loopback exemption) is shown in the PR and does not need a ` +
+    `signature to merge — but no client artifact is produced from it until ${TRUST_ANCHOR_APPROVERS.join(', ')} records ` +
+    `a sign-off naming the new snapshot's digest (\`bun run trust:release-check\`). Say so in the PR description when your diff moves it.\n` +
+    `- The files that ARE the trust control are held until a human signs off on the exact head commit:\n${anchors}\n` +
+    `  If your issue genuinely needs to change one, make it, say so in the PR description, and say so in your ` +
     `status \`notes:\` — the gate will hold the PR until that sign-off, and \`fleet/review\` reports ` +
     `\`${SIGN_OFF_PENDING}\` meanwhile: that is the expected hold, not a defect to fix or re-run. Never change one incidentally, and never ` +
     `post a sign-off yourself: it is the human's statement that they checked the values, and nobody else's.`

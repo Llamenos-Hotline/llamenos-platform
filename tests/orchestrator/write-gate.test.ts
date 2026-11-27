@@ -3,12 +3,10 @@ import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { derPrivateKeyKind, findPrivateKeyMaterial, MIN_KEY_BODY_CHARS, textViews } from '../../orchestrator/src/key-material.js'
 import {
   secretFinding, secretRefusal, signOffComments, signedOffShas, trustAnchorApprovers, trustAnchorFinding, trustAnchorRefusal,
-  trustProjection, SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES,
+  SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX,
 } from '../../orchestrator/src/write-gate.js'
 import { NEVER_WRITE_PATHS, TRUST_ANCHOR_FILES } from '../../orchestrator/src/config.js'
 import { ISRG_ROOT_X1, ISRG_ROOT_X2, SHOWCERTS_CHAIN, throwawayPrivateKeyPem, throwawayPublicKeyPem } from './pem-fixtures.js'
-
-const escapeRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
  * Unit tests for the pure halves of the write gate (#2556): private key
@@ -187,97 +185,34 @@ describe('secretFinding', () => {
   })
 })
 
-describe('trustAnchorFinding', () => {
-  const NEW_CLIENT = 'apps/android/app/src/main/java/org/llamenos/hotline/api/NewClient.kt'
-
-  it('names what a registered whole-file anchor anchors, whatever changed', () => {
-    for (const a of TRUST_ANCHOR_FILES.filter((e) => e.contentRule === undefined)) {
-      expect(trustAnchorFinding(a.path, 'x', 'x')).toBe(`it is ${a.anchors}`)
-    }
+describe('trustAnchorFinding (#3069 — the control, not the carriers of a value)', () => {
+  it('names what a registered file anchors', () => {
+    for (const a of TRUST_ANCHOR_FILES) expect(trustAnchorFinding(a.path)).toBe(`it is ${a.anchors}`)
   })
 
-  // #2579: a content-judged anchor is still held when it cannot be read —
-  // here a YAML document that is not a mapping, unchanged on both sides.
-  it('holds a content-judged anchor it cannot read, and still names what it anchors', () => {
-    for (const a of TRUST_ANCHOR_FILES.filter((e) => e.contentRule !== undefined)) {
-      expect(trustAnchorFinding(a.path, 'x', 'x')).toMatch(new RegExp(`cannot be read faithfully .*; it is ${escapeRe(a.anchors)}$`))
-    }
-  })
-
-  it('catches a trust line added to an unregistered shipped file, and quotes it', () => {
-    expect(trustAnchorFinding(NEW_CLIENT, undefined, 'val c = b\n    .certificatePinner(pinner)\n')).toBe(
-      'its diff changes an OkHttp/JSSE trust hook in shipped client source: `.certificatePinner(pinner)`',
-    )
-  })
-
-  it('catches a trust line removed', () => {
-    expect(trustAnchorFinding(NEW_CLIENT, 'b\n.certificatePinner(p)\n.build()\n', 'b\n.build()\n')).toMatch(/OkHttp\/JSSE trust hook/)
-  })
-
-  it('leaves an edit that does not touch a trust line or its successor alone', () => {
-    const pinned = '.certificatePinner(p)\n.build()\n'
-    expect(trustAnchorFinding(NEW_CLIENT, `val a = 1\n${pinned}`, `val a = 2\n${pinned}`)).toBeUndefined()
-    expect(trustAnchorFinding(NEW_CLIENT, 'val a = 1\n', 'val a = 2\n')).toBeUndefined()
-  })
-
-  // The value of a plist-style key lives on the NEXT line, which carries no
-  // signature of its own — the case a line-by-line diff scan cannot see.
-  it('catches a trust value on the line after its key, and shows the old and new value', () => {
-    const plist = (v: string) => `<key>NSAppTransportSecurity</key>\n<dict>\n\t<key>NSAllowsArbitraryLoads</key>\n\t<${v}/>\n</dict>\n`
-    expect(trustAnchorFinding('apps/ios/Sources/App/Other.plist', plist('false'), plist('true'))).toBe(
-      'its diff changes an Apple Security trust API or App Transport Security key in shipped client source: ' +
-      '`<key>NSAllowsArbitraryLoads</key> <false/> → <true/>`',
-    )
-  })
-
-  it('lets knope\'s version bump through a registered Info.plist, and nothing else', () => {
-    const plist = (v: string, extra = '') =>
-      `<key>CFBundleShortVersionString</key>\n\t<string>${v}</string>\n<key>NSAllowsArbitraryLoads</key>\n<false/>\n${extra}`
-    const f = 'apps/ios/Sources/App/Info.plist'
-    expect(trustAnchorFinding(f, plist('0.21.7'), plist('0.21.8'))).toBeUndefined()
-    expect(trustAnchorFinding(f, plist('0.21.7'), plist('0.21.8', '<key>X</key>\n'))).toMatch(/^it is the iOS Info.plist/)
-    expect(trustAnchorFinding(f, undefined, plist('0.21.8'))).toMatch(/^it is the iOS Info.plist/)
-    expect(trustAnchorFinding(f, '<dict/>\n', plist('0.21.8'))).toMatch(/^it is the iOS Info.plist/)
-  })
-
-  it('reads a binary file\'s bytes — no diff hunks are needed to see a trust line', () => {
-    const blob = (pin: string) => Buffer.concat([Buffer.from([0, 1, 2, 0x0a]), Buffer.from(`"sha256/${pin.repeat(43)}="\n`)])
-    expect(trustAnchorFinding('apps/android/app/src/main/res/raw/pins.bin', blob('A'), blob('B'))).toMatch(/SPKI pin literal/)
-  })
-
-  it('ignores the same lines outside shipped client source', () => {
+  it('holds nothing else — a file that merely carries a trust value is judged by the snapshot, not by its path', () => {
     for (const f of [
-      'apps/android/app/src/test/java/org/llamenos/hotline/api/CertificatePinnerTest.kt',
-      'apps/android/app/src/debug/res/xml/network_security_config.xml',
-      'apps/android/app/src/androidTest/java/org/llamenos/hotline/telephony/LiveSipRegistrationTest.kt',
-      'apps/android/app/src/testDebug/java/X.kt',
-      'apps/android/app/src/androidTestRelease/java/X.kt',
-      'apps/ios/Tests/Unit/CertificatePinningTests.swift',
-      'scripts/inject-cert-pins.ts',
-    ]) expect(trustAnchorFinding(f, undefined, 'CertificatePinner.Builder()\n<pin-set>\n')).toBeUndefined()
+      'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt',
+      'apps/android/app/src/main/res/xml/network_security_config.xml',
+      'apps/android/app/src/main/AndroidManifest.xml',
+      'apps/ios/Sources/Services/CertificatePinning.swift',
+      'apps/ios/Sources/App/Info.plist',
+      'apps/ios/project.yml',
+      'apps/desktop/src/cert_pin.rs',
+      'apps/desktop/src/api_config.rs',
+      'apps/desktop/src/net.rs',
+      'packages/protocol/trust.snapshot.json',
+    ]) expect(trustAnchorFinding(f), f).toBeUndefined()
   })
 
-  it.each(TRUST_SIGNATURES.map((s) => [s.name, s] as const))('signature %s matches a line of its own kind', (_n, s) => {
-    const sample: Record<string, string> = {
-      'an SPKI pin literal (sha256/…)': `"sha256/${'C'.repeat(43)}="`,
-      'an Android network-security setting': 'android:networkSecurityConfig="@xml/network_security_config"',
-      'an OkHttp/JSSE trust hook': 'object : X509ExtendedTrustManager() {',
-      'an Apple Security trust API or App Transport Security key': '<key>NSAllowsArbitraryLoads</key>',
-      'a rustls/reqwest trust hook': 'impl ServerCertVerifier for Pinned {',
-      'a SIP TLS trust anchor': 'applyTlsTrustAnchor(core, sip)',
-      'a build-wiring setting that chooses what ships': 'manifestPlaceholders["networkConfig"] = "open"',
-    }
-    expect(sample[s.name], `no sample line for signature "${s.name}"`).toBeDefined()
-    expect(s.re.test(sample[s.name] as string)).toBe(true)
-  })
-})
-
-describe('trustProjection', () => {
-  it('pairs each trust line with the line after it, trimmed', () => {
-    expect(trustProjection('a\n  <key>NSAllowsArbitraryLoads</key>\n  <false/>\nb\n')).toEqual([
-      { name: 'an Apple Security trust API or App Transport Security key', line: '<key>NSAllowsArbitraryLoads</key>', next: '<false/>' },
+  it('the registry is the trust control: the ledger, the extractor, the CLI and the tests that break them', () => {
+    expect(TRUST_ANCHOR_FILES.map((a) => a.path).sort()).toEqual([
+      'docs/security/trust-signoffs.json',
+      'packages/protocol/tools/trust-release.test.ts',
+      'packages/protocol/tools/trust-snapshot-cli.ts',
+      'packages/protocol/tools/trust-snapshot.test.ts',
+      'packages/protocol/tools/trust-snapshot.ts',
     ])
-    expect(trustProjection(undefined)).toEqual([])
   })
 })
 
@@ -374,7 +309,7 @@ describe('the refusal text names its class', () => {
   it('a trust-anchor refusal says whose approval of which commit is missing — and when it could not ask', () => {
     const f = [{ file: 'apps/desktop/src/cert_pin.rs', why: 'it is the desktop pin capture' }]
     const none = trustAnchorRefusal(f, 'abc123', [])
-    expect(none.startsWith(`${TRUST_ANCHOR_REASON_PREFIX} — a shipped client's TLS trust decision`)).toBe(true)
+    expect(none.startsWith(`${TRUST_ANCHOR_REASON_PREFIX} — the control over a shipped client's TLS trust decision`)).toBe(true)
     expect(none).toContain('No trust-anchor approver (rhonda-rodododo) has signed off on abc123')
     expect(trustAnchorRefusal(f, 'abc123', undefined)).toContain('reviews and comments could not be read')
   })

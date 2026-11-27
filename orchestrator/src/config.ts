@@ -455,125 +455,68 @@ export const SECRET_PATH_PATTERNS: readonly string[] = [
 
 export const NEVER_WRITE_PATHS: readonly string[] = SECRET_PATH_PATTERNS
 
-/** One file that decides which certificates a SHIPPED client accepts. */
+/** One file that implements the trust control itself. */
 export interface TrustAnchorFile {
   /** Exact repo-relative path — no globs, no prefixes. */
   path: string
-  client: 'android' | 'ios' | 'desktop'
+  client: 'shared'
   /** What a wrong edit here changes. Rendered verbatim in the gate's refusal,
    *  in every fleet brief and in the worker rules, so it is written for the
    *  operator who has to decide whether to approve. */
   anchors: string
-  /**
-   * knope's own version-bump pattern for this file, when knope rewrites it on
-   * every release (`knope.toml`'s `versioned_files`). A diff whose ONLY
-   * difference is that version is not a trust change, so the release PR is
-   * not held for a human. Copied from `knope.toml` verbatim and pinned to it
-   * by `write-gate-properties.test.ts` — an allowance that drifted from what
-   * knope actually rewrites would either hold every release or wave through
-   * a change knope never makes.
-   */
-  releaseBump?: RegExp
-  /**
-   * Set when a change to the file is judged by its CONTENT instead of being
-   * held whatever changed: the name of the rule that decides which changes are
-   * trust decisions. The rule must fail closed, holding anything it cannot read
-   * faithfully and anything outside an explicit list of routine changes. Only
-   * `'xcodegen-spec'` exists (`xcodegenTrustFinding`, xcodegen-trust.ts,
-   * #2579).
-   */
-  contentRule?: 'xcodegen-spec'
 }
 
 /**
- * The files that decide which certificate authorities and keys our shipped
- * clients accept for TLS (#2556) — the trust-anchor class of the write gate.
+ * The files that ARE the trust control — not the files that merely carry a
+ * pin (#2556, reshaped by #3069).
  *
- * A wrong value here is not a test failure. It is every installed client
- * refusing to connect to a crisis hotline, and the iOS and Android pin sets
- * are compiled in, so there is no server-side remedy: recovery needs a client
- * release through the app stores. That made these the highest-blast-radius
- * files an agent could edit in this repo, and until #2556 the write gate said
- * nothing about them while refusing the public certificates that test them.
+ * This list used to name the nine files that held a shipped client's TLS
+ * trust decision and demand a human signature whenever a PR touched any of
+ * them. Six of those nine were ordinary development surfaces — the whole
+ * Android HTTP surface, the manifest, `project.yml` (every source file in the
+ * iOS app) — so most signatures were demanded for diffs that changed no trust
+ * decision, which trains the one human in the loop to sign without reading.
+ * Trust now points at VALUES: `packages/protocol/tools/trust-snapshot.ts`
+ * extracts the effective trust configuration of the tree into
+ * `packages/protocol/trust.snapshot.json`, a PR that changes it shows the
+ * change (`VerifyReport.trustSnapshot`) without demanding a signature, and the
+ * human sign-off moves to where the artifact is produced: a client release
+ * whose snapshot differs from the last one's is refused without a recorded
+ * sign-off naming its digest (`bun run trust:release-check`).
  *
- * The class is not "never-write". A pin rotation is real, scheduled work
- * (#2505 — the Let's Encrypt Gen-Y roots), so an agent may WRITE these. What
- * it may not do is land them on its own: `verifyMechanical` refuses a diff
- * touching any of them until a human in `TRUST_ANCHOR_APPROVERS` has signed
- * off on the exact commit under judgement. That refusal is what both
- * required gates (`fleet/verify`, `fleet/review`) and the fleet's own loop
- * report, so no model verdict — however confident — clears it.
- *
- * WHOLE FILES, exact paths. A pin list is source code, not key material, so
- * no content rule can recognise one; the registry is the only honest way to
- * say "this file is a trust decision". The other half — a trust decision
- * made in some file NOT listed here — is `TRUST_SIGNATURES` (write-gate.ts):
- * a diff that adds or removes a pin literal or a TLS trust hook anywhere in
- * shipped client source is held the same way. Two rails in
- * `tests/orchestrator/write-gate-properties.test.ts` keep this list honest
- * against the real tree: every entry is a tracked file, and every tracked
- * shipped-client file carrying a trust signature is either listed here or
- * named, with a reason, as a call site the signature check already covers.
+ * What stays a held file is the control itself. A change that weakens the
+ * extractor, the release check, the tests that break them on purpose, or that
+ * writes the sign-off ledger is not visible in any snapshot — the thing that
+ * would show it is the thing that changed — so a human signs off on the exact
+ * head, exactly as before. Each of these is anchor-only: nothing else lives
+ * in them to make the signature routine. `guards.test.ts` pins that every
+ * entry is a tracked file CODEOWNERS owns.
  */
 export const TRUST_ANCHOR_FILES: readonly TrustAnchorFile[] = [
   {
-    path: 'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt',
-    client: 'android',
-    anchors: 'the Android OkHttp CertificatePinner pin set (DEFAULT_PIN_HASHES) every API and relay connection is held to',
+    path: 'docs/security/trust-signoffs.json',
+    client: 'shared',
+    anchors: 'the ledger of release sign-offs — an entry here IS the authorisation that lets a changed trust snapshot ship in a client',
   },
   {
-    path: 'apps/android/app/src/main/res/xml/network_security_config.xml',
-    client: 'android',
-    anchors: "the Android OS-level <pin-set> and <trust-anchors> of the release build",
+    path: 'packages/protocol/tools/trust-snapshot.ts',
+    client: 'shared',
+    anchors: 'the trust snapshot extractor and release verdict — what it cannot read, no gate can see',
   },
   {
-    path: 'apps/ios/Sources/Services/CertificatePinning.swift',
-    client: 'ios',
-    anchors: 'the compiled-in iOS pin set (CertificatePins) and the validator every non-loopback connection is held to',
+    path: 'packages/protocol/tools/trust-snapshot-cli.ts',
+    client: 'shared',
+    anchors: 'the trust snapshot CLI the local release path calls (trust:release-check)',
   },
   {
-    path: 'apps/desktop/src/cert_pin.rs',
-    client: 'desktop',
-    anchors: 'the desktop pin capture and the enforcing certificate verifier',
+    path: 'packages/protocol/tools/trust-release.test.ts',
+    client: 'shared',
+    anchors: 'the test that makes the release PR and the release tag fail without a sign-off',
   },
   {
-    path: 'apps/desktop/src/api_config.rs',
-    client: 'desktop',
-    anchors: 'the desktop persisted pin set (apiCertPins) and its plausibility check',
-  },
-  {
-    path: 'apps/desktop/src/net.rs',
-    client: 'desktop',
-    anchors: 'the desktop pinned HTTP client and WebSocket connector every backend request is built on',
-  },
-  // The build files that decide WHICH of the above ships. No LINE rule can
-  // read them: a plist key and its value sit on different lines inside nested
-  // dicts, the Android manifest is merged with `tools:remove`/`tools:replace`
-  // semantics, and XcodeGen YAML has flow style, `include:` and templates. A
-  // line-signature check over any of these would be a parser differential.
-  //
-  // The manifest and the Info.plist are held whole. Since 2026-08-01 neither
-  // has had a single edit that was not knope's release bump, so whole-file
-  // costs nothing (#2579). `project.yml` is parsed and compared structurally
-  // instead (`contentRule`). It is edited for test targets, schemes and
-  // packages, and holding all of that whole stopped #2577, the fix for a
-  // repo-wide iOS outage that moved no trust setting.
-  {
-    path: 'apps/android/app/src/main/AndroidManifest.xml',
-    client: 'android',
-    anchors: 'the Android manifest, which points the release build at its network security config and sets cleartext policy',
-  },
-  {
-    path: 'apps/ios/Sources/App/Info.plist',
-    client: 'ios',
-    anchors: 'the iOS Info.plist, which carries App Transport Security (NSAppTransportSecurity)',
-    releaseBump: /<key>CFBundleShortVersionString<\/key>\n\t<string>(?<version>[0-9]+[.][0-9]+[.][0-9]+)<\/string>/,
-  },
-  {
-    path: 'apps/ios/project.yml',
-    client: 'ios',
-    anchors: 'the XcodeGen spec the iOS app is built from — its sources, its Info.plist and the App Transport Security keys it writes',
-    contentRule: 'xcodegen-spec',
+    path: 'packages/protocol/tools/trust-snapshot.test.ts',
+    client: 'shared',
+    anchors: 'the tests that break the trust snapshot on purpose — and name which roots are pinned',
   },
 ]
 

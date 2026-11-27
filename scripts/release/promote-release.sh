@@ -30,6 +30,14 @@ export AWS_ACCESS_KEY_ID="${RUSTFS_ACCESS_KEY}"
 export AWS_SECRET_ACCESS_KEY="${RUSTFS_SECRET_KEY}"
 export AWS_DEFAULT_REGION="us-east-1"
 
+# The same release boundary as sign-artifacts.sh, checked again here because promotion is the step
+# that makes an artifact reachable by installed clients (#3069).
+SCRIPT_DIR_TRUST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bun "${SCRIPT_DIR_TRUST}/../../packages/protocol/tools/trust-snapshot-cli.ts" release-check --candidate "v${VERSION}" || {
+  echo "FATAL: refusing to promote — the TLS trust snapshot changed since the last release and no sign-off names it."
+  exit 3
+}
+
 echo "=== Promoting v${VERSION} to release bucket ==="
 echo "  From: ${RELEASE_WORK}/"
 echo "  To:   s3://${RUSTFS_BUCKET}/releases/v${VERSION}/"

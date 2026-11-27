@@ -568,6 +568,19 @@ describe('a tree the extractor cannot read is refused, never read as "nothing ch
   test('malformed XML in the manifest', () => {
     expect(() => extractTrustSnapshot(edited({ [MANIFEST]: swap('</manifest>', '') }))).toThrow(TrustExtractionError)
   })
+  test('shipped source in a language the extractor does not scan — a client could hide in it', () => {
+    expect(() => extractTrustSnapshot(edited({}, { 'apps/android/app/src/main/java/x/Hidden.java': 'class Hidden {}' }))).toThrow(/does not scan/)
+    expect(() => extractTrustSnapshot(edited({}, { 'apps/ios/Sources/Services/Hidden.m': '@implementation X @end' }))).toThrow(/does not scan/)
+    // …but the same file in a source set that does not ship is not a refusal.
+    expect(() => extractTrustSnapshot(edited({}, { 'apps/android/app/src/test/java/x/Fixture.java': 'class Fixture {}' }))).not.toThrow()
+  })
+  test('a cfg(test) item whose end cannot be found is refused, not truncated to the end of the file', () => {
+    expect(() => extractTrustSnapshot(edited({ [DESKTOP_NET]: (t) => `${t}\n#[cfg(test)]\nfn broken( {\n` }))).toThrow(TrustExtractionError)
+  })
+  test('a "#[cfg(test)]" inside a string literal does not remove the code after it', () => {
+    const out = stripRustTests('const S: &str = "#[cfg(test)]";\nfn shipped() { let _ = reqwest::Client::new(); }\n')
+    expect(out).toContain('fn shipped()')
+  })
   test('a malformed project spec', () => {
     expect(() => extractTrustSnapshot(edited({ [PROJECT_YML]: (t) => `${t}\n  : : [` }))).toThrow(TrustExtractionError)
   })

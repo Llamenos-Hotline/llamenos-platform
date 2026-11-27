@@ -26,6 +26,16 @@ fi
 # Extract version from directory name
 VERSION=$(basename "${RELEASE_WORK}" | sed 's/llamenos-release-v//')
 
+# A changed TLS trust snapshot (pins, ATS, cleartext policy, an unpinned client, a widened loopback
+# exemption) must not be signed into a release without a recorded sign-off naming its digest (#3069).
+# CI never publishes, so THIS is the release boundary: the check reads the release tag, not the
+# working tree, so what is checked is what was built. Fetch tags first: git fetch --tags
+SCRIPT_DIR_TRUST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bun "${SCRIPT_DIR_TRUST}/../../packages/protocol/tools/trust-snapshot-cli.ts" release-check --candidate "v${VERSION}" || {
+  echo "FATAL: refusing to sign — the TLS trust snapshot changed since the last release and no sign-off names it."
+  exit 3
+}
+
 echo "=== Signing artifacts for v${VERSION} ==="
 echo "  Key: ${MINISIGN_KEY}"
 echo "  Dir: ${RELEASE_WORK}"

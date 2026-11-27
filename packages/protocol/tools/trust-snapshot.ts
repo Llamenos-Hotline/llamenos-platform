@@ -76,7 +76,7 @@ export class TrustExtractionError extends Error {
   }
 }
 
-const SCANNED_EXTENSIONS: readonly string[] = ['.kt', '.kts', '.swift', '.rs', '.xml', '.plist', '.yml', '.yaml']
+const SCANNED_EXTENSIONS: readonly string[] = ['.kt', '.kts', '.swift', '.rs', '.xml', '.plist', '.yml', '.yaml', '.java', '.m', '.mm', '.c', '.cc', '.cpp', '.h', '.hpp', '.js', '.ts']
 const SKIPPED_DIRS: ReadonlySet<string> = new Set([
   'node_modules', '.git', 'build', '.gradle', 'target', 'Pods', 'DerivedData', 'vendor', '.build',
 ])
@@ -297,19 +297,44 @@ function pinLiterals(code: string): string[] {
   return sortedUnique([...code.matchAll(PIN_LITERAL_RE)].map((m) => m[1] as string))
 }
 
-/** Remove every Rust item gated by `#[cfg(test)]` — it does not ship. */
+/** Index of the first `#[cfg(test)]` at or after `from` that is not inside a string literal, or -1. */
+function nextCfgTest(code: string, from: number): number {
+  const needle = '#[cfg(test)]'
+  for (let i = from; i < code.length; i += 1) {
+    const c = code[i] as string
+    if (c === '"') {
+      i = skipString(code, i) - 1
+      continue
+    }
+    if (c === 'r' && (code[i + 1] === '"' || code[i + 1] === '#') && !/\w/.test(code[i - 1] ?? ' ')) {
+      const end = skipRustRawString(code, i)
+      if (end > 0) {
+        i = end - 1
+        continue
+      }
+    }
+    if (c === '#' && code.startsWith(needle, i)) return i
+  }
+  return -1
+}
+
+/** Remove every Rust item gated by `#[cfg(test)]` — it does not ship. Throws
+ *  when the item's end cannot be found: truncating to end-of-file would hide
+ *  every trust function that follows, which is the parser differential this
+ *  must not have. */
 export function stripRustTests(code: string): string {
   let out = code
+  let from = 0
   for (;;) {
-    const m = /#\[cfg\(test\)\]/.exec(out)
-    if (m === null) return out
-    let i = m.index + m[0].length
+    const at = nextCfgTest(out, from)
+    if (at < 0) return out
+    let i = at + '#[cfg(test)]'.length
     // Further attributes on the same item.
     for (;;) {
       const attr = /^\s*#\[/.exec(out.slice(i))
       if (attr === null) break
       const close = matchBracket(out, i + attr[0].length - 1)
-      if (close < 0) break
+      if (close < 0) throw new TrustExtractionError('an attribute after #[cfg(test)] is unbalanced')
       i = close + 1
     }
     let end = -1
@@ -333,8 +358,9 @@ export function stripRustTests(code: string): string {
         break
       }
     }
-    if (end < 0) end = out.length
-    out = out.slice(0, m.index) + out.slice(end)
+    if (end < 0) throw new TrustExtractionError('could not find the end of an item gated by #[cfg(test)]')
+    out = out.slice(0, at) + out.slice(end)
+    from = at
   }
 }
 
@@ -884,6 +910,19 @@ function desktopConnections(code: Map<string, string>): Record<string, unknown> 
 export function extractTrustSnapshot(tree: TreeReader): TrustSnapshot {
   const files = tree.list([ANDROID_SRC, ANDROID_GRADLE, ...IOS_ROOTS, IOS_PROJECT, DESKTOP_ROOT])
 
+  // A shipped source language the extractor does not model would let a client hide in it: refuse rather than miss it.
+  const unmodelled = files.filter((f) => {
+    if (f.startsWith(ANDROID_SRC)) return androidShipped(f) && /\.(java|c|cc|cpp|h|hpp|js|ts)$/.test(f)
+    if (IOS_ROOTS.some((r) => f.startsWith(r))) return /\.(m|mm|c|cc|cpp|h|hpp|js|ts)$/.test(f)
+    if (f.startsWith(DESKTOP_ROOT)) return /\.(c|cc|cpp|h|hpp|js|ts)$/.test(f)
+    return false
+  })
+  if (unmodelled.length > 0) {
+    throw new TrustExtractionError(
+      `shipped source in a language the trust extractor does not scan: ${unmodelled.slice(0, 5).join(', ')}${unmodelled.length > 5 ? ', …' : ''} — extend packages/protocol/tools/trust-snapshot.ts before shipping it`,
+    )
+  }
+
   // Android
   const android = androidKotlin(tree, files)
   const nscs: Record<string, unknown> = {}
@@ -1141,4 +1180,50 @@ export function releaseVerdict(input: {
       `every installed client and only an app-store release undoes it, so ${approvers.join(' or ')} must record a sign-off ` +
       `(bun run trust:signoff) in ${SIGNOFF_LEDGER_PATH} after checking the changes above`,
   }
+}
+
+// ---------------------------------------------------------------------------
+// What a PR changed
+// ---------------------------------------------------------------------------
+
+/** The paths whose content the extractor reads. A diff touching none of them cannot move the snapshot. */
+export const TRUST_INPUT_PREFIXES: readonly string[] = [ANDROID_SRC, ANDROID_GRADLE, ...IOS_ROOTS, IOS_PROJECT, DESKTOP_ROOT]
+
+/** True when a changed-file list touches anything the extractor reads (or the extractor itself). */
+export function touchesTrustInputs(files: readonly string[]): boolean {
+  return files.some((f) => f.startsWith('packages/protocol/tools/trust-snapshot') || TRUST_INPUT_PREFIXES.some((p) => f === p || f.startsWith(p)))
+}
+
+/** The outcome of comparing the trust snapshot at a PR's base and head. */
+export interface TrustSnapshotChange {
+  /** The snapshots differ. */
+  changed: boolean
+  baseDigest?: string
+  headDigest?: string
+  /** One line per leaf that moved (`diffSnapshots`). */
+  changes: string[]
+  /** Set when either side could not be read; the diff cannot then be trusted to be empty. */
+  error?: string
+  /** The head's committed snapshot file is not what its tree extracts to. */
+  committedStale?: boolean
+}
+
+/** Compare two trees. Never throws: an unreadable side is reported in `error`. */
+export function compareTrustSnapshots(base: TreeReader, head: TreeReader): TrustSnapshotChange {
+  let headSnap: TrustSnapshot
+  try {
+    headSnap = extractTrustSnapshot(head)
+  } catch (e) {
+    return { changed: false, changes: [], error: `the head's trust configuration could not be read: ${(e as Error).message}` }
+  }
+  const headDigest = snapshotDigest(headSnap)
+  const committedStale = head.read(SNAPSHOT_PATH) !== serializeSnapshot(headSnap)
+  let baseSnap: TrustSnapshot
+  try {
+    baseSnap = extractTrustSnapshot(base)
+  } catch (e) {
+    return { changed: true, headDigest, changes: [], committedStale, error: `the base's trust configuration could not be read, so nothing can be compared: ${(e as Error).message}` }
+  }
+  const baseDigest = snapshotDigest(baseSnap)
+  return { changed: baseDigest !== headDigest, baseDigest, headDigest, changes: diffSnapshots(baseSnap, headSnap), committedStale }
 }
