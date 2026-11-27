@@ -26,6 +26,7 @@ import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.DeviceKeyState
+import org.llamenos.hotline.crypto.EncryptedDeviceKeys
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.PinLockoutState
 import org.llamenos.hotline.service.DeviceRegistrationManager
@@ -600,6 +601,58 @@ class AuthViewModelTest {
         // The unlock path re-registers the keys too: a registration that failed
         // at enrolment (network, server down) heals on the next unlock.
         verify(exactly = 1) { deviceRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `restoring another identity's backup stores its keys and clears the previous identity's sigchain head`() = runTest {
+        // #3051: a head left by identity A would fail identity B's sigchain check
+        // closed for good. The restore stores B through the one key write, which
+        // clears it; B is then signed in and its identity brought up to date.
+        val mockCrypto = mockk<CryptoService>()
+        val restored = EncryptedDeviceKeys(
+            kdfVersion = 2u, salt = "c2FsdA==", argon2MCost = 65_536u, argon2TCost = 3u, argon2PCost = 4u,
+            nonce = "bm9uY2U=", ciphertext = "Y2lwaGVydGV4dA==",
+            state = DeviceKeyState("device-restored", "c".repeat(64), "d".repeat(64), "f".repeat(2432)),
+        )
+        coEvery { mockCrypto.restoreBackup("{backup}", "RECOVERY-KEY", true, "13572468", any()) } returns restored
+        keyValueStore.store(KeystoreService.KEY_SIGCHAIN_HEAD, "${"a".repeat(64)}:3:${"9".repeat(64)}")
+        val vm = AuthViewModel(
+            mockCrypto, keyValueStore, biometricKeyStore, inviteRepository,
+            deviceRegistrationManager, pushRegistrationManager, webSocketService,
+        )
+
+        vm.restoreFromBackup("{backup}", "RECOVERY-KEY", true, "13572468")
+
+        assertNull(keyValueStore.retrieve(KeystoreService.KEY_SIGCHAIN_HEAD))
+        val stored = Json.decodeFromString<StoredKeyData>(keyValueStore.retrieve(KeystoreService.KEY_ENCRYPTED_KEYS)!!)
+        assertEquals(StoredKeyData.of(restored), stored)
+        assertEquals("c".repeat(64), keyValueStore.retrieve(KeystoreService.KEY_SIGNING_PUBKEY))
+        assertEquals("device-restored", keyValueStore.retrieve(KeystoreService.KEY_DEVICE_ID))
+        assertTrue(vm.uiState.value.isAuthenticated)
+        assertTrue(vm.uiState.value.hasStoredKeys)
+        verify(exactly = 1) { deviceRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `restoring the same identity's backup keeps its sigchain head`() = runTest {
+        val mockCrypto = mockk<CryptoService>()
+        val restored = EncryptedDeviceKeys(
+            kdfVersion = 2u, salt = "c2FsdA==", argon2MCost = 65_536u, argon2TCost = 3u, argon2PCost = 4u,
+            nonce = "bm9uY2U=", ciphertext = "Y2lwaGVydGV4dA==",
+            state = DeviceKeyState("device-restored", "a".repeat(64), "d".repeat(64), "f".repeat(2432)),
+        )
+        coEvery { mockCrypto.restoreBackup(any(), any(), any(), any(), any()) } returns restored
+        val head = "${"a".repeat(64)}:3:${"9".repeat(64)}"
+        keyValueStore.store(KeystoreService.KEY_SIGCHAIN_HEAD, head)
+        val vm = AuthViewModel(
+            mockCrypto, keyValueStore, biometricKeyStore, inviteRepository,
+            deviceRegistrationManager, pushRegistrationManager, webSocketService,
+        )
+
+        vm.restoreFromBackup("{backup}", "13572468", false, "13572468")
+
+        assertEquals(head, keyValueStore.retrieve(KeystoreService.KEY_SIGCHAIN_HEAD))
+        assertTrue(vm.uiState.value.isAuthenticated)
     }
 
     /** A mocked [KeystoreService] holding one stored key blob and no lockout, so the lockout path is live. */

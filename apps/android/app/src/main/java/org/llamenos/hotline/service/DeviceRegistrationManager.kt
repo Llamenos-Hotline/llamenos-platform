@@ -43,8 +43,8 @@ import javax.inject.Singleton
  * server-side device later, when a distributor assigns one.
  *
  * It also brings the device's sigchain identity up to date ([ensureIdentity]):
- * the user's genesis and first PUK when the chain is still empty (PROTOCOL.md
- * §2.11) — the genesis naming this device's X-Wing key with its possession
+ * the user's genesis and first PUK until the chain holds a `puk_epoch`
+ * (PROTOCOL.md §2.11), resuming one an earlier attempt left part-way — the genesis naming this device's X-Wing key with its possession
  * signature (spec 2026-11-25-v2-device-linking-and-recovery §5 as revised
  * 2026-11-26, #2496) — then verification that the chain authorises this device
  * under the X-Wing key it holds. The key is fixed for the device's life: a chain
@@ -114,8 +114,8 @@ class DeviceRegistrationManager @Inject constructor(
 
     /**
      * Bring this device's sigchain identity up to date: genesis + PUK generation 1
-     * + puk_epoch if the user's chain is empty and this is the user's identity
-     * device, then verification that the chain authorises this device under the
+     * + puk_epoch, resumed from wherever the user's chain stopped, until it holds a
+     * puk_epoch and this is the user's identity device, then verification that the chain authorises this device under the
      * X-Wing key it holds. Idempotent. A failure is logged loudly and retried by
      * the next unlock — never skipped silently.
      */
@@ -137,19 +137,16 @@ class DeviceRegistrationManager @Inject constructor(
                 if (at == null || at.hash != known.second) {
                     throw IllegalStateException("The server's sigchain does not extend the head this device verified")
                 }
-            } else if (links.isEmpty()) {
-                links = initialiseIdentity(user)
             }
-            val verified = cryptoService.verifySigchain(cryptoLinksJson(links))
-            if (verified.userPubkey != user || !verified.activeDevicePubkeys.contains(user)) {
-                throw IllegalStateException("Verified sigchain does not authorise this device")
+            // Initialised means a puk_epoch: an empty chain, or a genesis-only one
+            // an earlier attempt left when the envelope POST or the epoch append
+            // failed, is finished here rather than verified as if it were done.
+            if (links.none { it.linkType == SigchainLinkType.PukEpoch.value }) {
+                links = initialiseIdentity(user, kem, links)
             }
+            val verified = verifyAuthorises(user, links)
             recordHead(user, verified)
-            if (verified.activeDeviceKeys.none { it.devicePubkey == user && it.encryptionPubkey == kem }) {
-                throw IllegalStateException(
-                    "The verified sigchain names a different X-Wing key for this device than the one it holds",
-                )
-            }
+            assertNamesHeldKemKey(verified, user, kem)
             verifiedKemKey = kem
             Result.success(Unit)
         } catch (e: Exception) {
@@ -161,7 +158,10 @@ class DeviceRegistrationManager @Inject constructor(
     /**
      * The (seq, hash) of [user]'s chain head this device last verified, or null
      * only when none was ever recorded. Fails closed: a malformed value or another
-     * user's head throws — "no head" is what lets an empty chain be initialised.
+     * user's head throws, never reads as "no head" — "no head" is what lets a
+     * shrunken chain be initialised again. Storing another identity's keys clears
+     * it (`KeyValueStore.storeDeviceKeys`, the one write a new or restored identity
+     * goes through).
      */
     private fun verifiedHead(user: String): Pair<Int, String>? {
         val stored = keyValueStore.retrieve(KeystoreService.KEY_SIGCHAIN_HEAD) ?: return null
@@ -177,12 +177,51 @@ class DeviceRegistrationManager @Inject constructor(
         keyValueStore.store(KeystoreService.KEY_SIGCHAIN_HEAD, "$user:${verified.headSeq}:${verified.headHash}")
     }
 
-    /** Genesis + PUK generation 1 + puk_epoch, in the order PROTOCOL.md §2.11 fixes. */
-    private suspend fun initialiseIdentity(user: String): List<SigchainResponseLink> {
+    /** [links] verified in Rust as [user]'s chain, with this device among its active devices. */
+    private suspend fun verifyAuthorises(
+        user: String,
+        links: List<SigchainResponseLink>,
+    ): org.llamenos.core.SigchainVerifiedState {
+        val verified = cryptoService.verifySigchain(cryptoLinksJson(links))
+        if (verified.userPubkey != user || !verified.activeDevicePubkeys.contains(user)) {
+            throw IllegalStateException("Verified sigchain does not authorise this device")
+        }
+        return verified
+    }
+
+    private fun assertNamesHeldKemKey(verified: org.llamenos.core.SigchainVerifiedState, user: String, kem: String) {
+        if (verified.activeDeviceKeys.none { it.devicePubkey == user && it.encryptionPubkey == kem }) {
+            throw IllegalStateException(
+                "The verified sigchain names a different X-Wing key for this device than the one it holds",
+            )
+        }
+    }
+
+    /**
+     * Genesis + PUK generation 1 + puk_epoch, in the order PROTOCOL.md §2.11 fixes,
+     * resumed from [links]: genesis only when the chain is empty. The PUK is claimed
+     * by a link signed over the served head, so that prefix is verified first — it
+     * must be this device's own genesis, authorising it under the X-Wing key it
+     * holds — or nothing is created and nothing signed.
+     */
+    private suspend fun initialiseIdentity(
+        user: String,
+        kem: String,
+        links: List<SigchainResponseLink>,
+    ): List<SigchainResponseLink> {
         val deviceId = cryptoService.deviceId ?: throw IllegalStateException("Device keys are locked")
-        // Built in Rust: the device's keys, its X-Wing key and the pop over it.
-        val genesis = Json.parseToJsonElement(cryptoService.userInitPayload()).jsonObject
-        appendSigned(user, SigchainLinkType.Genesis, genesis, null)
+        var chain = links
+        if (chain.isEmpty()) {
+            // Built in Rust: the device's keys, its X-Wing key and the pop over it.
+            val genesis = Json.parseToJsonElement(cryptoService.userInitPayload()).jsonObject
+            appendSigned(user, SigchainLinkType.Genesis, genesis, null)
+            chain = apiService.getSigchain(user).links
+        }
+        val genesisDevice = (chain.first().payload as? JsonObject)?.get("deviceId")?.jsonPrimitive?.content
+        if (genesisDevice != deviceId) {
+            throw IllegalStateException("This user's sigchain was created by another device")
+        }
+        assertNamesHeldKemKey(verifyAuthorises(user, chain), user, kem)
         // The envelope is stored BEFORE the chain claims the PUK, so a chain never
         // names a PUK whose seed was lost.
         val puk = Json.parseToJsonElement(cryptoService.createInitialPuk()).jsonObject
@@ -209,7 +248,7 @@ class DeviceRegistrationManager @Inject constructor(
             put("signPubkey", pukState.getValue("signPubkeyHex").jsonPrimitive.content)
             put("dhPubkey", pukState.getValue("dhPubkeyHex").jsonPrimitive.content)
         }
-        appendSigned(user, SigchainLinkType.PukEpoch, epoch, apiService.getSigchain(user).links.last())
+        appendSigned(user, SigchainLinkType.PukEpoch, epoch, chain.last())
         return apiService.getSigchain(user).links
     }
 
