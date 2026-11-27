@@ -421,9 +421,42 @@ describe('resolveDispatchResult', () => {
   const findWorktree = vi.fn(async (_repoRoot: string, _branch: string): Promise<string | undefined> => '/wt/found')
   const currentBranch = vi.fn(async (_wt: string): Promise<string | undefined> => EXPECTED)
   const prHeadBranch = vi.fn(async (_pr: string): Promise<string | undefined> => EXPECTED)
+  const prState = vi.fn(async (_pr: string): Promise<'OPEN' | 'MERGED' | 'CLOSED' | undefined> => 'OPEN')
   const deps = (over: Partial<ResolveDispatchDeps> = {}): ResolveDispatchDeps =>
-    ({ findWorktree, currentBranch, prHeadBranch, ...over })
-  beforeEach(() => { findWorktree.mockClear(); currentBranch.mockClear(); prHeadBranch.mockClear() })
+    ({ findWorktree, currentBranch, prHeadBranch, prState, ...over })
+  beforeEach(() => { findWorktree.mockClear(); currentBranch.mockClear(); prHeadBranch.mockClear(); prState.mockClear() })
+
+  // #3098: #2925 was re-dispatched after its PR #2934 merged. The worker named
+  // that PR, whose head IS the expected branch, and no worktree exists any
+  // more — so nothing in the branch checks objected, and tick.ts's "claimed
+  // SUCCESS the fleet could not verify" hand-off asked a person to "merge or
+  // close" a PR that had merged four days earlier, every cycle.
+  it.each(['MERGED', 'CLOSED'] as const)('does not treat a %s PR as the attempt\'s PR (#3098)', async (state) => {
+    const result = await resolveDispatchResult(
+      { outcome: 'SUCCESS', pr: '2934', note: 'done' }, 'fleet/infra/2925', REPO_ROOT,
+      deps({ findWorktree: async () => undefined, prState: async () => state, prHeadBranch: async () => 'fleet/infra/2925' }),
+    )
+    expect(result.pr).toBeUndefined()
+    expect(result.stalePr).toEqual({ pr: '2934', state })
+    expect(result.note).toBe(`pr-not-open:2934 ${state.toLowerCase()} done`)
+    expect(result.outcome).toBe('SUCCESS')
+    expect(result.branchMismatch).toBeUndefined()
+  })
+
+  it('keeps an OPEN PR as the attempt\'s PR and sets no stalePr', async () => {
+    const result = await resolveDispatchResult({ outcome: 'SUCCESS', pr: '662' }, EXPECTED, REPO_ROOT, deps())
+    expect(result.pr).toBe('662')
+    expect(result.stalePr).toBeUndefined()
+  })
+
+  it('an unreadable PR state does not make the PR stale — the head check still fails closed', async () => {
+    const result = await resolveDispatchResult(
+      { outcome: 'SUCCESS', pr: '662' }, EXPECTED, REPO_ROOT,
+      deps({ prState: async () => undefined, prHeadBranch: async () => undefined }),
+    )
+    expect(result.stalePr).toBeUndefined()
+    expect(result.branchMismatch).toBe('unreadable-pr-head')
+  })
 
   it('fills in the deterministic branch when the dispatch result is missing it', async () => {
     const result = await resolveDispatchResult({ outcome: 'SUCCESS', pr: '662' }, EXPECTED, REPO_ROOT, deps())
