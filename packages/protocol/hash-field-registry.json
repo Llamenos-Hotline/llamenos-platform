@@ -1,0 +1,332 @@
+{
+  "$comment": "Every *Hash/*Hashes field declared under packages/protocol/schemas, and how its value is derived. Checked by apps/worker/__tests__/unit/hash-field-registry.test.ts. kind: hmac|digest|chain name a producer that exists in the named file; debt cites an issue for a field that holds a plain value today. plainValueSites lists each write site that assigns a plain value, with the reason: a new one fails the test.",
+  "fields": {
+    "contactHash": {
+      "derivation": "A conversation's contactIdentifierHash (HMAC under the messaging hash key), under the name the contact timeline API uses.",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/lib/messaging-contact-hash.ts",
+        "symbol": "messagingContactHash"
+      },
+      "accepts": [
+        "^hash\\b",
+        "contactIdentifierHash"
+      ]
+    },
+    "contactIdentifierHash": {
+      "derivation": "HMAC-SHA256 of the contact's phone or handle under the messaging hash key (messagingContactHash).",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/lib/messaging-contact-hash.ts",
+        "symbol": "messagingContactHash"
+      },
+      "accepts": [
+        "messagingContactHash",
+        "^contactHash\\b"
+      ],
+      "plainValueSites": [
+        {
+          "file": "apps/worker/routes/reports.ts",
+          "match": "^pubkey",
+          "why": "A report's contact is the reporter, written as their pubkey (#3118)."
+        },
+        {
+          "file": "apps/worker/services/firehose-agent.ts",
+          "match": "agentPubkey",
+          "why": "The firehose agent's pubkey stands in for a contact (#3118)."
+        },
+        {
+          "file": "apps/ios/Sources/Views/Reports/ReportDetailView.swift",
+          "match": "\"hash\"",
+          "why": "SwiftUI preview fixture (#3118)."
+        },
+        {
+          "file": "apps/ios/Sources/Views/Triage/TriageDetailView.swift",
+          "match": "\"hash\"",
+          "why": "SwiftUI preview fixture (#3118)."
+        }
+      ]
+    },
+    "currentHash": {
+      "derivation": "SHA-256 of the evidence file as it is now, presented for comparison against integrityHash.",
+      "producer": {
+        "kind": "digest",
+        "file": "src/client/lib/evidence-upload.ts",
+        "symbol": "sha256Hex"
+      }
+    },
+    "entryHash": {
+      "derivation": "SHA-256 over the audit entry's canonical bytes and the previous entry's hash (computeEntryHash), or a sigchain link's own hash.",
+      "producer": {
+        "kind": "chain",
+        "file": "apps/worker/services/audit.ts",
+        "symbol": "computeEntryHash"
+      },
+      "accepts": [
+        "^record\\.hash"
+      ]
+    },
+    "eventTypeHash": {
+      "derivation": "Meant to be an HMAC of the event type; iOS sends the entity type's id, which the server joins to the type's plaintext name (db/schema/entity-type-templates.ts).",
+      "producer": {
+        "kind": "debt",
+        "issue": 2191,
+        "why": "Holds an entity type id the server can join to the type's plaintext name: hub-level disclosure, already decided: #3025 E1 says the server never stores a type name, and #2191 (D-A) removes it."
+      },
+      "plainValueSites": [
+        {
+          "file": "apps/ios/Sources/ViewModels/EventsViewModel.swift",
+          "match": "entityType\\.id",
+          "why": "Writes the entity type id (#2191)."
+        },
+        {
+          "file": "apps/ios/Sources/Views/Events/EventDetailView.swift",
+          "match": "\"protest\"",
+          "why": "SwiftUI preview fixture (#2191)."
+        }
+      ]
+    },
+    "identifierHash": {
+      "derivation": "HMAC-SHA256 of the canonical subscriber / signal identifier under the hub's messaging key (messagingContactHash, hashIdentifier) or the signal HMAC key.",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/lib/messaging-contact-hash.ts",
+        "symbol": "messagingContactHash"
+      },
+      "accepts": [
+        "^hash\\(",
+        "hashIdentifier",
+        "createHmac\\('sha256'",
+        "hmacSha256Hex",
+        "senderIdentifierHash",
+        "contactIdentifierHash",
+        "^hash,?$"
+      ]
+    },
+    "identifierHashes": {
+      "derivation": "HMAC blind index of each contact identifier under the hub key (iOS: hmacBlindIndex). The desktop and Android write [] until per-hub index keys (D7/E5).",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/ios/Sources/ViewModels/ContactFormViewModel.swift",
+        "symbol": "hmacBlindIndex"
+      },
+      "accepts": [
+        "buildIdentifierHashes"
+      ],
+      "plainValueSites": [
+        {
+          "file": "apps/worker/services/sample-seeder.ts",
+          "match": "contactLookupKey",
+          "why": "Dev sample seeder writes phone: + base64(phone), a reversible index of a phone number (#3118)."
+        }
+      ]
+    },
+    "integrityHash": {
+      "derivation": "SHA-256 of the evidence file's ciphertext, computed by the uploading client (sha256Hex) and compared by the server on verify.",
+      "producer": {
+        "kind": "digest",
+        "file": "src/client/lib/evidence-upload.ts",
+        "symbol": "sha256Hex"
+      },
+      "accepts": [
+        "currentHash"
+      ]
+    },
+    "interactionTypeHash": {
+      "derivation": "Meant to be an HMAC of the interaction type; today every writer sends the type itself.",
+      "producer": {
+        "kind": "debt",
+        "issue": 3118,
+        "why": "Writers send the plain interaction type ('comment', 'status_change', 'note'); low sensitivity, registered as known debt until per-hub index keys (D7/E5)."
+      },
+      "plainValueSites": [
+        {
+          "file": "apps/worker/services/sample-seeder.ts",
+          "match": "'(comment|status_change|note)'",
+          "why": "Seeder writes the plain type (#3118)."
+        },
+        {
+          "file": "apps/worker/services/cases.ts",
+          "match": "statusChangeTypeHash|report_conversion",
+          "why": "A status-change entry reuses the client's token; a report conversion writes report_conversion:<id> (#3118)."
+        },
+        {
+          "file": "apps/ios/Sources/ViewModels/CaseManagementViewModel.swift",
+          "match": "comment_hash",
+          "why": "iOS sends a constant (#3118)."
+        },
+        {
+          "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/cases/CaseManagementViewModel.kt",
+          "match": "\"comment\"",
+          "why": "Android sends the plain type (#3118)."
+        }
+      ]
+    },
+    "ipHash": {
+      "derivation": "HMAC-SHA256 of the client IP under HMAC_SECRET (hashIP).",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/lib/crypto.ts",
+        "symbol": "hashIP"
+      }
+    },
+    "lastIpHash": {
+      "derivation": "The last ipHash seen for a device.",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/lib/crypto.ts",
+        "symbol": "hashIP"
+      }
+    },
+    "mergedNameHash": {
+      "derivation": "The merged contact's nameHash: same derivation, written by the client that merges.",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/ios/Sources/ViewModels/ContactFormViewModel.swift",
+        "symbol": "hmacBlindIndex"
+      }
+    },
+    "nameHash": {
+      "derivation": "HMAC blind index of the normalised name under the hub key (iOS: hmacBlindIndex). The desktop and Android write nothing until per-hub index keys (D7/E5).",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/ios/Sources/ViewModels/ContactFormViewModel.swift",
+        "symbol": "hmacBlindIndex"
+      },
+      "accepts": [
+        "hmacBlindIndex",
+        "mergedNameHash"
+      ],
+      "plainValueSites": [
+        {
+          "file": "apps/worker/services/sample-seeder.ts",
+          "match": "Buffer\\.from\\(",
+          "why": "Dev sample seeder writes base64(lowercased name), a reversible index of a name (#3118)."
+        }
+      ]
+    },
+    "originalHash": {
+      "derivation": "The stored integrityHash, echoed in the verify answer.",
+      "producer": {
+        "kind": "digest",
+        "file": "src/client/lib/evidence-upload.ts",
+        "symbol": "sha256Hex"
+      },
+      "accepts": [
+        "integrityHash"
+      ]
+    },
+    "phoneHash": {
+      "derivation": "HMAC-SHA256 of the phone under BAN_HASH_KEY, scoped to the owner (banHash); clients send the OPRF finalize digest (banDigestFinalize), which the server never sees the phone behind.",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/lib/crypto.ts",
+        "symbol": "banHash"
+      },
+      "accepts": [
+        "banDigestFinalize",
+        "platformBanDigest",
+        "^\\w+\\.phone\\b"
+      ]
+    },
+    "phoneHashes": {
+      "derivation": "A list of phoneHash values; same producer.",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/lib/crypto.ts",
+        "symbol": "banHash"
+      },
+      "accepts": [
+        "banDigestFinalize",
+        "platformBanDigests?"
+      ]
+    },
+    "prevHash": {
+      "derivation": "The previous sigchain link's hash (compute_entry_hash in the crate), or the previous audit entry's.",
+      "producer": {
+        "kind": "chain",
+        "file": "packages/crypto/src/sigchain.rs",
+        "symbol": "compute_entry_hash"
+      },
+      "accepts": [
+        "normalizedPrevHash",
+        "sigchainPrevHash",
+        "head\\?\\.hash",
+        "previousEntryHash"
+      ]
+    },
+    "previousEntryHash": {
+      "derivation": "The previous audit entry's entryHash.",
+      "producer": {
+        "kind": "chain",
+        "file": "apps/worker/services/audit.ts",
+        "symbol": "computeEntryHash"
+      },
+      "accepts": [
+        "latest\\?\\.entryHash"
+      ]
+    },
+    "sigchainHash": {
+      "derivation": "The hash of the head sigchain link a device registration carries.",
+      "producer": {
+        "kind": "chain",
+        "file": "packages/crypto/src/sigchain.rs",
+        "symbol": "compute_entry_hash"
+      }
+    },
+    "sigchainLinkHash": {
+      "derivation": "The hash of the sigchain link a recovery-group share is bound to.",
+      "producer": {
+        "kind": "chain",
+        "file": "packages/crypto/src/sigchain.rs",
+        "symbol": "compute_entry_hash"
+      },
+      "accepts": [
+        "\\.entryHash"
+      ]
+    },
+    "sigchainPrevHash": {
+      "derivation": "The hash of the sigchain link before the head.",
+      "producer": {
+        "kind": "chain",
+        "file": "packages/crypto/src/sigchain.rs",
+        "symbol": "compute_entry_hash"
+      }
+    },
+    "sourcePhoneHash": {
+      "derivation": "A phoneHash of the source ban being promoted: forwarded, never derived here.",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/lib/crypto.ts",
+        "symbol": "banHash"
+      },
+      "accepts": [
+        "\\.phoneHash"
+      ]
+    },
+    "statusChangeTypeHash": {
+      "derivation": "The status-change interaction's interactionTypeHash, supplied by the client; names that a status changed, never which.",
+      "producer": {
+        "kind": "debt",
+        "issue": 3118,
+        "why": "Holds a client-chosen plain constant, the same as interactionTypeHash; registered as known debt."
+      }
+    },
+    "subscriberHash": {
+      "derivation": "HMAC of the subscriber identifier under the hub's messaging key.",
+      "producer": {
+        "kind": "hmac",
+        "file": "apps/worker/services/blasts.ts",
+        "symbol": "hashIdentifier"
+      }
+    },
+    "tagHashes": {
+      "derivation": "HMAC blind index of a tag under the hub's index key (blind_index, salt LABEL_BLIND_INDEX_KEY). Not implemented: every writer writes []. Real tokens come with per-hub versioned index keys (#2996 D7, #3025 E5). Registered as HMAC, not debt.",
+      "producer": {
+        "kind": "hmac",
+        "file": "packages/crypto/src/blind_index.rs",
+        "symbol": "blind_index"
+      }
+    }
+  }
+}
