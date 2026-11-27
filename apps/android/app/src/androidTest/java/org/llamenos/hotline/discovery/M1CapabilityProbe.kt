@@ -36,6 +36,7 @@ import org.llamenos.hotline.di.ActiveHubEntryPoint
 import org.llamenos.hotline.di.CryptoEntryPoint
 import org.llamenos.hotline.helpers.TestPermissions
 import org.llamenos.hotline.helpers.createAppComposeRule
+import org.llamenos.protocol.CryptoLabels
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -250,7 +251,10 @@ class M1CapabilityProbe {
         check(forCall.size == 1 && all == forCall) {
             fail("notes", "the server holds ${all.size} notes by this user, ${forCall.size} for call $callId; expected exactly 1, for the call")
         }
-        probe("notes", "RESULT a note about nothing is not filed; the note on the volunteer's call is listed, re-listed and held by the server for the call: $marker")
+        check(adminReadsNote("notes", hub, forCall.single(), callId, marker)) {
+            fail("notes", "the hub admin cannot open the note through an admin envelope")
+        }
+        probe("notes", "RESULT a note about nothing is not filed; the note on the volunteer's call is listed, re-listed, held by the server for the call and readable by the hub admin: $marker")
     }
 
     /** Phase 2 — a new process, same app data: unlock with PIN and read the note back. */
@@ -301,6 +305,9 @@ class M1CapabilityProbe {
         check(reread) { fail("quicknote", "note missing when the Notes list reloads") }
         val forCall = serverNotes("quicknote", hub, pubkey, callId)
         check(forCall.size == 1) { fail("quicknote", "the server holds ${forCall.size} notes by this user for call $callId, expected 1") }
+        check(adminReadsNote("quicknote", hub, forCall.single(), callId, marker)) {
+            fail("quicknote", "the hub admin cannot open the note through an admin envelope")
+        }
     }
 
     /**
@@ -336,7 +343,11 @@ class M1CapabilityProbe {
         check(inList) { fail("callnote", "saved call note not shown in Notes") }
         val forCall = serverNotes("callnote", hub, pubkey, callId)
         check(forCall.size == 1) { fail("callnote", "the server holds ${forCall.size} notes by this user for call $callId, expected 1") }
-        probe("callnote", "RESULT note attached to a call saved, read back, and held by the server for the call")
+        // At least one admin can always read (#3082): the hub admin opens the note through
+        // its own admin envelope and recovers what the volunteer wrote.
+        val adminRead = adminReadsNote("callnote", hub, forCall.single(), callId, marker)
+        check(adminRead) { fail("callnote", "the hub admin cannot open the call note through an admin envelope") }
+        probe("callnote", "RESULT note attached to a call saved, read back by its author and by the hub admin, and held by the server for the call")
     }
 
     /** View the schedule, clock in, clock out. */
@@ -900,6 +911,32 @@ class M1CapabilityProbe {
             .map { it.jsonObject["id"]!!.jsonPrimitive.content }
     }
 
+    /**
+     * Whether the test admin can open note [noteId] through one of its `adminEnvelopes`, and
+     * finds [marker] in the text. The note is read with the published crypto core
+     * ([org.llamenos.core.decryptNote]) under the admin's own X25519 secret, not the device
+     * under test's keys, so this shows that the envelope the app sealed for the admin opens for
+     * the admin.
+     */
+    private fun adminReadsNote(flow: String, hub: String, noteId: String, callId: String, marker: String): Boolean {
+        val note = json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/notes?callId=$callId")).jsonObject["notes"]!!.jsonArray
+            .map { it.jsonObject }
+            .single { it["id"]!!.jsonPrimitive.content == noteId }
+        val content = note["encryptedContent"]!!.jsonPrimitive.content
+        val envelopes = note["adminEnvelopes"]?.jsonArray.orEmpty().map { it.jsonObject }
+        val opened = envelopes.firstNotNullOfOrNull { env ->
+            runCatching {
+                org.llamenos.core.decryptNote(
+                    content,
+                    org.llamenos.core.HpkeEnvelope(env["enc"]!!.jsonPrimitive.content, env["ct"]!!.jsonPrimitive.content),
+                    ADMIN_X25519_SECRET,
+                )
+            }.getOrNull()
+        }
+        probe(flow, "admin read: adminEnvelopes=${envelopes.size} opened=${opened != null} marker=${opened?.contains(marker) == true}")
+        return opened?.contains(marker) == true
+    }
+
     /** Outbound messages by [pubkey] the server holds in a conversation. Content is ciphertext; only existence is checkable. */
     private fun serverOutboundMessages(flow: String, hub: String, conversationId: String, pubkey: String): Int =
         json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/conversations/$conversationId/messages")).jsonObject["messages"]!!.jsonArray
@@ -1064,5 +1101,23 @@ class M1CapabilityProbe {
          * pin — a different key from the Ed25519 signing pubkey (#1283).
          */
         const val ADMIN_X25519 = "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
+
+        /**
+         * The secret half of [ADMIN_X25519]: HKDF-SHA256(ADMIN_SEED, salt = "",
+         * info = LABEL_DEVICE_ENCRYPTION_SEED), the one device derivation
+         * (`tests/crypto-helpers.ts` `deviceEncryptionSeed`, `device_import_and_load` in Rust).
+         * One HKDF block: 32 bytes is SHA-256's output length.
+         */
+        val ADMIN_X25519_SECRET: String by lazy {
+            fun hmac(key: ByteArray, data: ByteArray): ByteArray =
+                javax.crypto.Mac.getInstance("HmacSHA256").run {
+                    init(javax.crypto.spec.SecretKeySpec(key, "HmacSHA256"))
+                    doFinal(data)
+                }
+            val ikm = ADMIN_SEED.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            val prk = hmac(ByteArray(32), ikm)
+            val okm = hmac(prk, CryptoLabels.LABEL_DEVICE_ENCRYPTION_SEED.toByteArray(Charsets.UTF_8) + byteArrayOf(1))
+            okm.joinToString("") { "%02x".format(it) }
+        }
     }
 }
