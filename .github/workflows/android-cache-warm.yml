@@ -43,6 +43,11 @@
 #     configurations drifts; this cannot). A failing test still fails this run
 #     and still does not refresh the cache: gradle-retry.sh returns its status.
 #
+# That includes Robolectric's ~150 MB `android-all-instrumented` framework jar (#3101):
+# `prepareRobolectricSdks` in app/build.gradle.kts resolves it as an ordinary Gradle
+# dependency (so it lands in this cache) and the tests run Robolectric offline against it.
+# Before that, Robolectric fetched it into ~/.m2 DURING the tests, which no cache covers.
+#
 # `schedule` keeps the entry alive: GitHub evicts a cache entry nobody has
 # touched for 7 days, and a quiet week would otherwise bring every merge group's
 # cold fetch back.
