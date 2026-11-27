@@ -69,6 +69,10 @@ describe('the release candidate check', () => {
     // Newer than v1.0.0, on a later commit, and the first thing `--sort=-v:refname` lists — but per-platform.
     run('tag', 'v1.0.5-android')
     run('tag', 'v1.0.5-ios')
+    // The candidate is a commit after them, so "not the candidate's own commit" cannot be what excludes them.
+    writeFileSync(join(dir, 'candidate.txt'), 'candidate\n')
+    run('add', '-A')
+    run('commit', '-q', '-m', 'candidate')
     expect(previousReleaseTag('HEAD', dir)).toBe('v1.0.0')
   })
 
