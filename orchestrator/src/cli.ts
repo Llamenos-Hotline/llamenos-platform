@@ -534,6 +534,8 @@ export interface ResolveDispatchDeps {
   currentBranch(worktree: string): Promise<string | undefined>
   /** The PR's head branch as GitHub reports it; `undefined` when unreadable. */
   prHeadBranch(pr: string): Promise<string | undefined>
+  /** The PR's lifecycle state as GitHub reports it; `undefined` when unreadable. */
+  prState(pr: string): Promise<'OPEN' | 'MERGED' | 'CLOSED' | undefined>
 }
 
 /**
@@ -588,6 +590,27 @@ export async function resolveDispatchResult(
     const onWorktree = await deps.currentBranch(worktree)
     if (onWorktree !== expectedBranch) { actual = onWorktree ?? 'unknown'; actualBranch = onWorktree }
   }
+  // #3098: a PR that is not open is not this attempt's output. A re-dispatched
+  // item whose earlier PR merged has the worker name that PR (its head IS the
+  // expected branch, and the worktree is long gone), which sailed through the
+  // branch check below and ended in a "review PR N from scratch, merge or
+  // close it" hand-off for a PR that merged days earlier. Checked only when
+  // the worktree itself is not already a mismatch, which is a stronger fact.
+  // An unreadable state falls through to the head check, which fails closed.
+  if (actual === undefined && result.pr !== undefined) {
+    const state = await deps.prState(result.pr)
+    if (state === 'MERGED' || state === 'CLOSED') {
+      const { pr: stale, ...rest } = result
+      const reason = `pr-not-open:${stale} ${state.toLowerCase()}`
+      return {
+        ...rest,
+        branch: expectedBranch,
+        worktree,
+        stalePr: { pr: stale, state },
+        note: result.note ? `${reason} ${result.note}` : reason,
+      }
+    }
+  }
   if (actual === undefined && result.pr !== undefined) {
     const head = await deps.prHeadBranch(result.pr)
     if (head !== expectedBranch) { actual = head ?? 'unreadable-pr-head'; actualBranch = head }
@@ -613,6 +636,10 @@ function defaultResolveDispatchDeps(): ResolveDispatchDeps {
     currentBranch,
     prHeadBranch: async (pr) =>
       (await ghJson<{ headRefName: string }>(['pr', 'view', pr, '--json', 'headRefName']))?.headRefName,
+    prState: async (pr) => {
+      const state = (await ghJson<{ state?: string }>(['pr', 'view', pr, '--json', 'state']))?.state
+      return state === 'OPEN' || state === 'MERGED' || state === 'CLOSED' ? state : undefined
+    },
   }
 }
 

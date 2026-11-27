@@ -59,6 +59,24 @@ release installs on any device that allows unknown-source installs.
 
 ---
 
+## Before you build: the trust sign-off (mandatory)
+
+An iOS release ships a TLS trust decision (certificate pins, cleartext and loopback policy). If that decision
+moved since the last release, **no client artifact is produced** until the approver has recorded a
+sign-off naming the new snapshot's digest, merged to `main` **before** the release tag is cut.
+(iOS's decision is App Transport Security in `Info.plist` and `project.yml`, plus the pinner `APIService.swift` hands to each connection.)
+
+```bash
+git fetch origin --tags
+bun run trust:release-check --against v<last-release>
+```
+
+Exit 0 and `OK` — nothing more to do. `REFUSED` — stop and follow
+[trust-signoff.md](../runbooks/trust-signoff.md): read the printed diff, decide whether each changed value is one
+you meant to change, then `bun run trust:signoff`. A wrong value disconnects every installed client
+and only an app-store release undoes it. There is no bypass; `sign-artifacts.sh` and
+`promote-release.sh` repeat the check and exit 3.
+
 ## What the repo is configured to do today
 
 ### Signing configuration (Verified)

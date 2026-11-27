@@ -27,6 +27,11 @@ turbine = "1.2.0"
 mockk = "1.14.0"
 roborazzi = "1.60.0"
 robolectric = "4.15.1"
+# The Android framework jar Robolectric runs each @Config(sdk = [N]) against (#3101). The
+# string is Robolectric's own pairing of API level and build, fixed by the Robolectric
+# release above: bump the two together, and add an entry here for every API level a test
+# pins (app/build.gradle.kts reads the levels from the tests and fails if one is missing).
+robolectric-android-all-34 = "14-robolectric-10818077-i7"
 biometric = "1.1.0"
 
 [libraries]
@@ -68,6 +73,7 @@ mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
 roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+robolectric-android-all-34 = { group = "org.robolectric", name = "android-all-instrumented", version.ref = "robolectric-android-all-34" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 espresso = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 test-runner = { group = "androidx.test", name = "runner", version = "1.7.0" }

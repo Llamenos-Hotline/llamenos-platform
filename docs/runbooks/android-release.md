@@ -4,6 +4,24 @@
 
 How Android builds are published to the Play Console internal testing track (automated) and promoted to production (manual).
 
+## Before you build: the trust sign-off (mandatory)
+
+An Android release ships a TLS trust decision (certificate pins, cleartext and loopback policy). If that decision
+moved since the last release, **no client artifact is produced** until the approver has recorded a
+sign-off naming the new snapshot's digest, merged to `main` **before** the release tag is cut.
+(Android's pins live in `CertificatePins.kt` and `network_security_config.xml`.)
+
+```bash
+git fetch origin --tags
+bun run trust:release-check --against v<last-release>
+```
+
+Exit 0 and `OK` — nothing more to do. `REFUSED` — stop and follow
+[trust-signoff.md](trust-signoff.md): read the printed diff, decide whether each changed value is one
+you meant to change, then `bun run trust:signoff`. A wrong value disconnects every installed client
+and only an app-store release undoes it. There is no bypass; `sign-artifacts.sh` and
+`promote-release.sh` repeat the check and exit 3.
+
 ## Internal Track (Automated)
 
 When a GitHub Release is published, `mobile-release.yml` automatically:

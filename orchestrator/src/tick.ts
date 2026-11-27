@@ -33,6 +33,16 @@ export interface DispatchOutcome {
    * would merge.
    */
   branchMismatch?: string
+  /**
+   * Set when the PR the worker reported is NOT open (#3098): it already
+   * merged, or was closed without merging. Such a PR is not an attempt's
+   * output and nothing about it is awaiting review, so `resolveDispatchResult`
+   * (cli.ts) removes it from `pr` and records it here instead. A claimed
+   * SUCCESS carrying this has produced nothing the fleet can verify, and the
+   * hand-off must say what really happened rather than ask a person to
+   * "merge or close" a PR that cannot be.
+   */
+  stalePr?: { pr: string; state: 'MERGED' | 'CLOSED' }
   /** See `RunRecord.quotaResetHint`/`quotaResetAt` (ledger.ts). */
   quotaResetHint?: string
   quotaResetAt?: number
@@ -712,6 +722,39 @@ async function decideDispatch(
     }
   }
 
+  if (result.outcome === 'SUCCESS' && result.stalePr !== undefined) {
+    // #3098: the worker reported SUCCESS naming a PR that is no longer open
+    // (live shape: #2925 re-dispatched after PR #2934 merged). There is no PR
+    // for the pipeline to verify or review, and the generic "claimed SUCCESS
+    // the fleet could not verify" hand-off below would tell a person to
+    // "review PR N from scratch ... merge or close it" — an act that cannot
+    // be performed on a merged PR, so the label was removed, the item was
+    // re-dispatched, and the same ask was posted again, every cycle. Say what
+    // is true instead and ask for the one decision that ends the loop.
+    // BLOCKED: the attempt produced nothing and must not spend the item's
+    // attempt budget (ledger.ts, `TERMINAL_FAILURES`); `needs-human` is what
+    // stops the next pass re-claiming it.
+    const { pr: stale, state } = result.stalePr
+    d.log(
+      `verify: item ${item.id} reported pr ${stale} which is ${state} — nothing to verify, ` +
+      'the worker produced no open PR for this attempt',
+    )
+    return {
+      final: {
+        ...base, outcome: 'BLOCKED', branch,
+        note: truncateNote(`pr-not-open:${stale} ${state.toLowerCase()} — ${result.note ?? ''}`.trim()),
+      },
+      humanAct: state === 'MERGED'
+        ? `PR ${stale} is already merged, so there is nothing to review or merge, and this attempt opened no new PR. ` +
+          `If PR ${stale} finished the work, close issue #${item.id}. If work remains, say what in the issue ` +
+          'body (it needs a NEW PR), then remove the label to re-dispatch.'
+        : `PR ${stale} was closed without merging, so nothing is awaiting review, and this attempt opened no new PR. ` +
+          `Remove the label to re-dispatch a fresh attempt, or close issue #${item.id} if the work is no longer wanted.`,
+      armed: false,
+      notices,
+    }
+  }
+
   if (result.outcome === 'SUCCESS' && branch !== undefined && pr !== undefined && worktree !== undefined) {
     // The bounded mechanical-verify -> second-opinion -> (on FAIL) revise
     // -> re-verify loop (task 13, review.ts). Mechanical failure is
@@ -1022,6 +1065,13 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
       const { candidates, rejections } = selectForLane(items, labelCache, lane)
       itemsByLane.set(lane.id, candidates)
       allRejections.push(...rejections)
+      // #3098: `{"reason":"vetoed"}` alone cost four days — nothing said WHICH
+      // label held the item, so a `needs-human` whose ask had long been met
+      // looked identical to a live one. Name the label(s) beside the item.
+      const vetoes = rejections
+        .filter((r) => r.reason === 'vetoed')
+        .map((r) => `${r.id} by ${(labelCache.get(r.id) ?? []).filter((l) => lane.vetoLabels.includes(l)).join('+')}`)
+      if (vetoes.length > 0) deps.log(`vetoed (lane ${lane.id}): ${vetoes.join(', ')}`)
     }
 
     const owned = claimAcrossLanes(active, itemsByLane)
