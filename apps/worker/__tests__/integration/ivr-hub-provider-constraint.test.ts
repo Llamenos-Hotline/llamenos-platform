@@ -67,7 +67,6 @@ async function configureProvider(providerType: string, hubId: string | null): Pr
     credentials: OPAQUE_CIPHERTEXT,
     status: 'connected',
     capabilities: [],
-    phoneNumbers: [],
     error: null,
     lastCheckedAt: new Date(),
   })

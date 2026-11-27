@@ -69,7 +69,6 @@ export const hubs = pgTable('hubs', {
   slug: text('slug').notNull().unique(),
   description: text('description'),
   status: text('status').notNull().default('active'),
-  phoneNumber: text('phone_number'),
   /**
    * IANA zone the hub's shift schedules are written in (shifts.start_time,
    * end_time and days are wall-clock values in it). 'UTC' is the default and what
@@ -139,7 +138,6 @@ export const hubSettings = pgTable('hub_settings', {
     .primaryKey()
     .references(() => hubs.id, { onDelete: 'cascade' }),
   settings: jsonb('settings').notNull().default({}),
-  phoneNumber: text('phone_number'),
 })
 
 // ---------------------------------------------------------------------------

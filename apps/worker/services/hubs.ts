@@ -56,15 +56,23 @@ import {
   type HubRoleAssignment,
 } from '../lib/hub-admin'
 import { HubNotFoundError, ServiceError } from './service-error'
+import {
+  findRoutableNumber,
+  loadHubNumbers,
+  replaceDeclaredNumbers,
+  setPrimaryDeclaredNumber,
+  type HubNumber,
+} from './hub-numbers'
 
-function hubFromRow(row: typeof hubsTable.$inferSelect): Hub {
+function hubFromRow(row: typeof hubsTable.$inferSelect, numbers: readonly HubNumber[]): Hub {
   return {
     id: row.id,
     name: row.name,
     slug: row.slug,
     description: row.description ?? '',
     status: row.status as Hub['status'],
-    phoneNumber: row.phoneNumber ?? undefined,
+    phoneNumber: numbers[0]?.number,
+    phoneNumbers: numbers.map((n) => n.number),
     timezone: row.timezone,
     createdBy: row.createdBy,
     createdAt: row.createdAt.toISOString(),
@@ -81,7 +89,8 @@ export class HubService {
 
   async getHubs(): Promise<{ hubs: Hub[] }> {
     const rows = await this.db.select().from(hubsTable)
-    return { hubs: rows.map(hubFromRow) }
+    const numbers = await loadHubNumbers(this.db, rows.map((r) => r.id))
+    return { hubs: rows.map((r) => hubFromRow(r, numbers.get(r.id) ?? [])) }
   }
 
   /**
@@ -139,7 +148,6 @@ export class HubService {
         slug: hub.slug,
         description: hub.description,
         status: hub.status ?? 'active',
-        phoneNumber: hub.phoneNumber,
         timezone: hub.timezone,
         createdBy: hub.createdBy,
         createdAt: now,
@@ -152,6 +160,11 @@ export class HubService {
         .values({ hubId: hub.id, settings: {} })
         .onConflictDoNothing()
 
+      // The numbers it answers on — in the same transaction, so a number another
+      // hub holds fails the whole creation rather than leaving a hub with none.
+      const declared = hub.phoneNumbers ?? (hub.phoneNumber ? [hub.phoneNumber] : [])
+      if (declared.length > 0) await replaceDeclaredNumbers(tx, hub.id, declared, 'platform')
+
       await tx
         .update(users)
         .set({
@@ -161,7 +174,8 @@ export class HubService {
         .where(eq(users.pubkey, founder.pubkey))
     })
 
-    return { hub }
+    // What was stored, not what was typed: numbers come back in E.164.
+    return this.getHub(hub.id)
   }
 
   async getHub(id: string): Promise<{ hub: Hub }> {
@@ -172,7 +186,8 @@ export class HubService {
     if (!row) {
       throw new HubNotFoundError()
     }
-    return { hub: hubFromRow(row) }
+    const numbers = await loadHubNumbers(this.db, [id])
+    return { hub: hubFromRow(row, numbers.get(id) ?? []) }
   }
 
   async updateHub(
@@ -193,20 +208,23 @@ export class HubService {
     if (data.slug !== undefined) updates.slug = data.slug
     if (data.description !== undefined) updates.description = data.description
     if (data.status !== undefined) updates.status = data.status
-    if (data.phoneNumber !== undefined) updates.phoneNumber = data.phoneNumber
     if (data.timezone !== undefined) updates.timezone = data.timezone
 
-    await this.db
-      .update(hubsTable)
-      .set(updates)
-      .where(eq(hubsTable.id, id))
+    // Numbers and the hub row change together: a number another hub holds
+    // refuses the whole update, never half of it.
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(hubsTable)
+        .set(updates)
+        .where(eq(hubsTable.id, id))
+      if (data.phoneNumbers !== undefined) {
+        await replaceDeclaredNumbers(tx, id, data.phoneNumbers, 'platform')
+      } else if (data.phoneNumber !== undefined) {
+        await setPrimaryDeclaredNumber(tx, id, data.phoneNumber, 'platform')
+      }
+    })
 
-    const [updated] = await this.db
-      .select()
-      .from(hubsTable)
-      .where(eq(hubsTable.id, id))
-
-    return { hub: hubFromRow(updated) }
+    return this.getHub(id)
   }
 
   async archiveHub(id: string): Promise<{ ok: true }> {
@@ -414,18 +432,32 @@ export class HubService {
     return { ok: true }
   }
 
+  /**
+   * The active hub that answers on `phone`. `phone` is whatever the provider put
+   * in the webhook — `+15551234567`, `15551234567`, `0015551234567`, a national
+   * format — and is normalised to E.164 here, the one place a dialled number is
+   * read, before the exact match against `hub_numbers` (#1331). A value that
+   * cannot be read as a number matches no hub.
+   *
+   * `deliveredByHub` is the hub whose own provider account delivered the call
+   * (its webhook URL's `?hub=`), undefined for the platform account. It decides
+   * which numbers can match: see `hub_numbers.scope`.
+   */
   async getHubByPhone(
     phone: string,
+    deliveredByHub?: string,
   ): Promise<{ hub: Hub }> {
-    const [row] = await this.db
-      .select()
-      .from(hubsTable)
-      .where(
-        and(eq(hubsTable.phoneNumber, phone), eq(hubsTable.status, 'active')),
-      )
+    const routed = await findRoutableNumber(this.db, phone, deliveredByHub)
+    const [row] = routed
+      ? await this.db
+        .select()
+        .from(hubsTable)
+        .where(and(eq(hubsTable.id, routed.hubId), eq(hubsTable.status, 'active')))
+      : []
     if (!row) {
       throw new ServiceError(404, 'No hub for this number')
     }
-    return { hub: hubFromRow(row) }
+    const numbers = await loadHubNumbers(this.db, [row.id])
+    return { hub: hubFromRow(row, numbers.get(row.id) ?? []) }
   }
 }

@@ -412,8 +412,9 @@ describe('HubService.createHub', () => {
 
   it('creates hub when slug is unique', async () => {
     const { db, service } = setup()
-    // Selects in order: slug check (none), founder row, role catalog
-    db.$setSelectResults([[], [founderRow], []])
+    // Selects in order: slug check (none), founder row, role catalog, then the
+    // read-back (hub row, its numbers)
+    db.$setSelectResults([[], [founderRow], [], [makeHub({ id: 'hub-new' })], []])
     db.$setInsertResult([])
 
     const result = await service.hubs.createHub(validHub, founder)
@@ -423,7 +424,7 @@ describe('HubService.createHub', () => {
 
   it('creates hub_settings row after creating hub', async () => {
     const { db, service } = setup()
-    db.$setSelectResults([[], [founderRow], []])
+    db.$setSelectResults([[], [founderRow], [], [makeHub({ id: 'hub-new' })], []])
     db.$setInsertResult([])
 
     await service.hubs.createHub(validHub, founder)
@@ -433,7 +434,7 @@ describe('HubService.createHub', () => {
 
   it('grants the founder their admin role in the same transaction as the hub (#2126)', async () => {
     const { db, service } = setup()
-    db.$setSelectResults([[], [founderRow], []])
+    db.$setSelectResults([[], [founderRow], [], [makeHub({ id: 'hub-new' })], []])
     db.$setInsertResult([])
 
     await service.hubs.createHub(validHub, founder)
@@ -484,8 +485,8 @@ describe('HubService.updateHub', () => {
   it('calls db.update when hub exists', async () => {
     const { db, service } = setup()
     const hub = makeHub({ name: 'Updated Hub' })
-    // updateHub: first select (existence check), then update, then second select (re-read)
-    db.$setSelectResults([[hub], [hub]])
+    // updateHub: existence check, then the update, then the read-back (hub row, its numbers)
+    db.$setSelectResults([[hub], [hub], []])
 
     await service.hubs.updateHub('hub-1', { name: 'Updated Hub' })
 
@@ -495,7 +496,7 @@ describe('HubService.updateHub', () => {
   it('writes no timezone when the update does not name one, and writes it when it does (#1054)', async () => {
     const { db, service } = setup()
     const hub = makeHub({ timezone: 'America/New_York' })
-    db.$setSelectResults([[hub], [hub], [hub], [hub]])
+    db.$setSelectResults([[hub], [hub], [], [hub], [hub], []])
     const setArgs = () => db.update.mock.results.map((r) => (r.value as { set: { mock: { calls: unknown[][] } } }).set.mock.calls[0][0])
 
     await service.hubs.updateHub('hub-1', { name: 'Renamed' })
@@ -507,14 +508,14 @@ describe('HubService.updateHub', () => {
 
   it('reports the stored zone on every read of a hub', async () => {
     const { db, service } = setup()
-    db.$setSelectResults([[makeHub({ timezone: 'Asia/Kolkata' })], [makeHub({ timezone: 'Asia/Kolkata' })]])
+    db.$setSelectResults([[makeHub({ timezone: 'Asia/Kolkata' })], [], [makeHub({ timezone: 'Asia/Kolkata' })], []])
     expect((await service.hubs.getHub('hub-1')).hub.timezone).toBe('Asia/Kolkata')
     expect((await service.hubs.getHubs()).hubs[0].timezone).toBe('Asia/Kolkata')
   })
 
   it('every read of a hub satisfies the declared response contract, timezone included', async () => {
     const { db, service } = setup()
-    db.$setSelectResults([[makeHub()], [makeHub()], [makeHub()], [makeHub()]])
+    db.$setSelectResults([[makeHub()], [], [makeHub()], [], [makeHub()], [makeHub()], []])
     // The route tests mock the service, so this is the check that the REAL row
     // mapping fills every required `Hub` field.
     expect(hubDetailResponseSchema.parse(await service.hubs.getHub('hub-1')).hub.timezone).toBe('UTC')

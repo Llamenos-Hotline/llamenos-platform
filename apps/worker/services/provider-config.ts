@@ -10,6 +10,8 @@ import type { TelephonyProviderConfig } from '@shared/types'
 import { PROVIDER_REQUIRED_FIELDS } from '@shared/types'
 import { MOCK_PROVIDER_TYPE } from '../telephony/mock'
 import { ServiceError } from './service-error'
+import { loadHubNumbers, setPrimaryDeclaredNumber } from './hub-numbers'
+import type { HubNumberScope } from '../db/schema'
 
 const VALID_PROVIDER_TYPES = [
   'twilio',
@@ -93,7 +95,6 @@ export class ProviderConfigService {
           credentials: config.credentials,
           status: config.status,
           capabilities: config.capabilities,
-          phoneNumbers: config.phoneNumbers,
           error: config.error,
           lastCheckedAt: config.lastCheckedAt,
           updatedAt: now,
@@ -109,7 +110,6 @@ export class ProviderConfigService {
           credentials: config.credentials ?? null,
           status: config.status ?? 'disconnected',
           capabilities: config.capabilities ?? [],
-          phoneNumbers: config.phoneNumbers ?? [],
           error: config.error ?? null,
           lastCheckedAt: config.lastCheckedAt ?? null,
           createdAt: now,
@@ -147,7 +147,7 @@ export class ProviderConfigService {
     // Build base config from provider_configs metadata
     const config: Record<string, unknown> = {
       type: row.providerType,
-      phoneNumber: (row.phoneNumbers as string[])?.[0] ?? '',
+      phoneNumber: '',
     }
 
     // Decrypt credentials if the server KEK is provided and credentials exist
@@ -167,6 +167,15 @@ export class ProviderConfigService {
       try {
         Object.assign(config, JSON.parse(row.credentials))
       } catch { /* encrypted, can't decrypt without secret */ }
+    }
+
+    // A hub's number is the one routing resolves calls from (`hub_numbers`), not
+    // a copy typed into the credentials: prefer a number bought through this
+    // config, else the hub's primary.
+    if (hubId) {
+      const numbers = (await loadHubNumbers(this.db, [hubId])).get(hubId) ?? []
+      const own = numbers.find((n) => n.providerConfigId === row.id) ?? numbers[0]
+      if (own) config.phoneNumber = own.number
     }
 
     return config as unknown as TelephonyProviderConfig
@@ -211,9 +220,15 @@ export class ProviderConfigService {
     return this.getTelephonyProvider(serverKek, hubId)
   }
 
+  /**
+   * `numberScope` is the authority the caller wrote the provider's number with
+   * (see `hub_numbers.scope`): `platform` only for a caller holding instance
+   * authority (`system:manage-hubs`).
+   */
   async setHubTelephonyProvider(
     hubId: string,
     config: TelephonyProviderConfig,
+    numberScope: HubNumberScope,
   ): Promise<{ ok: true }> {
     if (!config || typeof config !== 'object') {
       throw new ServiceError(400, 'Invalid request body')
@@ -246,29 +261,32 @@ export class ProviderConfigService {
       .where(eq(providerConfigs.hubId, hubId))
       .limit(1)
     const id = existing[0]?.id ?? crypto.randomUUID()
-    await this.db
-      .insert(providerConfigs)
-      .values({
-        id,
-        hubId,
-        providerType: config.type,
-        credentials: JSON.stringify(config),
-        status: 'connected',
-        capabilities: [],
-        phoneNumbers: config.phoneNumber ? [config.phoneNumber] : [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: providerConfigs.id,
-        set: {
+    await this.db.transaction(async (tx) => {
+      await tx
+        .insert(providerConfigs)
+        .values({
+          id,
+          hubId,
           providerType: config.type,
           credentials: JSON.stringify(config),
           status: 'connected',
-          phoneNumbers: config.phoneNumber ? [config.phoneNumber] : [],
+          capabilities: [],
+          createdAt: new Date(),
           updatedAt: new Date(),
-        },
-      })
+        })
+        .onConflictDoUpdate({
+          target: providerConfigs.id,
+          set: {
+            providerType: config.type,
+            credentials: JSON.stringify(config),
+            status: 'connected',
+            updatedAt: new Date(),
+          },
+        })
+      // The provider form's number is the hub's hotline number: it goes where
+      // routing reads it, not only into the provider's own record.
+      if (config.phoneNumber) await setPrimaryDeclaredNumber(tx, hubId, config.phoneNumber, numberScope)
+    })
     return { ok: true }
   }
 
@@ -299,9 +317,12 @@ export class ProviderConfigService {
       providerType: MOCK_PROVIDER_TYPE,
       credentials: await mockCredentials(phoneNumber, options),
       status: 'connected',
-      phoneNumbers: [phoneNumber],
       updatedAt: new Date(),
     }
+    // The mock's number is the one it dials from, kept in its credentials. It is
+    // deliberately NOT declared as a number the hub answers on: every hub's mock
+    // shares one default, and a dialled number belongs to one hub. A test that
+    // routes calls to the mock sets the hub's number the way an operator does.
     await this.db
       .insert(providerConfigs)
       .values({ id, hubId, capabilities: [], createdAt: new Date(), ...values })

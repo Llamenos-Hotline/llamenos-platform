@@ -6,6 +6,7 @@ import {
   providerTemplates,
 } from '../../db/schema'
 import { HubSettingsService } from '../hub-settings'
+import { loadHubNumbers } from '../hub-numbers'
 import { ProviderSetup } from './index'
 import { ProviderApiError } from './types'
 import { hubQuotaSchema } from '@protocol/schemas/provider-setup'
@@ -226,7 +227,7 @@ export class HubOnboardService {
       hubId,
       providerConnected: config?.status === 'connected',
       providerType: config?.providerType as HubSetupStatus['providerType'],
-      numbersProvisioned: (config?.phoneNumbers as string[])?.length ?? 0,
+      numbersProvisioned: ((await loadHubNumbers(this.db, [hubId])).get(hubId) ?? []).length,
       channelsConfigured: channelsConfigured as HubSetupStatus['channelsConfigured'],
       channelsPending: channelsPending as HubSetupStatus['channelsPending'],
       a2pStatus: hubSettings.subAccountEnabled ? 'configured' : undefined,
@@ -353,7 +354,6 @@ export class HubOnboardService {
       providerType: newProviderType,
       status: 'disconnected',
       capabilities: [],
-      phoneNumbers: [],
       createdAt: new Date(),
       updatedAt: new Date(),
     })
@@ -411,7 +411,6 @@ export class HubOnboardService {
       providerType: master.providerType,
       status: 'disconnected',
       capabilities: master.capabilities,
-      phoneNumbers: [],
       createdAt: new Date(),
       updatedAt: new Date(),
     })

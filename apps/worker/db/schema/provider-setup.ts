@@ -21,10 +21,6 @@ export const providerConfigs = pgTable('provider_configs', {
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),
-  phoneNumbers: text('phone_numbers')
-    .array()
-    .notNull()
-    .default(sql`'{}'::text[]`),
   error: text('error'),
   lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true })
