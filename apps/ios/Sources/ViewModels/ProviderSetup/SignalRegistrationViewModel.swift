@@ -45,16 +45,25 @@ final class SignalRegistrationViewModel {
 
     // MARK: - Computed
 
+    /// The registration is under way and not yet resolved: `pending` (the bridge has not
+    /// confirmed yet) or `verifying` (a code was submitted and rejected, so another is awaited).
     var isPending: Bool {
-        state?.status == .pending || state?.status == .registering
+        state?.status == .pending || state?.status == .verifying
+    }
+
+    /// Only `pending` is polled. The bridge confirms an SMS registration on its own while it
+    /// is pending, whereas `verifying` waits on a code from the admin and nothing on the
+    /// server changes until one is submitted.
+    private var shouldPoll: Bool {
+        state?.status == .pending
     }
 
     var isComplete: Bool {
-        state?.status == .registered
+        state?.status == .complete
     }
 
     var isFailed: Bool {
-        state?.status == .failed || state?.status == .expired
+        state?.status == .failed
     }
 
     var formValid: Bool {
@@ -89,7 +98,7 @@ final class SignalRegistrationViewModel {
     func checkStatus() async {
         do {
             state = try await service.getSignalStatus(hubId: hubId)
-            if !isPending {
+            if !shouldPoll {
                 pollingTask?.cancel()
             }
         } catch {
@@ -130,7 +139,7 @@ final class SignalRegistrationViewModel {
     func loadExistingState() async {
         do {
             state = try await service.getSignalStatus(hubId: hubId)
-            if isPending {
+            if shouldPoll {
                 startPolling()
             }
         } catch {
@@ -148,7 +157,7 @@ final class SignalRegistrationViewModel {
                 try? await Task.sleep(for: .seconds(3))
                 guard !Task.isCancelled else { return }
                 await self.checkStatus()
-                if !self.isPending { return }
+                if !self.shouldPoll { return }
             }
         }
     }

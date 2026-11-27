@@ -22,35 +22,22 @@ import { encryptCredentials, decryptCredentials } from './crypto'
 import { validateExternalUrl } from '../../lib/ssrf-guard'
 import { safeFetch } from '../../lib/safe-fetch'
 import { devSurfaceRequestAuthorized, type DevSurfacesEnv } from '../../lib/dev-surfaces'
+import type {
+  SignalRegistration,
+  SignalRegistrationMethod,
+  SignalRegistrationStatus,
+} from '@protocol/schemas'
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
-export type SignalRegistrationStatus =
-  | 'idle'
-  | 'pending'
-  | 'verifying'
-  | 'complete'
-  | 'failed'
-
-export interface SignalRegistration {
-  id: string
-  hubId: string
-  bridgeUrl: string | null
-  /** Masked phone number (last 4 digits only) — never the raw value. */
-  phoneNumberMasked: string
-  method: 'sms' | 'voice'
-  status: SignalRegistrationStatus
-  attempts: number
-  error: string | null
-  expiresAt: string | null
-  createdAt: string
-  updatedAt: string
-}
+// The wire contract is declared once, in the protocol package, so the mobile and
+// desktop clients decode the same vocabulary this state machine enforces (#2571).
+export type { SignalRegistration, SignalRegistrationStatus, SignalRegistrationMethod }
 
 export interface StartRegistrationParams {
   bridgeUrl: string
   phoneNumber: string
-  method: 'sms' | 'voice'
+  method: SignalRegistrationMethod
   hubId: string
   /**
    * The `X-Test-Secret` header of the request that asked for this, verbatim and
@@ -554,9 +541,9 @@ export class SignalRegistrationService {
     return {
       id: row.id,
       hubId: row.hubId,
-      bridgeUrl: null, // Never expose internal bridge URL in API responses
+      // Neither the bridge URL nor the raw number is part of the wire shape.
       phoneNumberMasked: maskPhone(phone),
-      method: row.method as 'sms' | 'voice',
+      method: row.method as SignalRegistrationMethod,
       status: row.status as SignalRegistrationStatus,
       attempts: row.attempts ?? 0,
       error: row.error,

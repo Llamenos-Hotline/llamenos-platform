@@ -293,7 +293,7 @@ private fun SignalStatusPanel(
             text = state.status.value,
             style = MaterialTheme.typography.titleLarge,
             color = when (state.status) {
-                SignalRegistrationStatus.Registered -> MaterialTheme.colorScheme.primary
+                SignalRegistrationStatus.Complete -> MaterialTheme.colorScheme.primary
                 SignalRegistrationStatus.Failed -> MaterialTheme.colorScheme.error
                 else -> MaterialTheme.colorScheme.onSurface
             },
@@ -302,22 +302,15 @@ private fun SignalStatusPanel(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = state.phoneNumber,
+            text = state.phoneNumberMasked,
             style = MaterialTheme.typography.bodyLarge,
         )
 
-        state.bridgeURL?.let { url ->
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = url,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
         when (state.status) {
+            SignalRegistrationStatus.Idle -> Unit
+
             SignalRegistrationStatus.Pending,
-            SignalRegistrationStatus.Registering -> {
+            SignalRegistrationStatus.Verifying -> {
                 Spacer(modifier = Modifier.height(16.dp))
                 CircularProgressIndicator()
                 Spacer(modifier = Modifier.height(8.dp))
@@ -358,7 +351,7 @@ private fun SignalStatusPanel(
                 }
             }
 
-            SignalRegistrationStatus.Registered -> {
+            SignalRegistrationStatus.Complete -> {
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     text = stringResource(R.string.signal_registered_message),
@@ -400,14 +393,6 @@ private fun SignalStatusPanel(
                 }
             }
 
-            SignalRegistrationStatus.Expired -> {
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = stringResource(R.string.signal_expired_message),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
         }
     }
 }
@@ -415,7 +400,7 @@ private fun SignalStatusPanel(
 @Composable
 private fun StatusIcon(status: SignalRegistrationStatus) {
     when (status) {
-        SignalRegistrationStatus.Registered -> {
+        SignalRegistrationStatus.Complete -> {
             Icon(
                 imageVector = Icons.Filled.CheckCircle,
                 contentDescription = null,
@@ -423,8 +408,7 @@ private fun StatusIcon(status: SignalRegistrationStatus) {
                 modifier = Modifier.size(64.dp),
             )
         }
-        SignalRegistrationStatus.Failed,
-        SignalRegistrationStatus.Expired -> {
+        SignalRegistrationStatus.Failed -> {
             Icon(
                 imageVector = Icons.Filled.Error,
                 contentDescription = null,

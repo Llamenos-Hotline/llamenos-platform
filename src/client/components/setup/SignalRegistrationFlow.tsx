@@ -78,7 +78,7 @@ export function SignalRegistrationFlow({
       pollRef.current = setInterval(async () => {
         try {
           const status = await getSignalStatus({ registrationId: regId })
-          if (status.status === 'registered') {
+          if (status.status === 'complete') {
             if (pollRef.current) clearInterval(pollRef.current)
             setFlowState('complete')
             onRegistrationComplete?.()
@@ -101,16 +101,16 @@ export function SignalRegistrationFlow({
     getSignalStatus({ hubId })
       .then((status) => {
         if (cancelled) return
-        if (status.status === 'pending' || status.status === 'registering') {
+        if (status.status === 'pending' || status.status === 'verifying') {
           setRegistrationId(status.id)
           setExpiresAt(status.expiresAt || null)
-          if (status.method === 'bridge') {
+          if (status.method === 'sms') {
             setFlowState('waiting-sms')
             startPolling(status.id)
           } else {
             setFlowState('voice-entry')
           }
-        } else if (status.status === 'registered') {
+        } else if (status.status === 'complete') {
           setFlowState('complete')
         }
       })
@@ -156,9 +156,18 @@ export function SignalRegistrationFlow({
     setVerifying(true)
     setErrorMessage(null)
     try {
-      await verifySignalCode({ registrationId, code: verificationCode })
-      setFlowState('complete')
-      onRegistrationComplete?.()
+      // A rejected code is a 200 with the registration back in `verifying` (or
+      // `failed` on the third miss) — only `complete` means the number registered.
+      const result = await verifySignalCode({ registrationId, code: verificationCode })
+      if (result.status === 'complete') {
+        setFlowState('complete')
+        onRegistrationComplete?.()
+      } else if (result.status === 'failed') {
+        setFlowState('failed')
+        setErrorMessage(result.error || t('signalRegistration.verificationFailed', { defaultValue: 'Verification failed' }))
+      } else {
+        setErrorMessage(result.error || t('signalRegistration.verificationFailed', { defaultValue: 'Verification failed' }))
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setErrorMessage(msg)

@@ -12,6 +12,7 @@ import type {
   AvailableNumber,
   WebhookUrlsResponse,
 } from '@protocol/schemas/provider-setup'
+import type { SignalRegistration } from '@protocol/schemas'
 import type { TelephonyProviderType } from '@shared/types'
 
 // ── OAuth ──────────────────────────────────────────────────────────────────
@@ -158,18 +159,8 @@ export interface SignalVerifyBody {
   hubId?: string
 }
 
-export interface SignalRegistrationResult {
-  id: string
-  hubId: string
-  bridgeUrl?: string
-  phoneNumber: string
-  method: string
-  status: string
-  error?: string
-  expiresAt?: string
-  createdAt: string
-  updatedAt: string
-}
+// The wire shape is declared once in the protocol package; the number arrives masked.
+export type SignalRegistrationResult = SignalRegistration
 
 export async function startSignalRegistration(
   body: SignalRegisterBody,

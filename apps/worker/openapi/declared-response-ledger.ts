@@ -32,11 +32,6 @@ export const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
   { method: 'GET', route: '/api/hubs/:hubId/blasts', status: 200, issue: 2572 },
   { method: 'GET', route: '/api/hubs/:hubId/blasts/:id', status: 200, issue: 2572 },
   { method: 'GET', route: '/api/hubs/:hubId/notes/:id/replies', status: 200, issue: 2300 },
-  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/register', status: 200, issue: 2571 },
-  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/verify', status: 200, issue: 2571 },
-  { method: 'POST', route: '/api/provider-setup/signal/register', status: 200, issue: 2571 },
-  { method: 'GET', route: '/api/provider-setup/signal/status', status: 200, issue: 2571 },
-  { method: 'POST', route: '/api/provider-setup/signal/verify', status: 200, issue: 2571 },
 ]
 
 /** The ledger entry covering `violation`, if any. */
