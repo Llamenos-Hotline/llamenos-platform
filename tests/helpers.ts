@@ -3,6 +3,7 @@ import { devSurfaceSecret } from './dev-surface-secret'
 import { TestIds } from './test-ids'
 import { generateTestKeypair, redeemInviteViaApi } from './api-helpers'
 import type { z } from 'zod'
+import type { EncryptedDeviceKeys } from '../src/client/lib/platform'
 import type {
   activeCallsResponseSchema,
   callPresenceResponseSchema,
@@ -391,8 +392,24 @@ export async function loginAsAdmin(page: Page) {
 }
 
 /**
- * Login as user (volunteer): imports key material via IPC mock,
- * persists to store, then enters PIN to unlock.
+ * The device each volunteer seed was installed on in this worker, as its secure
+ * store holds it: the PIN-sealed device keys, X-Wing seed and device id included.
+ *
+ * A device's X-Wing seed is drawn once, when the device is created
+ * (`device_import_and_load`), and the volunteer's sigchain names that key from the
+ * first sign-in on. Importing the bare signing seed again creates a NEW device
+ * that holds a different X-Wing key, and the client correctly refuses a chain
+ * naming another key for it (`assertNamesHeldKemKey`, src/client/lib/user-identity.ts;
+ * spec L6: reported, never re-keyed). A volunteer coming back is the same device
+ * unlocking with its PIN, so every sign-in after the first restores this record —
+ * each Playwright context is the app restarting on that device.
+ */
+const volunteerDevices = new Map<string, EncryptedDeviceKeys>()
+
+/**
+ * Login as user (volunteer): installs the device on first use (imports the
+ * signing seed via the IPC mock) and afterwards reuses the device it created,
+ * persists it to the secure store, then enters the PIN to unlock.
  *
  * Accepts a raw Ed25519 signing seed hex string (as returned by createUserViaApi).
  */
@@ -414,14 +431,18 @@ export async function loginAsVolunteer(page: Page, seedHex: string) {
   // Wait for __TEST_PLATFORM to be loaded
   await page.waitForFunction(() => !!window.__TEST_PLATFORM, { timeout: Timeouts.AUTH })
 
-  // Import Ed25519 seed
-  await page.evaluate(async ({ secretHex, pin }) => {
+  // Install the device on first use; afterwards put the same device back in the
+  // secure store (persistAndUnlockDeviceKeys, the app's own path, so a head
+  // recorded for another identity in this context is dropped as in production).
+  const device = await page.evaluate(async ({ secretHex, pin, installed }) => {
     const platform = window.__TEST_PLATFORM
     if (!platform) throw new Error('__TEST_PLATFORM not available')
-    const encrypted = await platform.deviceImportAndLoad(secretHex, pin, crypto.randomUUID())
+    const encrypted = installed ?? await platform.deviceImportAndLoad(secretHex, pin, crypto.randomUUID())
     await platform.persistAndUnlockDeviceKeys(encrypted, pin)
     await platform.lockCrypto()
-  }, { secretHex, pin: TEST_PIN })
+    return encrypted
+  }, { secretHex, pin: TEST_PIN, installed: volunteerDevices.get(secretHex) ?? null })
+  volunteerDevices.set(secretHex, device)
 
   // Reload to trigger PIN screen
   await page.reload()
