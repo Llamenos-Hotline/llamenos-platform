@@ -235,6 +235,13 @@ carries device secrets (#1972) seals with X-Wing too. Pilot devices hold X25519 
 They get an X-Wing key through a user-sigchain link before their hub's migration genesis (§3.2).
 That link type is decided with #1972, not here.
 
+*Revised 2026-11-26 (operator: no real data before M2; see the note under §3).* **The user-sigchain
+genesis `user_init` is on that list too.** It names the first device's encryption key, and no
+`device_add` can ever name the first device. In format 2, `user_init` carries the device's X-Wing
+`encryptionPubkey`, `format: 2`, and the same `pop` as `device_add` (linking spec L5). After the
+reset every chain is new, so changing the genesis shape costs no migration. The pilot-device link
+(linking spec L4) is then not needed.
+
 **Under either option:**
 
 - The suite is `suite(crypto_format)`, a closed table in the crate. No field names a suite. Each
