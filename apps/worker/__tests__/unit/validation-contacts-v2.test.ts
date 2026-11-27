@@ -129,7 +129,6 @@ describe('contacts-v2 route validation', () => {
       const app = createApp()
       const res = await sendJSON(app, '/directory/contact-1', {
         tagHashes: ['tag-hash-1', 'tag-hash-2'],
-        statusHash: 'new-status',
       }, 'PATCH')
       expect(res.status).not.toBe(400)
     })

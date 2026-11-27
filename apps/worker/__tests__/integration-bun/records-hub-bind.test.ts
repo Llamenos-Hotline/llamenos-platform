@@ -162,7 +162,6 @@ const typeBody = (hubId: string, name: string, numberPrefix: string) => ({
 const envelopes = (pubkey: string) => [{ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }]
 const createBody = (entityTypeId: string, extra: Record<string, unknown> = {}) => ({
   entityTypeId,
-  statusHash: 'open',
   encryptedSummary: 'ciphertext',
   summaryEnvelopes: envelopes(ADMIN_DEVICE_KEY),
   ...extra,

@@ -125,6 +125,16 @@ function shapeKeys(schema: ZodType): string[] {
 
 const multiWord = (key: string) => /[a-z][A-Z]/.test(key)
 
+/**
+ * A `.strict()` object refuses a key it does not declare. The record and contact
+ * write bodies are strict (#2779), so the historic snake_case bytes are a loud 400
+ * there, never the silent drop an all-optional body used to allow.
+ */
+function isStrict(schema: ZodType): boolean {
+  const catchall = (schema._zod.def as unknown as { catchall?: { _zod: { def: { type: string } } } }).catchall
+  return catchall?._zod.def.type === 'never'
+}
+
 describe('#1633 iOS request bodies against the real input schemas', () => {
   it('the fixture covers every case it declares', () => {
     expect(fixture.cases.length).toBeGreaterThan(0)
@@ -174,6 +184,16 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
         expect(
           result.success,
           `${c.schema} accepted a body missing required ${required.join(', ')} — expected a 400`,
+        ).toBe(false)
+        return
+      }
+
+      if (isStrict(schemaFor(c))) {
+        // Every mangled key is optional, but the schema refuses a key it does not
+        // declare, so the write fails loudly instead of validating as `{}`.
+        expect(
+          result.success,
+          `${c.schema} is strict, so the snake_case body must be refused`,
         ).toBe(false)
         return
       }
@@ -242,10 +262,10 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
       expect(wire).toHaveProperty(key)
     }
 
+    // The body used to validate as `{}` and write nothing. The schema is strict now
+    // (#2779), so the same bytes are a 400 and the volunteer sees the edit fail.
     const result = contactsV2.updateContactBodySchema.safeParse(legacySnakeCase)
-    expect(result.success).toBe(true)
-    // Not "some fields missing" — the body the route receives is empty.
-    expect(Object.keys((result as { data: Record<string, unknown> }).data)).toEqual([])
+    expect(result.success).toBe(false)
   })
 
   it('PATCH /api/records/:id did not just lose the status change — it unassigned the case and wiped its blind indexes', () => {
@@ -255,52 +275,25 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
     //   assignedTo:    z.array(z.string()).optional().default([])
     //   blindIndexes:  z.record(...).optional().default({})
     //
-    // With statusHash and severityHash mangled into status_hash / severity_hash, the
-    // validator saw an empty body. updateRecordBodySchema USED TO be
-    // `createRecordBodySchema.partial()`, and `.partial()` only makes the outer field
-    // optional — it leaves the inner `.optional().default()` wrapper intact, so the
-    // schema went on SUPPLYING those two defaults. The body that reached the route was
-    // therefore not `{}`: it was `{assignedTo: [], blindIndexes: {}}`.
-    //
-    // apps/worker/services/cases.ts:205-206 writes any key that is `!== undefined`:
-    //   if (input.assignedTo !== undefined)   values.assignedTo = input.assignedTo
-    //   if (input.blindIndexes !== undefined) values.blindIndexes = input.blindIndexes
-    //
-    // so a status change from iOS cleared the case's assignees and destroyed every
-    // blind index on it. The blind indexes are HMACs the client derives from plaintext
-    // the server never holds, so the server cannot rebuild them: materialising them on
-    // an effectively-empty PATCH was real data loss, and the case stopped being
-    // findable by any encrypted-field search. Meanwhile the status did not change, no
-    // status_change interaction was written (cases.ts:217 is gated on input.statusHash),
-    // a `recordUpdated` audit entry was recorded, a `record:updated` event was
-    // published, and iOS reported success.
-    //
-    // #1652 fixed that half of it: updateRecordBodySchema is now
-    // `forPatch(createRecordBodySchema)`, which strips the inner defaults as well as
-    // making each field optional, so an unsent field stays `undefined` and no longer
-    // overwrites assignedTo/blindIndexes. The assertions below therefore pin the
-    // post-#1652 behaviour — the defaults are gone. The snake-casing defect this test
-    // exists for is untouched by #1652 and is still asserted, immediately below.
+    // updateRecordBodySchema used to be `createRecordBodySchema.partial()`, whose
+    // inner `.optional().default()` wrappers SUPPLIED `assignedTo: []` and
+    // `blindIndexes: {}` for a body the validator saw as empty, so a mangled PATCH
+    // unassigned the case and wiped its blind indexes (#1652 stripped those defaults
+    // with `forPatch`). Since #2779 the schema is also strict: the historic bytes are
+    // refused outright, and nothing is written at all.
     const result = records.updateRecordBodySchema.safeParse(fixture.bodies.updateRecord.legacySnakeCase)
-    expect(result.success).toBe(true)
-    const parsed = (result as { data: Record<string, unknown> }).data
+    expect(result.success).toBe(false)
 
-    // The change the user asked for is gone...
-    expect(parsed.statusHash).toBeUndefined()
-    expect(parsed.severityHash).toBeUndefined()
-    // ...and since #1652 the two destructive defaults are no longer materialised:
-    // forPatch() strips the inner `.optional().default()`, so an unsent field stays
-    // undefined and cases.ts skips it.
-    expect(parsed.assignedTo).toBeUndefined()
-    expect(parsed.blindIndexes).toBeUndefined()
-
-    // What iOS sends now carries the status change and supplies no such defaults
-    // beyond them, so nothing is cleared.
+    // What iOS sends now validates, keeps every key, and supplies no destructive
+    // default beyond them.
     const fixed = records.updateRecordBodySchema.safeParse(fixture.bodies.updateRecord.wire)
     expect(fixed.success).toBe(true)
     const fixedData = (fixed as { data: Record<string, unknown> }).data
-    expect(fixedData.statusHash).toBe('aa11')
-    expect(fixedData.severityHash).toBe('bb22')
+    expect(fixedData.assignedTo).toBeUndefined()
+    expect(fixedData.blindIndexes).toBeUndefined()
+    for (const key of Object.keys(fixture.bodies.updateRecord.wire)) {
+      expect(fixedData).toHaveProperty(key)
+    }
   })
 
   it('a nested record key was NOT rewritten, so blind indexes survived — measured, not assumed', () => {
@@ -317,10 +310,10 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
     expect(Object.keys(legacy)).toContain('blind_indexes')
     expect(Object.keys(legacy.blind_indexes)).toEqual(['nameToken'])
 
-    // So the loss is a plain unknown-key drop, which `updateContactBodySchema` ignores.
+    // So the container key is an unknown key, which the strict `updateContactBodySchema`
+    // refuses (it used to ignore it).
     const parsed = contactsV2.updateContactBodySchema.safeParse(legacy)
-    expect(parsed.success).toBe(true)
-    expect((parsed as { data: Record<string, unknown> }).data.blindIndexes).toBeUndefined()
+    expect(parsed.success).toBe(false)
   })
 
   it('a top-level Dictionary body WAS rewritten, because AnyEncodable erases the type', () => {

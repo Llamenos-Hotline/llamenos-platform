@@ -63,7 +63,6 @@ Given('a record exists with blindIndexes containing {string} for field {string}'
     const state = getState_(world)
     const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/records`, {
       entityTypeId: state.entityTypeId,
-      statusHash: 'active',
       encryptedSummary: `enc-${token}`,
       summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'c'.repeat(96) }],
       blindIndexes: { [field]: [token] },
@@ -114,7 +113,6 @@ Given('a record exists with start_date blind indexes for {string}',
     const token = `month:${month}`
     const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/records`, {
       entityTypeId: state.entityTypeId,
-      statusHash: 'active',
       encryptedSummary: `enc-${token}`,
       summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'c'.repeat(96) }],
       blindIndexes: { start_date: [token] },
@@ -156,7 +154,6 @@ Given('{int} events exist without deprecated_at set', async ({ request, world, w
   for (let i = 0; i < count; i++) {
     const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/events`, {
       entityTypeId: state.entityTypeId,
-      statusHash: 'active',
       eventTypeHash: 'legacy',
       startDate: new Date().toISOString(),
       encryptedDetails: `legacy-event-${Date.now()}-${i}`,
@@ -172,7 +169,6 @@ When('the admin creates a record with that entity type', async ({ request, world
   const state = getState_(world)
   const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/records`, {
     entityTypeId: state.entityTypeId,
-    statusHash: 'active',
     encryptedSummary: 'encrypted-test-summary',
     summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'c'.repeat(96) }],
   })

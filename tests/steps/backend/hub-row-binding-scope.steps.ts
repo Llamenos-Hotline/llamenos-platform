@@ -137,7 +137,6 @@ When('the super-admin creates a record at the unscoped {string}', async ({ reque
   state.strayMarker = uniqueName('stray-unscoped-record')
   setLastResponse(world, await apiPost(request, path.replace(/^\/api/, ''), {
     entityTypeId: crypto.randomUUID(),
-    statusHash: 'status_open_hash',
     encryptedSummary: state.strayMarker,
     summaryEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'c'.repeat(96) }],
   }, ADMIN_SEED))

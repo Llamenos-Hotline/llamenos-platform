@@ -1682,7 +1682,6 @@ export async function createContactByNameViaApi(
     encryptedSummary,
     summaryEnvelopes: readerEnvelopes,
     identifierHashes: [`name_${Date.now()}_${Math.random().toString(36).slice(2)}`],
-    contactTypeHash: contactType,
     nameHash,
     trigramTokens: trigrams,
     hubId: extraOptions.hubId,
@@ -1860,7 +1859,6 @@ export async function createContactViaApi(
       trigramTokens: options.trigramTokens,
       encryptedSummary,
       summaryEnvelopes,
-      contactTypeHash: options.contactTypeHash,
       tagHashes: [],
       blindIndexes: {},
     },
@@ -1939,7 +1937,6 @@ export async function createRecordViaApi(
     hubOwnedPath('/records', options.hubId),
     {
       entityTypeId,
-      statusHash: options?.statusHash ?? 'status_open_hash',
       assignedTo: options?.assignedTo ?? [],
       blindIndexes: options?.blindIndexes ?? {},
       encryptedSummary: summary.encryptedContent,
@@ -2061,7 +2058,6 @@ export async function createEventViaApi(
       endDate: options?.endDate,
       parentEventId: options?.parentEventId,
       eventTypeHash: options?.eventTypeHash ?? 'event_type_hash',
-      statusHash: options?.statusHash ?? 'event_status_hash',
       blindIndexes: {},
       encryptedDetails,
       detailEnvelopes: envelopes,
@@ -2692,7 +2688,6 @@ export async function createCaseFromReportViaApi(
 ): Promise<{ recordId: string; linkId: string }> {
   // Create the record first
   const record = await createRecordViaApi(request, entityTypeId, {
-    statusHash: 'status_open_hash',
     hubId,
   }, seedHex)
   const recordId = (record as { id: string }).id

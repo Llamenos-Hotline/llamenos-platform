@@ -108,7 +108,6 @@ describe('contact create / read / edit without search indexes', () => {
       hubId: HUB_ID,
       encryptedSummary: 'ciphertext-v1',
       summaryEnvelopes: [ENVELOPE],
-      contactTypeHash: 'individual',
       tagHashes: [],
       blindIndexes: {},
     })

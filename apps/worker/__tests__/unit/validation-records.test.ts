@@ -30,7 +30,6 @@ describe('records route validation', () => {
   describe('POST /records', () => {
     const VALID_RECORD = {
       entityTypeId: VALID_UUID,
-      statusHash: 'open-hash',
       encryptedSummary: 'encrypted-summary',
       summaryEnvelopes: [VALID_ENVELOPE],
     }
@@ -47,13 +46,6 @@ describe('records route validation', () => {
         ...VALID_RECORD,
         entityTypeId: 'not-a-uuid',
       })
-      expect(res.status).toBe(400)
-    })
-
-    it('rejects missing statusHash', async () => {
-      const app = createApp()
-      const { statusHash: _, ...body } = VALID_RECORD
-      const res = await sendJSON(app, '/records', body)
       expect(res.status).toBe(400)
     })
 
@@ -149,7 +141,6 @@ describe('records route validation', () => {
     it('accepts status change with interaction metadata', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/records/rec-1', {
-        statusHash: 'closed-hash',
         statusChangeTypeHash: 'resolved-hash',
         statusChangeContent: 'encrypted-change-note',
         statusChangeEnvelopes: [VALID_ENVELOPE],

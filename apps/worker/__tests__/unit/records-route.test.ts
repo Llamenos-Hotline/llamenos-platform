@@ -26,7 +26,6 @@ const NON_ADMIN_ENVELOPE = { pubkey: 'e'.repeat(64), enc: HPKE_ENC, ct: WRAPPED_
 /** Minimal valid body for createRecordBodySchema */
 const validCreateBody = {
   entityTypeId: VALID_UUID,
-  statusHash: 'status-hash-value',
   encryptedSummary: 'enc-summary-data',
   summaryEnvelopes: [TEST_ENVELOPE],
 }
@@ -289,7 +288,7 @@ describe('PATCH /records/:id — update ownership', () => {
     const res = await app.request('/rec-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'closed' }),
+      body: JSON.stringify({ closedAt: '2026-01-02T00:00:00.000Z' }),
     })
     expect(res.status).toBe(403)
   })
@@ -299,7 +298,7 @@ describe('PATCH /records/:id — update ownership', () => {
     const res = await app.request('/rec-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'closed' }),
+      body: JSON.stringify({ closedAt: '2026-01-02T00:00:00.000Z' }),
     })
     expect(res.status).toBe(200)
   })
@@ -313,7 +312,7 @@ describe('PATCH /records/:id — update ownership', () => {
     const res = await app.request('/rec-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'closed' }),
+      body: JSON.stringify({ closedAt: '2026-01-02T00:00:00.000Z' }),
     })
     expect(res.status).toBe(200)
   })
@@ -327,7 +326,7 @@ describe('PATCH /records/:id — update ownership', () => {
     const res = await app.request('/rec-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'closed' }),
+      body: JSON.stringify({ closedAt: '2026-01-02T00:00:00.000Z' }),
     })
     expect(res.status).toBe(403)
   })
@@ -558,7 +557,6 @@ describe('PATCH /records/:id — every sealed tier it touches names an admin rea
   it('REFUSES (422) a status-change comment no admin can open', async () => {
     const { app, mockCases } = makeApp()
     const res = await patch(app, {
-      statusHash: 'closed',
       statusChangeContent: 'why',
       statusChangeEnvelopes: [NON_ADMIN_ENVELOPE],
     })
@@ -568,7 +566,7 @@ describe('PATCH /records/:id — every sealed tier it touches names an admin rea
 
   it('does not consult the readers for an update that seals nothing', async () => {
     const { app, mockCases, mockIdentity } = makeApp()
-    const res = await patch(app, { statusHash: 'closed-hash' })
+    const res = await patch(app, { closedAt: '2026-01-02T00:00:00.000Z' })
     expect(res.status).toBe(200)
     expect(mockCases.update).toHaveBeenCalledOnce()
     expect(mockIdentity.listAdminEnvelopeRecipients).not.toHaveBeenCalled()
@@ -792,7 +790,7 @@ describe('records — hub isolation', () => {
 
 describe('record mutations audit to the record\'s hub, never the platform chain (#2461)', () => {
   const mutations: Array<[string, string, string, unknown]> = [
-    ['recordUpdated', 'PATCH', '/rec-1', { statusHash: 'closed-hash' }],
+    ['recordUpdated', 'PATCH', '/rec-1', { closedAt: '2026-01-02T00:00:00.000Z' }],
     ['recordDeleted', 'DELETE', '/rec-1', undefined],
     ['recordAssigned', 'POST', '/rec-1/assign', { pubkeys: ['b'.repeat(64)] }],
     ['recordContactLinked', 'POST', '/rec-1/contacts', { contactId: '550e8400-e29b-41d4-a716-446655440000', role: 'caller' }],

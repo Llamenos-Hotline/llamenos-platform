@@ -781,7 +781,6 @@ When('the admin updates the record status with change metadata', async ({ reques
     request,
     getCmsState(world).lastRecord!.id as string,
     {
-      statusHash: 'status_updated',
       statusChangeTypeHash: 'status_change_hash',
       statusChangeContent: 'dGVzdCBzdGF0dXMgY2hhbmdl',
       statusChangeEnvelopes: adminPlaceholderEnvelopes(),

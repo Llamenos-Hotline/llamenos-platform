@@ -87,7 +87,6 @@ Given('{int} open records are linked to the contact', async ({ request, world },
 
   for (let i = 0; i < count; i++) {
     const record = await createRecordViaApi(request, entityTypeId, {
-      statusHash: 'status_open',
       hubId,
     })
     await linkContactToRecordViaApi(request, record.id as string, contactId, 'subject', ADMIN_SEED, hubId)
@@ -101,7 +100,6 @@ Given('{int} closed record is linked to the contact', async ({ request, world },
 
   for (let i = 0; i < count; i++) {
     const record = await createRecordViaApi(request, entityTypeId, {
-      statusHash: 'status_closed',
       hubId,
     })
     await linkContactToRecordViaApi(request, record.id as string, contactId, 'subject', ADMIN_SEED, hubId)

@@ -22,9 +22,6 @@ function makeCaseRow(overrides: Record<string, unknown> = {}) {
     hubId: 'hub-1',
     entityTypeId: 'entity-type-1',
     caseNumber: 'CASE-001',
-    statusHash: 'hash-open',
-    severityHash: null,
-    categoryHash: null,
     assignedTo: [],
     blindIndexes: {},
     encryptedSummary: 'enc-summary',
@@ -60,7 +57,6 @@ function makeEventRow(overrides: Record<string, unknown> = {}) {
     locationPrecision: 'neighborhood',
     locationApproximate: null,
     eventTypeHash: 'hash-arrest',
-    statusHash: 'hash-open',
     blindIndexes: {},
     encryptedDetails: 'enc-details',
     detailEnvelopes: {},
@@ -102,8 +98,6 @@ function _makeInteractionRow(overrides: Record<string, unknown> = {}) {
     interactionType: 'note',
     authorPubkey: 'pk-admin',
     interactionTypeHash: 'hash-note',
-    previousStatusHash: null,
-    newStatusHash: null,
     encryptedContent: 'enc-content',
     contentEnvelopes: {},
     createdAt: new Date(),
@@ -240,7 +234,7 @@ describe('CasesService.list', () => {
     const { db, service } = setup()
     db.$setSelectResults([[{ count: 0 }], []])
 
-    const result = await service.list({ hubId: 'hub-1', statusHash: 'hash-nonexistent' })
+    const result = await service.list({ hubId: 'hub-1', entityTypeId: 'et-nonexistent' })
     expect(result.records).toEqual([])
     expect(result.hasMore).toBe(false)
   })
@@ -446,7 +440,6 @@ describe('CasesService.createEvent', () => {
       startDate: '2025-01-01',
       locationPrecision: 'neighborhood',
       eventTypeHash: 'hash-arrest',
-      statusHash: 'hash-open',
       blindIndexes: {},
       encryptedDetails: 'enc-details',
       detailEnvelopes: [mockEnvelope],
@@ -467,7 +460,6 @@ describe('CasesService.createEvent', () => {
       startDate: '2025-01-01',
       locationPrecision: 'neighborhood',
       eventTypeHash: 'hash-protest',
-      statusHash: 'hash-open',
       blindIndexes: {},
       encryptedDetails: 'enc-details',
       detailEnvelopes: [mockEnvelope],
@@ -500,16 +492,16 @@ describe('CasesService.updateEvent', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.updateEvent('nonexistent', { statusHash: 'hash-closed' })).rejects.toMatchObject({ status: 404 })
+    await expect(service.updateEvent('nonexistent', { locationApproximate: 'Elsewhere' })).rejects.toMatchObject({ status: 404 })
   })
 
   it('updates event fields', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeEventRow()])
-    db.$setUpdateResult([makeEventRow({ statusHash: 'hash-closed' })])
+    db.$setUpdateResult([makeEventRow({ locationApproximate: 'Elsewhere' })])
 
-    const result = await service.updateEvent('event-1', { statusHash: 'hash-closed' })
-    expect(result.statusHash).toBe('hash-closed')
+    const result = await service.updateEvent('event-1', { locationApproximate: 'Elsewhere' })
+    expect(result.locationApproximate).toBe('Elsewhere')
     expect(db.update).toHaveBeenCalled()
   })
 
@@ -902,26 +894,26 @@ describe('CasesService.listEventReports', () => {
 // ---------------------------------------------------------------------------
 
 describe('CasesService.update - status change interaction', () => {
-  it('creates status_change interaction when statusHash changes', async () => {
+  it('creates status_change interaction when the client marks the write as a status change', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([makeCaseRow({ statusHash: 'hash-open' })])
-    db.$setUpdateResult([makeCaseRow({ statusHash: 'hash-closed' })])
+    db.$setSelectResult([makeCaseRow()])
+    db.$setUpdateResult([makeCaseRow()])
 
     await service.update('case-1', {
-      statusHash: 'hash-closed',
       authorPubkey: 'pk-admin',
+      statusChangeTypeHash: 'status-change-token',
     })
     expect(db.insert).toHaveBeenCalled() // status_change interaction
     expect(db.update).toHaveBeenCalled()
   })
 
-  it('does NOT create interaction when statusHash unchanged', async () => {
+  it('does NOT create an interaction when the write is not marked as a status change', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([makeCaseRow({ statusHash: 'hash-open' })])
+    db.$setSelectResult([makeCaseRow()])
     db.$setUpdateResult([makeCaseRow()])
 
     await service.update('case-1', {
-      statusHash: 'hash-open', // same as existing
+      closedAt: '2026-01-02T00:00:00.000Z',
     })
     expect(db.insert).not.toHaveBeenCalled()
   })

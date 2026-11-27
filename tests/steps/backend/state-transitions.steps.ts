@@ -101,7 +101,6 @@ When('the admin converts the submitted report to a case', async ({ request, worl
     `/hubs/${workerHub}/records`,
     {
       entityTypeId: getTransitionState(world).entityTypeId,
-      statusHash: 'open',
       encryptedSummary: 'transition-case-summary',
       summaryEnvelopes: [{ pubkey: adminDeviceKey(), ct: 'c'.repeat(96), enc: 'b'.repeat(64) }],
     },

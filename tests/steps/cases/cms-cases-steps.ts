@@ -270,7 +270,6 @@ Given('an arrest case exists', async ({ backendRequest: request, casesWorld, wor
   // assigned to them so they can see it with cases:read-assigned permission.
   if (casesWorld.volunteerPubkey) {
     const record = await createRecordViaApi(request, etId, {
-      statusHash: 'reported',
       assignedTo: [casesWorld.volunteerPubkey],
       hubId: workerHub,
     })
@@ -883,7 +882,6 @@ Given('a parent case with child records exists', async ({ backendRequest: reques
 
   // Create child record linked to parent
   await createRecordViaApi(request, entityTypeId, {
-    statusHash: 'reported',
     hubId: workerHub,
     parentRecordId: casesWorld.lastCreatedRecordId,
   })

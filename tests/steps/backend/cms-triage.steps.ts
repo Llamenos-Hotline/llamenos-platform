@@ -261,7 +261,6 @@ When('the admin creates a case record from the report', async ({ request, world 
     `/hubs/${hubId}/records`,
     {
       entityTypeId: getTriageState(world).entityTypeId,
-      statusHash: 'open',
       encryptedSummary: 'triage-case-summary',
       summaryEnvelopes: [{ pubkey: adminDeviceKey(), ct: 'c'.repeat(96), enc: 'b'.repeat(64) }],
     },

@@ -20,9 +20,7 @@ describe('ContactsService', () => {
       summaryEnvelopes: [{ v: 1, enc: '14e9ef511f3a7447ca78bb1517d8bd937cc5146021d6102c55290ce6e93995f3', ct: 'c698a9f9fa9a82f2b1009189ef22a4459e40a02dd7ee8d8857862df388651d7fff035fa977da6ad24a832e192519b057' }],
       encryptedPii: null,
       piiEnvelopes: null,
-      contactTypeHash: null,
       tagHashes: [],
-      statusHash: null,
       blindIndexes: {},
       needsReencryption: false,
       caseCount: 0,
@@ -153,17 +151,6 @@ describe('ContactsService', () => {
       expect(result.total).toBe(5)
       expect(result.page).toBe(1)
       expect(result.hasMore).toBe(false)
-    })
-
-    it('filters by contactTypeHash', async () => {
-      const { db, service } = setup()
-      db.$setSelectResults([
-        [{ count: 1 }],
-        [makeContact({ contactTypeHash: 'type1' })],
-      ])
-
-      const result = await service.list({ hubId: 'hub-1', contactTypeHash: 'type1' })
-      expect(result.contacts).toHaveLength(1)
     })
 
     it('caps limit at 100', async () => {

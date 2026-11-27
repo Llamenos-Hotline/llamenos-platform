@@ -20,9 +20,6 @@ function caseRow(overrides: Record<string, unknown> = {}) {
     hubId: 'hub-1',
     entityTypeId: 'et-incident',
     caseNumber: null,
-    statusHash: 'hash-open',
-    severityHash: null,
-    categoryHash: null,
     assignedTo: ['pk-volunteer'],
     blindIndexes: { phone: 'hmac-phone', name: ['hmac-a', 'hmac-b'] },
     encryptedSummary: 'enc-summary',
@@ -67,16 +64,16 @@ function casesServiceCapturingSet() {
 }
 
 describe('PATCH /api/records/:id — unsent fields are untouched (#1643)', () => {
-  it('writes only statusHash when only statusHash was sent', async () => {
+  it('writes only encryptedSummary when only encryptedSummary was sent', async () => {
     const { service, setValues } = casesServiceCapturingSet()
 
-    const body = updateRecordBodySchema.parse({ statusHash: 'hash-closed' })
-    expect(body).toEqual({ statusHash: 'hash-closed' })
+    const body = updateRecordBodySchema.parse({ encryptedSummary: 'enc-new' })
+    expect(body).toEqual({ encryptedSummary: 'enc-new' })
 
     await service.update('case-1', { ...body, authorPubkey: 'pk-author' })
 
     const written = setValues.mock.calls[0][0] as Record<string, unknown>
-    expect(Object.keys(written).sort()).toEqual(['interactionCount', 'statusHash', 'updatedAt'])
+    expect(Object.keys(written).sort()).toEqual(['encryptedSummary', 'updatedAt'])
     expect(written).not.toHaveProperty('assignedTo')
     expect(written).not.toHaveProperty('blindIndexes')
   })
@@ -84,8 +81,8 @@ describe('PATCH /api/records/:id — unsent fields are untouched (#1643)', () =>
   it('still clears assignedTo when the client sends it explicitly', async () => {
     const { service, setValues } = casesServiceCapturingSet()
 
-    const body = updateRecordBodySchema.parse({ statusHash: 'hash-closed', assignedTo: [] })
-    expect(body).toEqual({ statusHash: 'hash-closed', assignedTo: [] })
+    const body = updateRecordBodySchema.parse({ encryptedSummary: 'enc-new', assignedTo: [] })
+    expect(body).toEqual({ encryptedSummary: 'enc-new', assignedTo: [] })
 
     await service.update('case-1', { ...body, authorPubkey: 'pk-author' })
 
