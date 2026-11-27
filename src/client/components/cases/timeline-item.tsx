@@ -91,16 +91,27 @@ function MessageContent({ decryptedText }: TypeContentProps) {
   return <p className="text-sm text-foreground whitespace-pre-wrap">{preview}</p>
 }
 
-function StatusChangeContent({ interaction, decryptedText, statusLabels }: TypeContentProps) {
+function parseStatusChange(decryptedText: string | null | undefined): { text?: string; previous?: string; next?: string } {
+  if (!decryptedText) return {}
+  try {
+    const parsed = JSON.parse(decryptedText) as { text?: string; previousStatus?: string; newStatus?: string }
+    return { text: parsed.text || undefined, previous: parsed.previousStatus, next: parsed.newStatus }
+  } catch {
+    return { text: decryptedText }
+  }
+}
+
+function StatusChangeContent({ decryptedText, statusLabels }: TypeContentProps) {
   const { t } = useTranslation()
 
-  // Try to resolve human-readable labels from hash→label mapping
-  const prevLabel = interaction.previousStatusHash && statusLabels?.[interaction.previousStatusHash]
-  const newLabel = interaction.newStatusHash && statusLabels?.[interaction.newStatusHash]
+  // The transition is sealed with the entry: {text, previousStatus, newStatus}, the
+  // statuses being the entity type's values. The server knows neither.
+  const change = parseStatusChange(decryptedText)
+  const prevLabel = change.previous && statusLabels?.[change.previous]
+  const newLabel = change.next && statusLabels?.[change.next]
 
-  // If we have decrypted text with embedded status names, show that
-  if (decryptedText) {
-    return <p className="text-sm text-foreground">{decryptedText}</p>
+  if (change.text) {
+    return <p className="text-sm text-foreground">{change.text}</p>
   }
 
   return (

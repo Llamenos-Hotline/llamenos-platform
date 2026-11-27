@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { CaseRecord } from '@/lib/api'
-import { Badge } from '@/components/ui/badge'
+import { RecordStatusBadge } from '@/components/cases/record-status-badge'
 import { Clock } from 'lucide-react'
 
 interface EntityTimelineViewProps {
@@ -47,9 +47,7 @@ export function EntityTimelineView({ records, onSelectRecord }: EntityTimelineVi
                     </p>
                     <p className="font-mono text-xs">{r.id.slice(0, 16)}…</p>
                   </div>
-                  <Badge variant="outline" className="shrink-0 text-xs">
-                    {r.statusHash?.slice(0, 6) ?? t('common.none')}
-                  </Badge>
+                  <RecordStatusBadge record={r} className="shrink-0 text-xs" />
                 </div>
               </button>
             </li>

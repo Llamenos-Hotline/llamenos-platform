@@ -2375,6 +2375,8 @@
     "noInteractions": "No activity yet",
     "noInteractionsHint": "No interactions yet",
     "noResults": "No matching cases",
+    "resultsBounded": "En yeni {{count}} dosya arasındaki eşleşmeler gösteriliyor. Daha eski dosyalar kontrol edilmedi.",
+    "noResultsBounded": "En yeni {{count}} dosya arasında eşleşme yok. Daha eski dosyalar kontrol edilmedi.",
     "noSuggestions": "No available volunteers found",
     "noSuggestionsHint": "Make sure volunteers are on-shift and have capacity.",
     "notEnabled": "Case management is not enabled",
@@ -3360,6 +3362,7 @@
   "contactDirectory": {
     "editContact": "Kişiyi Düzenle",
     "caseStatus": "Durum",
+    "partialNotice": "{{total}} kişiden ilk {{count}} kişi arasındaki eşleşmeler gösteriliyor. Kalanlar kontrol edilmedi.",
     "new": "Yeni Kişi",
     "newContact": "Yeni Kişi",
     "tags": "Etiketler",

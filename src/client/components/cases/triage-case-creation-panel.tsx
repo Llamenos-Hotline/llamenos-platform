@@ -77,7 +77,8 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
       const summary = JSON.stringify({
         title: title.trim(),
         description: '',
-        status: selectedType.statuses.find(s => s.value === selectedType.defaultStatus)?.label ?? selectedType.defaultStatus,
+        status: selectedType.defaultStatus,
+        severity: selectedType.defaultSeverity,
       })
       const encryptedSummary = await sealCase('summary', summary, readers.summary)
 
@@ -92,8 +93,6 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
 
       const body: CreateRecordBody = {
         entityTypeId: selectedType.id,
-        statusHash: selectedType.defaultStatus,
-        severityHash: selectedType.defaultSeverity,
         encryptedSummary: encryptedSummary.encryptedContent,
         summaryEnvelopes: encryptedSummary.readerEnvelopes,
         ...(encryptedFields && {

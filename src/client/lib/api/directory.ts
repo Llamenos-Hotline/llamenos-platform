@@ -28,14 +28,10 @@ export type { CreateRawContactBody }
 export async function listRawContacts(params?: {
   page?: number
   limit?: number
-  contactTypeHash?: string
-  statusHash?: string
 }) {
   const qs = new URLSearchParams()
   if (params?.page) qs.set('page', String(params.page))
   qs.set('limit', String(params?.limit ?? 50))
-  if (params?.contactTypeHash) qs.set('contactTypeHash', params.contactTypeHash)
-  if (params?.statusHash) qs.set('statusHash', params.statusHash)
   return request<{ contacts: RawContact[]; total: number; page: number; limit: number; hasMore: boolean }>(hp(`/directory?${qs}`))
 }
 
@@ -49,19 +45,6 @@ export async function createRawContact(body: CreateRawContactBody) {
   return request<RawContact>(hp('/directory'), {
     method: 'POST',
     body: JSON.stringify(body),
-  })
-}
-
-/** Legacy aliases for backwards compatibility with existing UI code */
-export async function listDirectoryContacts(params?: {
-  page?: number
-  limit?: number
-  contactType?: DirectoryContactType
-}) {
-  return listRawContacts({
-    page: params?.page,
-    limit: params?.limit,
-    contactTypeHash: params?.contactType,
   })
 }
 

@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { CaseRecord } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
+import { RecordStatusBadge } from '@/components/cases/record-status-badge'
 import { CalendarDays } from 'lucide-react'
 
 interface EntityCalendarViewProps {
@@ -65,12 +66,7 @@ export function EntityCalendarView({ records, onSelectRecord }: EntityCalendarVi
                     <span className="font-medium truncate">
                       {new Date(r.createdAt).toLocaleDateString()} — {r.id.slice(0, 8)}
                     </span>
-                    <Badge
-                      variant="outline"
-                      className="shrink-0 text-xs capitalize"
-                    >
-                      {r.statusHash?.slice(0, 8) ?? t('common.none')}
-                    </Badge>
+                    <RecordStatusBadge record={r} className="shrink-0 text-xs capitalize" />
                   </div>
                 </button>
               ))}

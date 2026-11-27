@@ -132,7 +132,6 @@ export function CreateContactDialog({ open, onOpenChange, onCreated }: CreateCon
         hubId: '',
         encryptedSummary: encryptedSummary.encryptedContent,
         summaryEnvelopes: encryptedSummary.readerEnvelopes,
-        contactTypeHash: contactType,
         tagHashes: [],
         blindIndexes: {},
       })

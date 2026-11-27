@@ -312,9 +312,6 @@ function CasesTab({ contactId }: { contactId: string }) {
                 </p>
                 <Badge variant="outline" className="text-[10px]">{caseLink.entityTypeLabel}</Badge>
               </div>
-              <p className="text-xs text-muted-foreground">
-                {t('contactDirectory.caseStatus', { defaultValue: 'Status' })}: {caseLink.status}
-              </p>
             </div>
             <Badge data-testid="contact-case-role" variant="secondary" className="text-[10px]">{caseLink.role}</Badge>
           </CardContent>

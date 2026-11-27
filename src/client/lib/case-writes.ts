@@ -16,9 +16,11 @@ import { hubAdminReaders } from './admin-recipient'
 import { resolveRecordReaders } from './record-recipients'
 import { chunkedUpload } from './chunked-upload'
 import { prepareEvidenceUpload } from './evidence-upload'
+import { readTriage, type SealedSummary } from './case-triage'
 import {
   updateRecord,
   createInteraction,
+  type CaseRecord,
   uploadEvidence,
   type CaseInteraction,
   type EvidenceMetadata,
@@ -60,6 +62,55 @@ export async function saveRecordFields(
   await updateRecord(record.id, {
     encryptedFields: sealed.encryptedContent,
     fieldEnvelopes: sealed.readerEnvelopes,
+  }, record.hubId)
+}
+
+/**
+ * The token that marks a write as a status change. The server cannot see the
+ * status, so it learns that one happened from this — and only that. It is the
+ * interaction type, not a derived index (registered as known debt, #3118).
+ */
+const STATUS_CHANGE_TYPE = 'status_change'
+
+/** Raised when a status change would have to overwrite a summary this device cannot read. */
+export class SummaryUnreadableError extends Error {
+  constructor() {
+    super('The case summary cannot be opened on this device, so its status cannot be changed here.')
+    this.name = 'SummaryUnreadableError'
+  }
+}
+
+/**
+ * Change a record's status: re-seal its summary with the new status VALUE and
+ * file the transition as a sealed status-change entry on its timeline. Nothing
+ * about the status travels in the clear (#2779).
+ *
+ * The summary is re-opened here, not taken from the caller: a status change
+ * REPLACES the summary, so the title, description and severity it carries must
+ * come from the current ciphertext. A summary this device cannot open is refused
+ * rather than overwritten with a blank one.
+ */
+export async function changeRecordStatus(
+  record: RecordRef & SealedSummary,
+  status: string,
+  authorPubkey: string,
+): Promise<CaseRecord> {
+  const current = await readTriage(record)
+  if (!current) throw new SummaryUnreadableError()
+
+  const readers = await resolveRecordReaders({ recordId: record.id, hubId: record.hubId, authorPubkey })
+  const summary = await sealCase('summary', JSON.stringify({ ...current, status }), readers.summary)
+  const change = await sealCase(
+    'comment',
+    JSON.stringify({ text: '', previousStatus: current.status, newStatus: status }),
+    readers.summary,
+  )
+  return updateRecord(record.id, {
+    encryptedSummary: summary.encryptedContent,
+    summaryEnvelopes: summary.readerEnvelopes,
+    statusChangeTypeHash: STATUS_CHANGE_TYPE,
+    statusChangeContent: change.encryptedContent,
+    statusChangeEnvelopes: change.readerEnvelopes,
   }, record.hubId)
 }
 

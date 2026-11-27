@@ -31,6 +31,7 @@ import {
 } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { useRecordFieldRecipients } from '@/lib/record-recipients'
+import { useTriage } from '@/lib/case-triage'
 
 type DetailTab = 'details' | 'timeline' | 'cases' | 'reports'
 
@@ -53,8 +54,10 @@ export function CaseDetail({ record, entityType, onStatusChange, onBack }: CaseD
 
   const isEvent = entityType.category === 'event'
 
-  const severityDef = record.severityHash
-    ? entityType.severities?.find(s => s.value === record.severityHash)
+  // Status and severity live in the sealed summary
+  const triage = useTriage(record)
+  const severityDef = triage?.severity
+    ? entityType.severities?.find(s => s.value === triage.severity)
     : undefined
 
   const tabs: Array<{ key: DetailTab; label: string; icon: typeof FileText }> = [
@@ -85,7 +88,7 @@ export function CaseDetail({ record, entityType, onStatusChange, onBack }: CaseD
                 {record.caseNumber || record.id.slice(0, 8)}
               </span>
               <StatusPill
-                currentStatus={record.statusHash}
+                currentStatus={triage?.status}
                 statuses={entityType.statuses}
                 onStatusChange={(s) => onStatusChange(record.id, s)}
               />

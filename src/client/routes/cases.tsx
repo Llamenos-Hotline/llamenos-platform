@@ -5,7 +5,6 @@ import { useToast } from '@/lib/toast'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   listRecords,
-  updateRecord,
   listEntityTypes,
   listRecordContacts,
   listChildRecords,
@@ -46,14 +45,20 @@ import { EntityTimelineView } from '@/components/entity-timeline-view'
 import { listEntitiesCrossHub } from '@/lib/api'
 import { useHubOwned } from '@/lib/hub-owned'
 import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
-import { saveRecordFields } from '@/lib/case-writes'
+import { saveRecordFields, changeRecordStatus } from '@/lib/case-writes'
+import { useTriage, scanRecords, pageOf, CLIENT_FILTER_SCAN_LIMIT } from '@/lib/case-triage'
 
 export const Route = createFileRoute('/cases')({
   component: CasesPage,
 })
 
-type RecordsPage = { records: CaseRecord[]; total: number }
-const EMPTY_RECORDS_PAGE: RecordsPage = { records: [], total: 0 }
+/**
+ * `bounded`: a status filter was active and its scan stopped at
+ * CLIENT_FILTER_SCAN_LIMIT with candidates left, so the list is matches among
+ * the newest records only. The page says so; an empty one must not read as "none".
+ */
+type RecordsPage = { records: CaseRecord[]; total: number; bounded: boolean }
+const EMPTY_RECORDS_PAGE: RecordsPage = { records: [], total: 0, bounded: false }
 
 function CasesPage() {
   const { t } = useTranslation()
@@ -104,26 +109,32 @@ function CasesPage() {
   }, [])
 
   // --- Fetch records ---
-  const loadRecords = useCallback((): Promise<RecordsPage> => {
-    const params: {
-      entityTypeId?: string
-      statusHash?: string
-      page?: number
-      limit?: number
-    } = { page, limit: pageSize }
+  const loadRecords = useCallback(async (): Promise<RecordsPage> => {
+    // The server filters on what it can see: the hub, the entity type. The
+    // status lives in the sealed summary, so a status filter is applied here.
+    const scope = entityTypeFilter !== 'all' ? { entityTypeId: entityTypeFilter } : {}
+    const fetchPage = (pageNo: number, limit: number) => crossHub
+      ? listEntitiesCrossHub({ ...scope, crossHub: true, page: pageNo, limit })
+          .then(({ records: recs, total: tot, hasMore }) => ({ records: recs as CaseRecord[], total: tot, hasMore }))
+      : listRecords({ ...scope, page: pageNo, limit })
 
-    if (entityTypeFilter !== 'all') params.entityTypeId = entityTypeFilter
-    if (statusFilter !== 'all') params.statusHash = statusFilter
+    if (statusFilter === 'all') {
+      const { records: recs, total: tot } = await fetchPage(page, pageSize)
+      return { records: recs, total: tot, bounded: false }
+    }
 
-    return crossHub
-      ? listEntitiesCrossHub({ ...params, crossHub: true }).then(({ records: recs, total: tot }) => ({ records: recs as CaseRecord[], total: tot }))
-      : listRecords(params).then(({ records: recs, total: tot }) => ({ records: recs, total: tot }))
+    const scan = await scanRecords({
+      fetchPage,
+      matches: (triage) => triage?.status === statusFilter,
+    })
+    const matched = scan.matches.map(m => m.record)
+    return { records: pageOf(matched, page, pageSize), total: matched.length, bounded: scan.bounded }
   }, [entityTypeFilter, statusFilter, page, crossHub])
   const { data: recordsPage, setData: setRecordsPage, noHub, loading, reload: fetchRecords } = useHubOwned(loadRecords, {
     empty: EMPTY_RECORDS_PAGE,
     onError: () => toast(t('cases.loadError', { defaultValue: 'Failed to load cases' }), 'error'),
   })
-  const { records, total } = recordsPage
+  const { records, total, bounded } = recordsPage
   const setRecords = useCallback(
     (update: (prev: CaseRecord[]) => CaseRecord[]) => setRecordsPage(prev => ({ ...prev, records: update(prev.records) })),
     [setRecordsPage],
@@ -146,16 +157,19 @@ function CasesPage() {
   }, [fetchRecords])
 
   const handleStatusChange = useCallback(async (recordId: string, newStatusValue: string) => {
+    const record = records.find(r => r.id === recordId)
+    if (!record || !publicKey) return
     try {
-      await updateRecord(recordId, { statusHash: newStatusValue })
-      setRecords(prev =>
-        prev.map(r => r.id === recordId ? { ...r, statusHash: newStatusValue, updatedAt: new Date().toISOString() } : r),
-      )
+      // Re-seals the summary with the new status; the server is told nothing of it.
+      const updated = await changeRecordStatus(record, newStatusValue, publicKey)
+      setRecords(prev => prev.map(r => r.id === recordId ? updated : r))
+      // With a status filter active the record may no longer match it.
+      if (statusFilter !== 'all') fetchRecords({ background: true })
       toast(t('cases.statusUpdated', { defaultValue: 'Status updated' }))
     } catch {
       toast(t('cases.statusUpdateError', { defaultValue: 'Failed to update status' }), 'error')
     }
-  }, [toast, t])
+  }, [records, publicKey, statusFilter, fetchRecords, setRecords, toast, t])
 
   const handleAssignToMe = useCallback(async (recordId: string) => {
     if (!publicKey) return
@@ -466,12 +480,21 @@ function CasesPage() {
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : records.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+              <div className="flex flex-col items-center justify-center px-4 py-12 text-center text-muted-foreground">
                 <FolderOpen className="mb-2 h-8 w-8 text-muted-foreground/40" />
-                <p className="text-sm">{t('cases.noResults', { defaultValue: 'No matching cases' })}</p>
+                <p className="text-sm">
+                  {bounded
+                    ? t('cases.noResultsBounded', { defaultValue: 'No matches among the newest {{count}} cases. Older cases were not checked.', count: CLIENT_FILTER_SCAN_LIMIT })
+                    : t('cases.noResults', { defaultValue: 'No matching cases' })}
+                </p>
               </div>
             ) : (
               <>
+                {bounded && (
+                  <p data-testid="case-scan-bounded" className="border-b border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    {t('cases.resultsBounded', { defaultValue: 'Showing matches among the newest {{count}} cases. Older cases were not checked.', count: CLIENT_FILTER_SCAN_LIMIT })}
+                  </p>
+                )}
                 <div className="p-2 space-y-1.5">
                   {records.map(record => (
                     <RecordCard
@@ -480,7 +503,6 @@ function CasesPage() {
                       entityType={entityTypeMap.get(record.entityTypeId)}
                       isSelected={selectedId === record.id}
                       onSelect={setSelectedId}
-                      hasDeviceKey={hasDeviceKey}
                     />
                   ))}
                 </div>
@@ -590,38 +612,23 @@ function RecordCard({
   entityType,
   isSelected,
   onSelect,
-  hasDeviceKey,
 }: {
   record: CaseRecord
   entityType: EntityTypeDefinition | undefined
   isSelected: boolean
   onSelect: (id: string) => void
-  hasDeviceKey: boolean
 }) {
   const { t } = useTranslation()
-  const [title, setTitle] = useState<string | null>(null)
+  // The title, status and severity live in the sealed summary
+  const triage = useTriage(record)
+  const title = triage?.title ?? null
 
-  // Decrypt summary to extract title
-  useEffect(() => {
-    let cancelled = false
-    const canDecrypt = hasDeviceKey && keyManager.isUnlocked()
-    if (!canDecrypt || !record.encryptedSummary || !record.summaryEnvelopes?.length) return
-    openCase('summary', record.encryptedSummary, record.summaryEnvelopes).then(plaintext => {
-      if (cancelled || !plaintext) return
-      try {
-        const summary = JSON.parse(plaintext)
-        if (summary.title) setTitle(summary.title)
-      } catch { /* ignore parse errors */ }
-    })
-    return () => { cancelled = true }
-  }, [record.id, record.encryptedSummary, hasDeviceKey])
-
-  const statusDef = entityType?.statuses.find(s => s.value === record.statusHash)
+  const statusDef = entityType?.statuses.find(s => s.value === triage?.status)
   const statusColor = statusDef?.color ?? '#6b7280'
-  const statusLabel = statusDef?.label ?? record.statusHash
+  const statusLabel = statusDef?.label ?? triage?.status ?? '—'
 
-  const severityDef = record.severityHash
-    ? entityType?.severities?.find(s => s.value === record.severityHash)
+  const severityDef = triage?.severity
+    ? entityType?.severities?.find(s => s.value === triage.severity)
     : undefined
 
   const relativeTime = formatRelativeTime(record.updatedAt, t)
@@ -744,30 +751,11 @@ function RecordDetail({
   // every piece of evidence unreadable by the volunteers assigned to the case.
   const fieldRecipients = useRecordFieldRecipients(record.id, record.hubId)
 
-  // Decrypt summary for title/description display
-  const [decryptedSummary, setDecryptedSummary] = useState<{ title?: string; description?: string } | null>(null)
+  // Title, description, status and severity live in the sealed summary
+  const decryptedSummary = useTriage(record)
 
-  useEffect(() => {
-    let cancelled = false
-    const canDecrypt = hasDeviceKey && keyManager.isUnlocked()
-    if (!canDecrypt || !record.encryptedSummary || !record.summaryEnvelopes?.length) {
-      setDecryptedSummary(null)
-      return
-    }
-    openCase('summary', record.encryptedSummary, record.summaryEnvelopes).then(plaintext => {
-      if (cancelled || !plaintext) return
-      try {
-        setDecryptedSummary(JSON.parse(plaintext))
-      } catch {
-        setDecryptedSummary(null)
-      }
-    })
-    return () => { cancelled = true }
-  }, [record.id, record.encryptedSummary, hasDeviceKey])
-
-  // Derive severity info
-  const severityDef = record.severityHash
-    ? entityType.severities?.find(s => s.value === record.severityHash)
+  const severityDef = decryptedSummary?.severity
+    ? entityType.severities?.find(s => s.value === decryptedSummary.severity)
     : undefined
 
   const isAssigned = publicKey ? record.assignedTo.includes(publicKey) : false
@@ -815,7 +803,7 @@ function RecordDetail({
                 </span>
               )}
               <StatusPill
-                currentStatus={record.statusHash}
+                currentStatus={decryptedSummary?.status}
                 statuses={entityType.statuses}
                 onStatusChange={
                   (hasPermission('cases:update') || (hasPermission('cases:update-own') && isAssigned))
@@ -1261,6 +1249,7 @@ function RelatedTab({ record }: { record: CaseRecord }) {
 
 function RelatedRecordCard({ record }: { record: CaseRecord }) {
   const { t } = useTranslation()
+  const triage = useTriage(record)
   return (
     <div
       data-testid="related-record-card"
@@ -1280,9 +1269,11 @@ function RelatedRecordCard({ record }: { record: CaseRecord }) {
           })}
         </p>
       </div>
-      <Badge variant="secondary" className="text-[10px]">
-        {record.statusHash.slice(0, 8)}
-      </Badge>
+      {triage?.status && (
+        <Badge variant="secondary" className="text-[10px]">
+          {triage.status}
+        </Badge>
+      )}
     </div>
   )
 }

@@ -60,9 +60,7 @@ function ContactDirectoryPage() {
   const loadContacts = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await loadDecryptedContacts(
-        typeFilter !== 'all' ? { contactTypeHash: typeFilter } : undefined,
-      )
+      const res = await loadDecryptedContacts()
       setContacts(res.contacts)
       setTotal(res.total)
     } catch {
@@ -70,7 +68,7 @@ function ContactDirectoryPage() {
     } finally {
       setLoading(false)
     }
-  }, [typeFilter, t, toast])
+  }, [t, toast])
 
   useEffect(() => { loadContacts() }, [loadContacts])
 
@@ -110,12 +108,24 @@ function ContactDirectoryPage() {
   // Team filter is UI-only at this stage — full server-side filtering requires
   // fetching contactTeamAssignments per contact which is deferred to a follow-up.
   const filteredContacts = contacts.filter((c) => {
+    // A contact's type lives in its sealed summary, so the filter runs here too.
+    if (typeFilter !== 'all' && c.contactType !== typeFilter) return false
     if (!matchesContactQuery(c, searchQuery)) return false
     if (tagFilter !== 'all') {
       const tag = availableTags.find((t) => t.id === tagFilter)
       if (tag && !c.tags.includes(tag.name)) return false
     }
     return true
+  })
+
+  // The directory holds one page of contacts, and a type, tag or search narrowing
+  // looks through that page only. Say so: an empty result must not read as "none".
+  const narrowed = typeFilter !== 'all' || tagFilter !== 'all' || searchQuery.trim() !== ''
+  const heldPartOfDirectory = total > contacts.length
+  const partialNotice = t('contactDirectory.partialNotice', {
+    defaultValue: 'Showing matches among the first {{count}} of {{total}} contacts. The rest were not checked.',
+    count: contacts.length,
+    total,
   })
 
   const showEmptyState = !loading && contacts.length === 0 && !searchQuery
@@ -283,9 +293,15 @@ function ContactDirectoryPage() {
                     ? t('contactDirectory.noSearchResults', { defaultValue: 'No contacts match your search.' })
                     : t('contactDirectory.noFilterResults', { defaultValue: 'No contacts match the selected filter.' })}
                 </p>
+                {narrowed && heldPartOfDirectory && (
+                  <p data-testid="contact-list-partial" className="mt-2 text-xs text-muted-foreground">{partialNotice}</p>
+                )}
               </div>
             ) : (
               <div className="p-2 space-y-1.5">
+                {narrowed && heldPartOfDirectory && (
+                  <p data-testid="contact-list-partial" className="px-1 pb-1 text-xs text-muted-foreground">{partialNotice}</p>
+                )}
                 {filteredContacts.map(contact => (
                   <ContactCard
                     key={contact.id}
