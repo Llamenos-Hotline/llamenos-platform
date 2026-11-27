@@ -1,5 +1,12 @@
 # EP02: Device & Identity Management — Implementation Plan
 
+> **PARTLY SUPERSEDED (#3065).** The tasks that implement the revoke endpoint's PUK and hub-key
+> rotation, the lockdown key phase, `puk_rotate` / `hub_key_rotate` events and
+> `lockdownCompleteBodySchema` (`pukRotated`, `hubKeysRotated`) build the pre-v2 cascade, which
+> the operator replaced on 2026-11-25 (`../specs/2026-11-25-v2-device-linking-and-recovery.md` §7, L6).
+> **Do not build those.** See "Superseded: the revocation and lockdown cascade" in
+> `../specs/2026-05-11-EP02-device-management-design.md`. Every other task here stands.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Port v1 device/identity management to v2's per-device Ed25519/X25519 architecture with dedicated `/security/*` route tree, device revocation with sigchain+PUK rotation, session management, SAS emoji verification, security event timeline, admin device oversight, and mobile device/session views.

@@ -148,6 +148,14 @@ and wiped" from "lost" would rest on the user's word about a device nobody can i
 
 **Cost, stated (D16's estimate):** about 6 groups per hub per removal, run by admin clients.
 
+**Supersedes the revocation and lockdown cascade of EP02** (`2026-05-11-EP02-device-management-design.md`,
+status `specced`, #3065). EP02 specifies removal as an orchestrated server transaction that rotates the
+PUK and every per-hub hub key, with partial failure retried on next launch. That is the pre-v2 model;
+this section governs. EP02's emergency lockdown (its D3) keeps its global scope and session
+termination, and runs this removal for each of the user's other devices. EP02's other items (the
+`/security/*` routes, device list and rename, sessions, passkeys, `security_events`, admin device
+oversight, the user-role picker) are not affected. *Effective: on this spec's sign-off, 2026-11-25.*
+
 ---
 
 ## 8. L7: recovery onto a new device — decided
