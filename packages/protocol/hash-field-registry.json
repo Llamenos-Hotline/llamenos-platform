@@ -310,7 +310,24 @@
         "kind": "debt",
         "issue": 3118,
         "why": "Holds a client-chosen plain constant, the same as interactionTypeHash; registered as known debt."
-      }
+      },
+      "plainValueSites": [
+        {
+          "file": "src/client/lib/case-writes.ts",
+          "match": "STATUS_CHANGE_TYPE",
+          "why": "Desktop sends the plain constant 'status_change' to mark a status change (#3118)."
+        },
+        {
+          "file": "apps/ios/Sources/ViewModels/CaseManagementViewModel.swift",
+          "match": "CaseTriage\\.statusChangeType",
+          "why": "iOS sends the plain constant 'status_change' (#3118)."
+        },
+        {
+          "file": "apps/android/app/src/main/java/org/llamenos/hotline/ui/cases/RecordSummaries.kt",
+          "match": "CaseTriage\\.STATUS_CHANGE_TYPE",
+          "why": "Android sends the plain constant 'status_change' (#3118)."
+        }
+      ]
     },
     "subscriberHash": {
       "derivation": "HMAC of the subscriber identifier under the hub's messaging key.",
