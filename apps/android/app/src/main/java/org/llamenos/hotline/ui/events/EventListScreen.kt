@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
 import org.llamenos.hotline.model.EntityTypeDefinition
+import org.llamenos.hotline.ui.cases.DecryptedSummary
 import org.llamenos.hotline.ui.cases.parseHexColor
 import org.llamenos.hotline.ui.components.EmptyState
 import org.llamenos.hotline.util.DateFormatUtils
@@ -231,6 +232,7 @@ fun EventListScreen(
                                 EventCard(
                                     event = event,
                                     entityType = uiState.entityTypeMap[event.entityTypeID],
+                                    summary = uiState.summaries[event.id],
                                     onClick = { onNavigateToEventDetail(event.id) },
                                 )
                             }
@@ -250,11 +252,13 @@ fun EventListScreen(
 private fun EventCard(
     event: Record,
     entityType: EntityTypeDefinition?,
+    /** The event's opened summary: the status lives there, the server holds none. */
+    summary: DecryptedSummary?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val statusOption = entityType?.statuses?.find { it.value == event.statusHash }
-    val statusLabel = statusOption?.label ?: event.statusHash
+    val statusOption = entityType?.statuses?.find { it.value == summary?.status }
+    val statusLabel = statusOption?.label ?: summary?.status ?: "—"
     val statusColor = statusOption?.color?.let { parseHexColor(it) }
 
     Card(

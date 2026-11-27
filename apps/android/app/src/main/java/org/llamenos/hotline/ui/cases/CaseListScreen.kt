@@ -79,7 +79,7 @@ fun CaseListScreen(
     // Trigger decryption of record summaries for title display
     LaunchedEffect(uiState.records) {
         if (uiState.records.isNotEmpty()) {
-            viewModel.decryptRecordTitles(uiState.records)
+            viewModel.decryptRecordSummaries(uiState.records)
         }
     }
 
@@ -184,7 +184,7 @@ fun CaseListScreen(
                 ) {
                     item {
                         FilterChip(
-                            selected = uiState.selectedStatusHash == null,
+                            selected = uiState.selectedStatus == null,
                             onClick = { viewModel.setStatusFilter(null) },
                             label = { Text("All") },
                             modifier = Modifier.testTag("case-status-all"),
@@ -193,10 +193,10 @@ fun CaseListScreen(
                     items(statusOptions) { status ->
                         val statusColor = status.color?.let { parseHexColor(it) }
                         FilterChip(
-                            selected = uiState.selectedStatusHash == status.value,
+                            selected = uiState.selectedStatus == status.value,
                             onClick = {
                                 viewModel.setStatusFilter(
-                                    if (uiState.selectedStatusHash == status.value) null
+                                    if (uiState.selectedStatus == status.value) null
                                     else status.value,
                                 )
                             },
@@ -271,35 +271,64 @@ fun CaseListScreen(
                                 modifier = Modifier.size(64.dp),
                             )
                             Spacer(Modifier.height(16.dp))
-                            Text(
-                                text = "No Cases",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = "Cases will appear here when created",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            )
+                            if (uiState.selectedStatus != null) {
+                                // A status filter is applied on this device, over a bounded scan.
+                                // An empty result must never read as "none".
+                                Text(
+                                    text = if (uiState.filterScanBounded) {
+                                        stringResource(R.string.cases_no_results_bounded, CaseTriage.SCAN_LIMIT)
+                                    } else {
+                                        stringResource(R.string.cases_no_results)
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.testTag("case-filter-notice"),
+                                )
+                            } else {
+                                Text(
+                                    text = "No Cases",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = "Cases will appear here when created",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                )
+                            }
                         }
                     }
                 }
 
                 else -> {
+                  Column(modifier = Modifier.fillMaxSize()) {
+                    if (uiState.filterScanBounded) {
+                        Text(
+                            text = stringResource(R.string.cases_results_bounded, CaseTriage.SCAN_LIMIT),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .testTag("case-filter-notice"),
+                        )
+                    }
                     PullToRefreshBox(
                         isRefreshing = uiState.isRefreshingRecords,
                         onRefresh = { viewModel.refresh() },
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
                     ) {
                         when (uiState.displayType) {
                             CaseDisplayType.CALENDAR -> EntityCalendarContent(
                                 records = uiState.records,
+                                summaries = uiState.decryptedRecordSummaries,
                                 onRecordClick = onNavigateToCaseDetail,
                                 modifier = Modifier.fillMaxSize().testTag("entity-calendar-view"),
                             )
                             CaseDisplayType.TIMELINE -> EntityTimelineContent(
                                 records = uiState.records,
+                                summaries = uiState.decryptedRecordSummaries,
                                 onRecordClick = onNavigateToCaseDetail,
                                 modifier = Modifier.fillMaxSize().testTag("entity-timeline-view"),
                             )
@@ -317,7 +346,7 @@ fun CaseListScreen(
                                     CaseCard(
                                         record = record,
                                         entityType = uiState.entityTypes.find { it.id == record.entityTypeID },
-                                        decryptedTitle = uiState.decryptedRecordTitles[record.id],
+                                        summary = uiState.decryptedRecordSummaries[record.id],
                                         onClick = { onNavigateToCaseDetail(record.id) },
                                         modifier = Modifier.testTag("case-card-${record.id}"),
                                     )
@@ -325,6 +354,7 @@ fun CaseListScreen(
                             }
                         }
                     }
+                  }
                 }
             }
         }
@@ -341,17 +371,19 @@ fun CaseListScreen(
 private fun CaseCard(
     record: Record,
     entityType: EntityTypeDefinition?,
-    decryptedTitle: String? = null,
+    summary: DecryptedSummary? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val statusOption = entityType?.statuses?.find { it.value == record.statusHash }
-    val statusLabel = statusOption?.label ?: record.statusHash
+    val decryptedTitle = summary?.title
+    // The status and severity live in the sealed summary; unread until it is opened.
+    val statusOption = entityType?.statuses?.find { it.value == summary?.status }
+    val statusLabel = statusOption?.label ?: summary?.status ?: "—"
     val statusColor = statusOption?.color?.let { parseHexColor(it) }
 
     // Severity info
-    val severityOption = record.severityHash?.let { hash ->
-        entityType?.severities?.find { it.value == hash }
+    val severityOption = summary?.severity?.let { value ->
+        entityType?.severities?.find { it.value == value }
     }
 
     Card(

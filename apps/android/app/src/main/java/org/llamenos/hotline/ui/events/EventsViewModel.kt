@@ -23,7 +23,8 @@ import org.llamenos.hotline.model.CreateRecordRequest
 import org.llamenos.hotline.model.EntityTypeDefinition
 import org.llamenos.hotline.model.EntityTypesResponse
 import org.llamenos.hotline.model.RecordsListResponse
-import org.llamenos.hotline.model.UpdateRecordRequest
+import org.llamenos.hotline.ui.cases.DecryptedSummary
+import org.llamenos.hotline.ui.cases.RecordSummaries
 import org.llamenos.protocol.EnvelopeRecipientsResponse
 import org.llamenos.protocol.Record
 import org.llamenos.protocol.SharedAdminEnvelope
@@ -42,6 +43,8 @@ data class EventsUiState(
 
     // Event records
     val events: List<Record> = emptyList(),
+    /** Record id → opened summary: an event's status lives there, the server holds none. */
+    val summaries: Map<String, DecryptedSummary> = emptyMap(),
     val total: Int = 0,
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
@@ -126,6 +129,9 @@ class EventsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(EventsUiState())
     val uiState: StateFlow<EventsUiState> = _uiState.asStateFlow()
+
+    /** Opens and re-seals an event's summary: its status lives there, the server holds none. */
+    private val summaries = RecordSummaries(apiService, cryptoService, sessionState)
 
     init {
         activeHubState.activeHubId
@@ -255,6 +261,12 @@ class EventsViewModel @Inject constructor(
                     isRefreshing = false,
                 )
             }
+            // The status of each event lives in its sealed summary.
+            for (record in response.records) {
+                if (_uiState.value.summaries.containsKey(record.id)) continue
+                val summary = summaries.open(record) ?: continue
+                _uiState.update { it.copy(summaries = it.summaries + (record.id to summary)) }
+            }
         } catch (_: NoActiveHubException) {
             // No hub to browse: nothing to load, which is not a failure (#2405, #2461).
             _uiState.update { it.copy(events = emptyList(), total = 0, isLoading = false, isRefreshing = false) }
@@ -285,9 +297,11 @@ class EventsViewModel @Inject constructor(
             }
             try {
                 val record = apiService.request<Record>("GET", apiService.activeHubPath("/api/records/$eventId"))
+                val summary = summaries.open(record)
                 _uiState.update {
                     it.copy(
                         selectedEvent = record,
+                        summaries = if (summary != null) it.summaries + (record.id to summary) else it.summaries - record.id,
                         isLoadingDetail = false,
                     )
                 }
@@ -339,14 +353,17 @@ class EventsViewModel @Inject constructor(
     /**
      * Update the status of an event record.
      */
-    fun updateStatus(recordId: String, statusHash: String) {
+    fun updateStatus(recordId: String, status: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isUpdatingStatus = true, actionError = null) }
             try {
-                val request = UpdateRecordRequest(statusHash = statusHash)
-                apiService.request<Record>("PATCH", apiService.activeHubPath("/api/records/$recordId"), request)
+                val record = _uiState.value.selectedEvent?.takeIf { it.id == recordId }
+                    ?: _uiState.value.events.firstOrNull { it.id == recordId }
+                    ?: error("Event not loaded")
+                summaries.changeStatus(record, status)
                 _uiState.update {
                     it.copy(
+                        summaries = it.summaries - recordId,
                         isUpdatingStatus = false,
                         actionSuccess = "Status updated",
                     )
@@ -393,7 +410,7 @@ class EventsViewModel @Inject constructor(
                 }
                 val sealed = cryptoService.sealCase(
                     CasePurpose.SUMMARY,
-                    eventSummaryJson(title, description),
+                    eventSummaryJson(title, description, defaultStatus),
                     readers.summary,
                 )
 
@@ -404,7 +421,6 @@ class EventsViewModel @Inject constructor(
                         blindIndexes = emptyMap(),
                         encryptedSummary = sealed.ciphertextHex,
                         entityTypeID = entityTypeId,
-                        statusHash = defaultStatus,
                         summaryEnvelopes = sealed.envelopes.map {
                             SharedAdminEnvelope(ct = it.ct, enc = it.enc, pubkey = it.pubkey)
                         },

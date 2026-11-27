@@ -35,7 +35,7 @@ import org.llamenos.hotline.model.EntityTypeDefinitionStatus
  *
  * Displays all available statuses from the entity type definition,
  * color-coded with the current status highlighted. Selecting a status
- * triggers [onStatusSelected] with the status hash value.
+ * triggers [onStatusSelected] with the status value.
  *
  * Non-deprecated statuses are shown, with closed statuses visually
  * separated at the bottom with a divider.
@@ -44,7 +44,8 @@ import org.llamenos.hotline.model.EntityTypeDefinitionStatus
 @Composable
 fun QuickStatusSheet(
     entityType: EntityTypeDefinition,
-    currentStatusHash: String,
+    /** The record's status value; null while its summary is unread or cannot be opened. */
+    currentStatus: String?,
     onStatusSelected: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -77,7 +78,7 @@ fun QuickStatusSheet(
             openStatuses.forEach { status ->
                 StatusOptionRow(
                     status = status,
-                    isSelected = status.value == currentStatusHash,
+                    isSelected = status.value == currentStatus,
                     onClick = { onStatusSelected(status.value) },
                 )
             }
@@ -96,7 +97,7 @@ fun QuickStatusSheet(
                 closedStatuses.forEach { status ->
                     StatusOptionRow(
                         status = status,
-                        isSelected = status.value == currentStatusHash,
+                        isSelected = status.value == currentStatus,
                         onClick = { onStatusSelected(status.value) },
                     )
                 }

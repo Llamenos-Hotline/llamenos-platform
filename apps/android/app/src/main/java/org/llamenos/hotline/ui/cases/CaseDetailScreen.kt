@@ -297,9 +297,9 @@ fun CaseDetailScreen(
     if (showStatusSheet && record != null && entityType != null) {
         QuickStatusSheet(
             entityType = entityType,
-            currentStatusHash = record.statusHash,
-            onStatusSelected = { statusHash ->
-                viewModel.updateStatus(record.id, statusHash)
+            currentStatus = uiState.decryptedSummary?.status,
+            onStatusSelected = { status ->
+                viewModel.updateStatus(record.id, status)
                 showStatusSheet = false
             },
             onDismiss = { showStatusSheet = false },
@@ -329,10 +329,11 @@ private fun CaseDetailHeader(
     decryptedSummary: DecryptedSummary? = null,
     onStatusClick: () -> Unit,
 ) {
-    val statusOption = record?.let { r ->
-        entityType?.statuses?.find { it.value == r.statusHash }
+    // The status lives in the sealed summary; unread until it is opened.
+    val statusOption = decryptedSummary?.status?.let { value ->
+        entityType?.statuses?.find { it.value == value }
     }
-    val statusLabel = statusOption?.label ?: record?.statusHash ?: if (isNewCase) "New" else "---"
+    val statusLabel = statusOption?.label ?: decryptedSummary?.status ?: if (isNewCase) "New" else "---"
     val statusColor = statusOption?.color?.let { parseHexColor(it) }
 
     Column(
@@ -422,8 +423,8 @@ private fun CaseDetailHeader(
 
         // Severity + assignment info
         if (record != null) {
-            val severityOption = record.severityHash?.let { hash ->
-                entityType?.severities?.find { it.value == hash }
+            val severityOption = decryptedSummary?.severity?.let { value ->
+                entityType?.severities?.find { it.value == value }
             }
             if (severityOption != null || record.assignedTo.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
@@ -999,20 +1000,18 @@ private fun TimelineItem(
     }
 
     // For status changes, show the status transition
-    val statusChangeText = if (interaction.interactionType == InteractionType.StatusChange) {
-        val prevStatus = interaction.previousStatusHash?.let { hash ->
-            entityType?.statuses?.find { it.value == hash }?.label ?: hash.take(8)
-        }
-        val newStatus = interaction.newStatusHash?.let { hash ->
-            entityType?.statuses?.find { it.value == hash }?.label ?: hash.take(8)
-        }
-        if (prevStatus != null && newStatus != null) {
-            "$prevStatus -> $newStatus"
-        } else {
-            null
-        }
+    // The transition is sealed with the entry: {text, previousStatus, newStatus}, the statuses
+    // being the entity type's values. The server knows neither.
+    val statusChange = if (interaction.interactionType == InteractionType.StatusChange) {
+        decryptedContent?.let { CaseTriage.parseStatusChange(it) }
     } else {
         null
+    }
+    val statusChangeText = statusChange?.let { change ->
+        fun label(value: String?) = value?.let { v -> entityType?.statuses?.find { it.value == v }?.label ?: v }
+        val prevStatus = label(change.previous)
+        val newStatus = label(change.next)
+        if (prevStatus != null && newStatus != null) "$prevStatus -> $newStatus" else newStatus
     }
 
     Card(
@@ -1067,8 +1066,9 @@ private fun TimelineItem(
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
-                // Content — decrypted or encrypted indicator
-                if (decryptedContent != null) {
+                // Content — decrypted or encrypted indicator. A status change's content is its
+                // transition, shown above; its plaintext is not a message to print.
+                if (decryptedContent != null && interaction.interactionType != InteractionType.StatusChange) {
                     Spacer(Modifier.height(4.dp))
                     Text(
                         text = decryptedContent,
