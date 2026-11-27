@@ -49,7 +49,7 @@ describe("injection points match the shipped sources", () => {
   test("every platform enforcement point is covered", () => {
     const files = new Set(PIN_TARGETS.map((t) => t.file));
     expect([...files].sort()).toEqual([
-      resolve(ROOT, "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt"),
+      resolve(ROOT, "apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt"),
       resolve(ROOT, "apps/android/app/src/main/res/xml/network_security_config.xml"),
       resolve(ROOT, "apps/desktop/src/cert_pin.rs"),
       resolve(ROOT, "apps/ios/Sources/Services/CertificatePinning.swift"),

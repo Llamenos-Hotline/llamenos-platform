@@ -260,7 +260,7 @@ class WebSocketService @Inject constructor(
         val wsClient = if (host == null || host == "localhost" || host == "127.0.0.1") {
             client
         } else {
-            client.newBuilder().certificatePinner(ApiService.buildPinner(host)).build()
+            client.newBuilder().certificatePinner(CertificatePins.buildPinner(host)).build()
         }
 
         val request = Request.Builder()

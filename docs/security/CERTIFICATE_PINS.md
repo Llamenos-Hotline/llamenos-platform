@@ -60,7 +60,7 @@ against the already-pinned X1 / X2 (`openssl verify -CAfile isrgrootx1.pem root-
 Every platform's tests re-derive all four hashes from the real certificates.
 
 These hashes are identical in every enforcement layer:
-- `apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt`
+- `apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt`
   (`ISRG_ROOT_{X1,X2,YR,YE}_HASH`, `DEFAULT_PIN_HASHES`)
 - `apps/android/app/src/main/res/xml/network_security_config.xml`
   (`<pin-set expiration="2028-01-01">` — after the expiration Android stops enforcing the
@@ -136,7 +136,7 @@ root CAs (or update the pin hashes accordingly).
 1. Derive the new hashes from the published certificate (recipe above), and add the certificate
    to each platform's test fixtures — the tests re-derive every pin from them
 2. Update `apps/android/app/src/main/res/xml/network_security_config.xml` `<pin-set>`
-3. Update `apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt`
+3. Update `apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt`
    `ISRG_ROOT_*_HASH` constants and `DEFAULT_PIN_HASHES`
 4. Update `apps/ios/Sources/Services/CertificatePinning.swift` pin hashes
 4a. Update `apps/desktop/src/cert_pin.rs` `ISRG_ROOT_PINS`

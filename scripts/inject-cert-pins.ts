@@ -8,7 +8,7 @@
  * from its published PEM certificate and rewrites the pinned hash literal at all
  * four enforcement points:
  *
- *   apps/android/.../api/ApiService.kt                ISRG_ROOT_{X1,X2,YR,YE}_HASH ("sha256/…" form)
+ *   apps/android/.../api/CertificatePins.kt           ISRG_ROOT_{X1,X2,YR,YE}_HASH ("sha256/…" form)
  *   apps/android/.../res/xml/network_security_config.xml  <pin digest="SHA-256">…</pin>
  *   apps/ios/Sources/Services/CertificatePinning.swift    CertificatePins.isrgRoot*Hash
  *   apps/desktop/src/cert_pin.rs                        ISRG_ROOT_PINS
@@ -158,7 +158,7 @@ export const PIN_TARGETS: readonly PinTarget[] = [
   // Android OkHttp pinner — `const val ISRG_ROOT_X1_HASH = "sha256/…"`.
   regexInjector(
     "android",
-    resolve(ROOT, "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt"),
+    resolve(ROOT, "apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt"),
     (key) => new RegExp(`(const val ${KOTLIN_CONST[key]} = "sha256/)(${HASH_PATTERN})(")`),
   ),
   // Android OS-level pin set — `<!-- ISRG Root X1 — … -->\n<pin digest="SHA-256">…</pin>`.

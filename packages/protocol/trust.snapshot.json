@@ -66,7 +66,7 @@
           "OkHttpClient.Builder() pinner=[certificatePinner]"
         ],
         "derived": [
-          "newBuilder pinner=[pinner]"
+          "newBuilder pinner=[CertificatePins.pinnerFor(hostname)]"
         ],
         "other": {}
       },
@@ -75,7 +75,7 @@
           "OkHttpClient.Builder() pinner=[none]"
         ],
         "derived": [
-          "newBuilder pinner=[ApiService.buildPinner(host)]"
+          "newBuilder pinner=[CertificatePins.buildPinner(host)]"
         ],
         "other": {}
       },
@@ -206,8 +206,10 @@
     }
   },
   "logic": {
-    "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt::buildPinner#0": "a1788385388bd164",
-    "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt::configurePinning#0": "7ec41c036dbf200b",
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt::configurePinning#0": "ea403f00846a573b",
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt::buildPinner#0": "a1788385388bd164",
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt::hostOf#0": "a449f4604a546605",
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt::pinnerFor#0": "b7adc01c3d840617",
     "apps/android/app/src/main/java/org/llamenos/hotline/telephony/LinphoneService.kt::applyTlsTrustAnchor#0": "4d0cb1b36c921719",
     "apps/desktop/src/api_config.rs::check_backend_url#0": "667b3f54c4427e5d",
     "apps/desktop/src/api_config.rs::configured_pins#0": "f62c61f51da93f7b",
@@ -233,9 +235,11 @@
   },
   "loopbackExemptions": {
     "apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt": [
-      "val certificatePinner: CertificatePinner = CertificatePinner.DEFAULT",
-      "val isLocalhost = hostname == \"localhost\" || hostname == \"127.0.0.1\"",
-      "val pinner = if (isLocalhost) CertificatePinner.DEFAULT else buildPinner(hostname, hashes)"
+      "val certificatePinner: CertificatePinner = CertificatePinner.DEFAULT"
+    ],
+    "apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt": [
+      "return if (isLocalhost) CertificatePinner.DEFAULT else buildPinner(hostname, DEFAULT_PIN_HASHES)",
+      "val isLocalhost = hostname == \"localhost\" || hostname == \"127.0.0.1\""
     ],
     "apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt": [
       "val wsClient = if (host == null || host == \"localhost\" || host == \"127.0.0.1\") {"
