@@ -2,13 +2,13 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve as resolvePath, sep } from 'node:path'
 import { checkScopeRouting } from './scope.js'
 import { reviewLanesFor } from './route.js'
 import { classifyImpact, isGeneratedArtifactPath } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS, TRUST_ANCHOR_APPROVERS } from './config.js'
 import { secretFinding, secretRefusal, trustAnchorFinding, trustAnchorRefusal, type WriteFinding } from './write-gate.js'
-import { compareTrustSnapshots, gitReader, touchesTrustInputs, type TrustSnapshotChange } from '../../packages/protocol/tools/trust-snapshot.js'
+import type { TrustSnapshotChange } from '../../packages/protocol/tools/trust-snapshot.js'
 import { scrubSecrets } from './github-app.js'
 import { withVerificationMarker } from './review-and-merge-guards.js'
 import { resolveVitestNode, withNodeOnPath, type NodeResolutionDeps } from './node-runtime.js'
@@ -321,6 +321,72 @@ export function isSafeTestPath(p: string, repoRoot?: string): boolean {
   if (!SAFE_TEST_PATH_RE.test(p)) return false
   if (repoRoot !== undefined && !resolvesWithinRoot(repoRoot, p)) return false
   return true
+}
+
+/**
+ * The trust-snapshot CLI of the checkout this gate runs from — trusted code,
+ * never the head's (#3069). Run as a child process, not imported: nothing in
+ * `orchestrator/src` imports from outside it (the credential-boundary rail in
+ * `tests/orchestrator/forgery-rails.ts`), so the extractor cannot become a
+ * path by which a credential export is re-exported back into the gate.
+ */
+const TRUST_SNAPSHOT_CLI = resolvePath(import.meta.dirname, '..', '..', 'packages', 'protocol', 'tools', 'trust-snapshot-cli.ts')
+
+/** The child's whole environment: enough to find `bun` and its cache — no
+ *  token, no agent socket, nothing that authenticates as anyone. */
+function trustSnapshotEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG']) {
+    const value = process.env[key]
+    if (value !== undefined) env[key] = value
+  }
+  return env
+}
+
+function isTrustSnapshotChange(v: unknown): v is TrustSnapshotChange {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  const optString = (k: string): boolean => o[k] === undefined || typeof o[k] === 'string'
+  return typeof o['changed'] === 'boolean'
+    && Array.isArray(o['changes']) && o['changes'].every((c) => typeof c === 'string')
+    && optString('baseDigest') && optString('headDigest') && optString('error')
+    && (o['committedStale'] === undefined || typeof o['committedStale'] === 'boolean')
+}
+
+/**
+ * How the trust snapshot moved between the merge base of `base` and `head`, and `head`, in `worktree`, or
+ * `undefined` when no changed file is one the extractor reads. Both sides are
+ * read from git objects, so the head is data and none of its code runs. Never
+ * throws: a comparison that could not run is reported in `error`, never read
+ * as "nothing changed".
+ */
+async function trustSnapshotChange(
+  worktree: string, base: string, head: string, changedFiles: readonly string[],
+): Promise<TrustSnapshotChange | undefined> {
+  const failed = (why: string): TrustSnapshotChange => ({ changed: false, changes: [], error: `the trust snapshot could not be read: ${why}` })
+  const result = await new Promise<{ code: number | null; stdout: string; stderr: string } | { spawnError: string }>((done) => {
+    const child = spawn('bun', [TRUST_SNAPSHOT_CLI, 'compare', '--root', resolvePath(worktree), base, head], {
+      cwd: dirname(TRUST_SNAPSHOT_CLI), env: trustSnapshotEnv(), stdio: ['pipe', 'pipe', 'pipe'], timeout: 5 * 60_000,
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8').on('data', (d: string) => { stdout += d })
+    child.stderr.setEncoding('utf8').on('data', (d: string) => { stderr += d })
+    child.on('error', (e) => done({ spawnError: e.message }))
+    child.on('close', (code) => done({ code, stdout, stderr }))
+    child.stdin.on('error', () => { /* the child exited early; its exit status says why */ })
+    child.stdin.end(JSON.stringify(changedFiles))
+  })
+  if ('spawnError' in result) return failed(`the extractor could not be started (${result.spawnError})`)
+  if (result.code !== 0) return failed(`the extractor exited ${String(result.code)}: ${scrubSecrets(result.stderr.trim().split('\n').slice(-3).join(' '))}`)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(result.stdout)
+  } catch {
+    return failed('the extractor printed something that is not JSON')
+  }
+  if (parsed === null) return undefined
+  return isTrustSnapshotChange(parsed) ? parsed : failed('the extractor printed a result of the wrong shape')
 }
 
 async function runGit(worktree: string, args: string[]): Promise<string | undefined> {
@@ -1081,13 +1147,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   // The trust snapshot: shown, never gated. Read from git objects at the merge
   // base and at the head, so the head is data and no code from it runs. Only
   // computed when the diff touches something the extractor reads.
-  let trustSnapshot: VerifyReport['trustSnapshot']
-  if (touchesTrustInputs(changedFiles)) {
-    const mergeBase = (await runGit(worktree, ['merge-base', baseRef, branch]))?.trim()
-    trustSnapshot = mergeBase === undefined || mergeBase === ''
-      ? { changed: false, changes: [], error: 'the merge base could not be resolved, so the trust snapshot could not be compared' }
-      : compareTrustSnapshots(gitReader(worktree, mergeBase), gitReader(worktree, branch))
-  }
+  const trustSnapshot = await trustSnapshotChange(worktree, baseRef, branch, changedFiles)
   // CLASS 3 — supply chain. CI, deploy and the files that decide what the
   // scanners accept, written by a PR whose own lane does not own them. The one
   // outside-the-lane class that stays a refusal (see `checkScopeRouting`): only

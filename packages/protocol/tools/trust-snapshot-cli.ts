@@ -8,6 +8,11 @@
  *   bun run trust:release-check        refuse an artifact whose snapshot differs from the last release's
  *                                      unless a recorded sign-off names its digest
  *   bun run trust:signoff <digest>     record YOUR sign-off for a digest (a human act; never run by an agent)
+ *   trust-snapshot-cli compare --root <repo> <base> <head>
+ *                                      for the fleet gate: reads the changed-file list (a JSON array) on
+ *                                      stdin and prints, as JSON, the `TrustSnapshotChange` from the merge
+ *                                      base of <base> and <head> to <head> — `null` when no changed file is
+ *                                      one the extractor reads
  *
  * `release-check` options:
  *   `--candidate <git-ref>`  the tree the artifact is built from (default: the working tree) — the local
@@ -19,8 +24,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
-  SIGNOFF_LEDGER_PATH, SNAPSHOT_PATH, TRUST_SIGNOFF_APPROVERS, TrustExtractionError, diffSnapshots, extractTrustSnapshot, fsReader,
-  gitReader, readSignoffs, releaseVerdict, serializeSnapshot, snapshotDigest, type ReleaseVerdict, type TrustSnapshot,
+  SIGNOFF_LEDGER_PATH, SNAPSHOT_PATH, TRUST_SIGNOFF_APPROVERS, TrustExtractionError, compareTrustSnapshots, diffSnapshots,
+  extractTrustSnapshot, fsReader, gitReader, readSignoffs, releaseVerdict, serializeSnapshot, snapshotDigest, touchesTrustInputs,
+  type ReleaseVerdict, type TrustSnapshot, type TrustSnapshotChange,
 } from './trust-snapshot'
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..')
@@ -98,9 +104,57 @@ function loadSigned(): ReturnType<typeof readSignoffs> {
   return existsSync(path) ? readSignoffs(JSON.parse(readFileSync(path, 'utf8'))) : readSignoffs({ signoffs: [] })
 }
 
+/**
+ * What the fleet gate shows about a PR's trust snapshot (`VerifyReport.trustSnapshot`, #3069): `null` when
+ * no changed file is one the extractor reads, otherwise the comparison of the two revisions. Both sides are
+ * read from git objects in `repo`, so the revision under judgement is data and none of its code runs. The
+ * gate runs this in a child process rather than importing it: `orchestrator/src` imports nothing from
+ * outside itself (the credential-boundary rail), and the child gets no credential-bearing environment.
+ */
+export function compareForGate(repo: string, base: string, head: string, changedFiles: readonly string[]): TrustSnapshotChange | null {
+  if (!touchesTrustInputs(changedFiles)) return null
+  let mergeBase: string
+  try {
+    mergeBase = git(repo, 'merge-base', base, head)
+  } catch {
+    mergeBase = ''
+  }
+  if (mergeBase === '') return { changed: false, changes: [], error: 'the merge base could not be resolved, so the trust snapshot could not be compared' }
+  return compareTrustSnapshots(gitReader(repo, mergeBase), gitReader(repo, head))
+}
+
+function parseChangedFiles(stdin: string): string[] {
+  const parsed: unknown = JSON.parse(stdin)
+  if (!Array.isArray(parsed) || !parsed.every((f): f is string => typeof f === 'string')) {
+    throw new Error('stdin must be a JSON array of changed file paths')
+  }
+  return parsed
+}
+
 function main(argv: string[]): number {
   const [cmd, ...rest] = argv
-  const tree = cmd === 'release-check' ? (undefined as unknown as TrustSnapshot) : extractTrustSnapshot(fsReader(ROOT))
+  const opt = (name: string): string | undefined => {
+    const i = rest.indexOf(name)
+    return i >= 0 ? rest[i + 1] : undefined
+  }
+  if (cmd === 'compare') {
+    const root = opt('--root')
+    const [base, head] = rest.filter((a, i) => a !== '--root' && rest[i - 1] !== '--root')
+    if (root === undefined || base === undefined || head === undefined) {
+      console.error('usage: trust-snapshot-cli compare --root <repo> <base-rev> <head-rev>  (changed files as a JSON array on stdin)')
+      return 2
+    }
+    const changed = parseChangedFiles(readFileSync(0, 'utf8'))
+    process.stdout.write(`${JSON.stringify(compareForGate(root, base, head, changed))}\n`)
+    return 0
+  }
+  if (cmd === 'release-check') {
+    const { against, verdict } = runReleaseCheck({ candidate: opt('--candidate'), against: opt('--against') })
+    console.log(`trust release check against ${against ?? '(no previous release)'}: ${verdict.ok ? 'OK' : 'REFUSED'} — ${verdict.reason}`)
+    if (verdict.changed) for (const l of verdict.diff) console.log(`  ${l}`)
+    return verdict.ok ? 0 : 1
+  }
+  const tree: TrustSnapshot = extractTrustSnapshot(fsReader(ROOT))
   switch (cmd) {
     case 'snapshot': {
       writeFileSync(join(ROOT, SNAPSHOT_PATH), serializeSnapshot(tree))
@@ -136,16 +190,6 @@ function main(argv: string[]): number {
       console.log(diff.length === 0 ? 'trust snapshot unchanged' : diff.join('\n'))
       return 0
     }
-    case 'release-check': {
-      const opt = (name: string): string | undefined => {
-        const i = rest.indexOf(name)
-        return i >= 0 ? rest[i + 1] : undefined
-      }
-      const { against, verdict } = runReleaseCheck({ candidate: opt('--candidate'), against: opt('--against') })
-      console.log(`trust release check against ${against ?? '(no previous release)'}: ${verdict.ok ? 'OK' : 'REFUSED'} — ${verdict.reason}`)
-      if (verdict.changed) for (const l of verdict.diff) console.log(`  ${l}`)
-      return verdict.ok ? 0 : 1
-    }
     case 'signoff': {
       const digest = rest[0]
       if (digest === undefined || digest !== snapshotDigest(tree)) {
@@ -166,7 +210,7 @@ function main(argv: string[]): number {
       return 0
     }
     default:
-      console.error('usage: trust-snapshot-cli <snapshot|check|diff|release-check|signoff>')
+      console.error('usage: trust-snapshot-cli <snapshot|check|diff|release-check|signoff|compare>')
       return 2
   }
 }
