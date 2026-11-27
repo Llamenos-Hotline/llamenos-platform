@@ -26,7 +26,11 @@
  *      this device holds.
  *
  * Every step is keyed off the server's current chain, so a retry after a
- * partial failure resumes where the previous attempt stopped.
+ * partial failure — onboarding's own, or `ensureDeviceIdentity` on a later
+ * start — resumes where the previous attempt stopped. A chain is initialised
+ * only once it holds a `puk_epoch`; before the PUK is claimed over a served
+ * genesis, that prefix is verified to authorise this device under its X-Wing
+ * key, so nothing is signed over a chain this device cannot vouch for.
  */
 import {
   SIGCHAIN_GENESIS_SEQ,
@@ -46,6 +50,7 @@ import {
   sigchainCreateLinkFromState,
   sigchainVerify,
   userInitPayloadFromState,
+  type DeviceKeyState,
   type SigchainLink,
   type SigchainVerifiedState,
 } from './platform'
@@ -159,6 +164,10 @@ async function initializeUserIdentityNow(userPubkey: string): Promise<SigchainVe
   }
 
   if (!holdsPukEpoch(links)) {
+    // The PUK is claimed by a link signed over the served head, so the served
+    // prefix is verified first: it must be a chain that authorises this device
+    // under the X-Wing key it holds, or nothing is created and nothing signed.
+    assertNamesHeldKemKey(await verifyAuthorisesDevice(userPubkey, links, device), device)
     const { pukState, envelope } = await pukCreateFromState()
     await distributePukEnvelopes({
       envelopes: [{ deviceId: device.deviceId, generation: pukState.generation, envelope }],
@@ -202,16 +211,30 @@ async function verifyDeviceIdentityNow(userPubkey: string): Promise<SigchainVeri
 
   const { links } = await getSigchain(userPubkey)
   await assertExtendsVerifiedHead(userPubkey, links)
+  const verified = await verifyAuthorisesDevice(userPubkey, links, device)
+  await recordVerifiedHead(verified)
+  assertNamesHeldKemKey(verified, device)
+  return verified
+}
+
+/** `links` verified by packages/crypto as `userPubkey`'s chain, with `device` among its active devices. */
+async function verifyAuthorisesDevice(
+  userPubkey: string,
+  links: SigchainLinkRecord[],
+  device: DeviceKeyState,
+): Promise<SigchainVerifiedState> {
   const verified = await sigchainVerify(links.map(toCryptoSigchainLink))
   if (verified.userPubkey !== userPubkey || !verified.activeDevicePubkeys.includes(device.signingPubkeyHex)) {
     throw new Error('Verified sigchain does not authorise this device')
   }
-  await recordVerifiedHead(verified)
+  return verified
+}
+
+function assertNamesHeldKemKey(verified: SigchainVerifiedState, device: DeviceKeyState): void {
   const named = verified.activeDeviceKeys.find(k => k.devicePubkey === device.signingPubkeyHex)
   if (named?.encryptionPubkey !== device.kemPubkeyHex) {
     throw new Error('The verified sigchain names a different X-Wing key for this device than the one it holds')
   }
-  return verified
 }
 
 /**

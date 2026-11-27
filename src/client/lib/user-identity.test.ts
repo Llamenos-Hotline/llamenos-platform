@@ -191,6 +191,22 @@ describe('ensureDeviceIdentity resumes a genesis-only chain (#3051)', () => {
     expectCompleteChain(device)
   })
 
+  it('a served genesis that does not verify is not extended, and no PUK is created for it', async () => {
+    const device = newDevice('device-identity')
+    local.device = device
+    await strandAfterGenesis(device.keys.signingPubkeyHex)
+    // The server now serves a genesis naming another X-Wing key: its hash no longer matches.
+    const forged = { ...server.links[0], payload: { ...(server.links[0].payload as object), encryptionPubkey: newDevice('x').keys.kemPubkeyHex } }
+    server.links = [forged]
+    const puksBefore = local.puks.length
+
+    await expect(ensureDeviceIdentity(device.keys.signingPubkeyHex)).rejects.toThrow('signature verification failed')
+
+    expect(server.links).toEqual([forged])
+    expect(server.envelopes).toEqual([])
+    expect(local.puks).toHaveLength(puksBefore)
+  })
+
   it('a device that did not create the chain reports it and appends nothing', async () => {
     const identity = newDevice('device-identity')
     local.device = identity
