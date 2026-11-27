@@ -3995,7 +3995,10 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     ['desktop-rust', "needs.changes.outputs.desktop == 'true'"],
     ['backend-integration', "needs.changes.outputs.backend == 'true'"],
     ['sidecar-tests', "needs.changes.outputs.backend == 'true'"],
-    ['repo-tests', "needs.changes.outputs.docs_only != 'true'"],
+    // The second term runs the release trust check on the knope release PR,
+    // the one run where it can execute (#3077). Dropping it skips that gate
+    // without failing anything.
+    ['repo-tests', "needs.changes.outputs.docs_only != 'true' || needs.changes.outputs.release_only == 'true'"],
     ['crypto-tests', "needs.changes.outputs.crypto == 'true'"],
     ['migration-drift', "needs.changes.outputs.backend == 'true'"],
     ['backend-bdd', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'"],

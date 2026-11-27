@@ -1753,9 +1753,20 @@ jobs:
   # OTHER gates, and the suite is under two seconds. Choosing one platform flag
   # would mean a change to any of the other three skipped the rail that guards
   # it — which is how they came to run nowhere in the first place.
+  #
+  # It ALSO runs on a knope release PR (`release_only`, #3077), which every
+  # other suite skips (#2094). packages/protocol/tools/trust-release.test.ts
+  # holds the release boundary's CI half (#3069): "THIS run produces a release:
+  # its trust snapshot is unchanged, or signed off by digest". That test runs
+  # only where isReleaseCandidate() is true, and the release PR's
+  # `pull_request` run is the only run of this workflow where it is:
+  # `merge_group` sets no GITHUB_HEAD_REF, and this workflow has no tag push.
+  # A release-bump diff classifies as `docs_only`, so without the second term
+  # the gate is skipped on exactly the run it exists for, and the release PR
+  # is green without it having run.
   repo-tests:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true' || needs.changes.outputs.release_only == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1777,6 +1788,36 @@ jobs:
       # which imports from packages/protocol — generated output has to exist.
       - name: Generate protocol + i18n types
         run: bun run codegen && bun run i18n:codegen
+
+      # The release trust check has to find the previous `vX.Y.Z` tag that is
+      # reachable from the candidate. On the default shallow checkout, with no
+      # tags, previousReleaseTag() refuses, and it is right to: "no previous
+      # release" would either demand a sign-off for nothing or hide a changed
+      # snapshot. So a release candidate gets the candidate commit's full
+      # history and every tag (#3077). Other runs keep the shallow clone, because
+      # that test is skipped for them. Measured on the release PR's merge ref
+      # (#3081): 9 to 13 s, and about 110 MB of history.
+      #
+      # The decision calls the test's own isReleaseCandidate() with this job's
+      # environment, which is the same environment the test sees, so this step
+      # and the test cannot disagree. A repeated branch or tag pattern would
+      # drift quietly the next time the predicate changed. Any answer other than
+      # true or false (a crashed import, say) fails the step. It is never
+      # treated as "not a release".
+      - name: Fetch history and tags for the release trust check
+        run: |
+          candidate=$(bun -e "import { isReleaseCandidate } from './packages/protocol/tools/trust-snapshot-cli.ts'; console.log(isReleaseCandidate(process.env))")
+          case "$candidate" in
+            false)
+              echo "Not a release candidate: the release trust check is skipped, so the shallow checkout stays." ;;
+            true)
+              start=$SECONDS
+              git fetch --unshallow --tags --no-recurse-submodules origin "$(git rev-parse HEAD)"
+              echo "Release candidate: fetched full history and $(git tag --list 'v[0-9]*' | wc -l) v* tag(s) in $((SECONDS - start)) s." ;;
+            *)
+              echo "::error::isReleaseCandidate() printed '${candidate}', not true or false. Cannot tell whether this run produces a release."
+              exit 1 ;;
+          esac
 
       # `bun test` exits 0 when its path arguments match nothing at all, so a
       # moved file or a typo in the script's path list would land here as a
