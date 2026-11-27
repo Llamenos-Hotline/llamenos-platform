@@ -11,12 +11,17 @@ import type { ReactNode } from 'react'
 const hubRow = (id: string, name: string) => ({ id, name })
 const server = vi.hoisted(() => ({ hubs: [] as { id: string; name: string }[] }))
 
+// `ConfigProvider` loads the public `/config` on mount through `getConfig`,
+// which does not go through `request()` (it is the unauthenticated pre-login
+// read, with its own defaults on failure), so it is mocked at the same module
+// boundary. Unmocked, it really fetched `localhost:3000` (#3084).
 vi.mock('./api/client', async (importActual) => ({
   ...(await importActual<typeof import('./api/client')>()),
   request: vi.fn(async (path: string) => {
     if (path === '/hubs') return { hubs: server.hubs }
     return {}
   }),
+  getConfig: vi.fn(async () => ({ hotlineName: 'Test Hotline', hotlineNumber: '' })),
 }))
 
 import { getActiveHub, setActiveHub, notifyHubGone } from './api/client'
