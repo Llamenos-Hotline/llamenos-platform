@@ -41,26 +41,97 @@ final class TagsUITests: BaseUITest {
 
     // MARK: - Scenario: Admin creates a tag with label and color
 
-    func testAdminCreatesATagWithLabelAndColor() {
-        given("I am authenticated as admin") {
-            launchAsAdminWithAPI()
+    /// The tag a UI create persists, read back through the API as another hub member would:
+    /// `GET /api/hubs/:id/tags`, the row whose slug this test named.
+    private func persistedTag(slug: String) -> [String: Any]? {
+        guard let data = TestAdminAPI.send("GET", "/api/hubs/\(testHubId)/tags", baseURL: testHubURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tags = json["tags"] as? [[String: Any]] else {
+            XCTFail("GET /api/hubs/\(testHubId)/tags did not return { tags: [...] }")
+            return nil
         }
-        when("I navigate to tags admin and tap create") {
-            navigateToTagsAdmin()
+        return tags.first { $0["name"] as? String == slug }
+    }
 
-            let createButton = find("tags-create-button")
-            guard createButton.waitForExistence(timeout: 5) else {
-                XCTFail("Create button should exist")
+    private func fillAndSaveTheCreateForm(label: String) {
+        let createButton = find("tags-create-button")
+        guard createButton.waitForExistence(timeout: BaseUITest.eventBackstop) else {
+            XCTFail("Create button should exist")
+            return
+        }
+        tapWhenSettled(createButton)
+        typeText(label, into: find("tag-create-label"))
+        tapWhenSettled(find("tag-create-color-ef4444"))
+        tapWhenSettled(app.buttons["tag-create-save"])
+    }
+
+    /// The scenario #2792 is about: submit the form, then look at what the SERVER kept. The
+    /// old version stopped at "the form opens" and passed while every save was refused.
+    func testAdminCreatesATagWithLabelAndColor() {
+        let hubKey = TestAdminAPI.randomHubKeyHex()
+        let label = "urgent\(Int(Date().timeIntervalSince1970))"
+        let slug = label
+        given("I am authenticated as admin on a device that holds the hub's key") {
+            launchAsAdminWithAPI(hubKeyHex: hubKey)
+        }
+        when("I create a tag with a label and a color") {
+            navigateToTagsAdmin()
+            fillAndSaveTheCreateForm(label: label)
+        }
+        then("the tag is listed") {
+            XCTAssertTrue(
+                find("tag-row-\(slug)").waitForExistence(timeout: BaseUITest.eventBackstop),
+                "The saved tag should be listed — a refused save leaves the sheet open instead"
+            )
+        }
+        and("the server holds its color and a label only the hub's key opens, which another member can open") {
+            guard let row = persistedTag(slug: slug) else {
+                XCTFail("The server has no tag named \(slug)")
                 return
             }
-            createButton.tap()
-        }
-        then("I should see the tag creation form") {
-            let labelInput = find("tag-create-label")
-            XCTAssertTrue(
-                labelInput.waitForExistence(timeout: 5),
-                "Tag create form should have a label input"
+            XCTAssertEqual(row["color"] as? String, "#ef4444")
+            let stored = row["encryptedLabel"] as? String ?? ""
+            XCTAssertNotEqual(stored, label, "The label was stored in the clear")
+            XCTAssertEqual(
+                TestAdminAPI.openHubField(
+                    packedHex: stored, hubKeyHex: hubKey, label: CryptoLabels.LABEL_TAG_ENCRYPT
+                ),
+                label,
+                "A member holding the hub key could not open the stored label"
             )
+            XCTAssertNil(
+                TestAdminAPI.openHubField(
+                    packedHex: stored, hubKeyHex: TestAdminAPI.randomHubKeyHex(), label: CryptoLabels.LABEL_TAG_ENCRYPT
+                ),
+                "A key that is not the hub's opened the stored label"
+            )
+        }
+    }
+
+    // MARK: - Scenario: A device without the hub key refuses the save
+
+    /// The other half of the same instrument: with no key the save must say so and store
+    /// nothing, rather than succeed or fall silent.
+    func testCreatingATagWithoutTheHubKeyIsRefusedAndStoresNothing() {
+        let label = "nokey\(Int(Date().timeIntervalSince1970))"
+        given("I am authenticated as admin on a device that holds no hub key") {
+            launchAsAdminWithAPI()
+        }
+        when("I try to create a tag") {
+            navigateToTagsAdmin()
+            fillAndSaveTheCreateForm(label: label)
+        }
+        then("the form says the hub key is missing and stays open") {
+            let error = find("tag-create-error")
+            XCTAssertTrue(
+                error.waitForExistence(timeout: BaseUITest.eventBackstop),
+                "A refused save should be reported on the form"
+            )
+            // `error_no_hub_key` (en.json `noHubKey`); the launch pins the language to English.
+            XCTAssertEqual(error.label, "Hub key not available")
+        }
+        and("the server stored no tag") {
+            XCTAssertNil(persistedTag(slug: label), "A refused save still stored a tag")
         }
     }
 
@@ -82,25 +153,6 @@ final class TagsUITests: BaseUITest {
     }
 
     // MARK: - Helper: Contact form + tag picker
-
-    /// Open the new-contact form from the dashboard's contacts action.
-    private func openNewContactForm() {
-        let contactsAction = scrollToFind("dashboard-contacts-action")
-        guard contactsAction.waitForExistence(timeout: 5) else {
-            XCTFail("Contacts quick action should exist for admin")
-            return
-        }
-        contactsAction.tap()
-
-        // A toolbar Button also surfaces as an "Other" container with the same
-        // identifier; query the button itself.
-        let addButton = app.buttons["contacts-add-button"]
-        guard addButton.waitForExistence(timeout: 10) else {
-            XCTFail("The contacts screen should offer an add-contact button")
-            return
-        }
-        addButton.tap()
-    }
 
     /// Seed a hub tag through the real API, as the test admin ("Given a tag
     /// exists in the hub"). The label is stored as given: the test hub has no

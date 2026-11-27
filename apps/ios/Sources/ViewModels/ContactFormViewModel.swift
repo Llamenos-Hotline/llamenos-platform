@@ -1,4 +1,3 @@
-import CommonCrypto
 import Foundation
 import Observation
 
@@ -36,7 +35,12 @@ final class ContactFormViewModel {
     ///
     /// Encrypts all PII (name, phone, email, notes) client-side using HPKE
     /// before sending to the server. The server never sees plaintext PII.
-    func save(hubId: String, hubKey: Data, readerPubkeys: [String], apiService: ContactsAPIService) async throws -> Contact {
+    ///
+    /// No search index is sent: a blind index is an HMAC under the hub key, the hub
+    /// key lives in Rust and never enters Swift, and the crate exports no blind-index
+    /// call yet (#2779). The desktop sends none either (#2139), so a contact is
+    /// created and read the same way from every client.
+    func save(hubId: String, readerPubkeys: [String], apiService: ContactsAPIService) async throws -> Contact {
         isSaving = true
         defer { isSaving = false }
 
@@ -66,12 +70,6 @@ final class ContactFormViewModel {
             piiResult = nil
         }
 
-        // Build blind indexes for server-side search
-        let hubKeyBytes = [UInt8](hubKey)
-        let identifierHashes = buildIdentifierHashes(name: trimmedName, phone: phone, email: email, hubKey: hubKeyBytes)
-        let nameHash = hmacBlindIndex(hubKey: hubKeyBytes, field: "name", value: trimmedName)
-        let trigramTokens = buildTrigramTokens(value: trimmedName, hubKey: hubKeyBytes)
-
         let summaryEnvelopes = summaryResult.envelopes.map {
             SharedAdminEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey)
         }
@@ -86,20 +84,20 @@ final class ContactFormViewModel {
             encryptedPII: piiResult?.ciphertextHex,
             encryptedSummary: summaryResult.ciphertextHex,
             hubID: hubId,
-            identifierHashes: identifierHashes,
-            nameHash: nameHash,
+            identifierHashes: [],
+            nameHash: nil,
             piiEnvelopes: piiEnvelopes,
             statusHash: nil,
             summaryEnvelopes: summaryEnvelopes,
             tagHashes: nil,
-            trigramTokens: trigramTokens
+            trigramTokens: nil
         )
 
         return try await apiService.createContact(body)
     }
 
     /// Update an existing encrypted contact.
-    func update(contactId: String, hubId: String, hubKey: Data, readerPubkeys: [String], apiService: ContactsAPIService) async throws -> Contact {
+    func update(contactId: String, hubId: String, readerPubkeys: [String], apiService: ContactsAPIService) async throws -> Contact {
         isSaving = true
         defer { isSaving = false }
 
@@ -129,12 +127,6 @@ final class ContactFormViewModel {
             piiResult = nil
         }
 
-        // Rebuild blind indexes
-        let hubKeyBytes = [UInt8](hubKey)
-        let identifierHashes = buildIdentifierHashes(name: trimmedName, phone: phone, email: email, hubKey: hubKeyBytes)
-        let nameHash = hmacBlindIndex(hubKey: hubKeyBytes, field: "name", value: trimmedName)
-        let trigramTokens = buildTrigramTokens(value: trimmedName, hubKey: hubKeyBytes)
-
         let summaryEnvelopes = summaryResult.envelopes.map {
             SharedAdminEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey)
         }
@@ -149,13 +141,13 @@ final class ContactFormViewModel {
             encryptedPII: piiResult?.ciphertextHex,
             encryptedSummary: summaryResult.ciphertextHex,
             hubID: hubId,
-            identifierHashes: identifierHashes,
-            nameHash: nameHash,
+            identifierHashes: nil,
+            nameHash: nil,
             piiEnvelopes: piiEnvelopes,
             statusHash: nil,
             summaryEnvelopes: summaryEnvelopes,
             tagHashes: nil,
-            trigramTokens: trigramTokens
+            trigramTokens: nil
         )
 
         return try await apiService.updateContact(id: contactId, body: body)
@@ -202,83 +194,6 @@ final class ContactFormViewModel {
             throw ContactFormError.encodingFailed
         }
         return json
-    }
-
-    // MARK: - Blind Index Helpers
-
-    private func buildIdentifierHashes(name: String, phone: String, email: String, hubKey: [UInt8]) -> [String] {
-        var hashes: [String] = []
-        let trimmedPhone = phone.trimmingCharacters(in: .whitespaces)
-        let trimmedEmail = email.trimmingCharacters(in: .whitespaces)
-
-        if !trimmedPhone.isEmpty {
-            hashes.append(hmacBlindIndex(hubKey: hubKey, field: "phone", value: trimmedPhone))
-        }
-        if !trimmedEmail.isEmpty {
-            hashes.append(hmacBlindIndex(hubKey: hubKey, field: "email", value: trimmedEmail))
-        }
-        if hashes.isEmpty {
-            hashes.append(hmacBlindIndex(hubKey: hubKey, field: "name", value: name))
-        }
-        return hashes
-    }
-
-    private func buildTrigramTokens(value: String, hubKey: [UInt8]) -> [String] {
-        let normalized = canonicalize(value)
-        let chars = Array(normalized)
-        guard chars.count >= 3 else {
-            return [hmacBlindIndex(hubKey: hubKey, field: "name:trigram", value: normalized)]
-        }
-        var tokens = Set<String>()
-        for i in 0...(chars.count - 3) {
-            let trigram = String(chars[i..<(i + 3)])
-            tokens.insert(hmacBlindIndex(hubKey: hubKey, field: "name:trigram", value: trigram))
-        }
-        return Array(tokens).sorted()
-    }
-
-    /// Compute HMAC-SHA256 blind index matching packages/crypto/src/blind_index.rs.
-    /// HKDF-derives a per-field key from the hub key, then HMACs the canonicalized value.
-    private func hmacBlindIndex(hubKey: [UInt8], field: String, value: String) -> String {
-        // Derive per-field key: HKDF-SHA256(salt=LABEL_BLIND_INDEX_KEY, ikm=hubKey, info=LABEL_BLIND_INDEX_FIELD+field)
-        let salt = Array(CryptoLabels.LABEL_BLIND_INDEX_KEY.utf8)
-        let info = Array((CryptoLabels.LABEL_BLIND_INDEX_FIELD + field).utf8)
-        let fieldKey = hkdfSHA256(ikm: hubKey, salt: salt, info: info, length: 32)
-
-        // HMAC-SHA256(fieldKey, canonicalize(value))
-        let canonical = canonicalize(value)
-        let canonicalBytes = Array(canonical.utf8)
-        var hmac = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), fieldKey, fieldKey.count, canonicalBytes, canonicalBytes.count, &hmac)
-        return hmac.map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Canonicalize for blind indexing: lowercase, strip diacritics, trim whitespace.
-    private func canonicalize(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespaces)
-            .lowercased()
-            .folding(options: .diacriticInsensitive, locale: .current)
-    }
-
-    /// HKDF-SHA256 extract-and-expand (RFC 5869).
-    private func hkdfSHA256(ikm: [UInt8], salt: [UInt8], info: [UInt8], length: Int) -> [UInt8] {
-        // Extract: PRK = HMAC-SHA256(salt, IKM)
-        var prk = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), salt, salt.count, ikm, ikm.count, &prk)
-
-        // Expand: OKM = T(1) || T(2) || ...
-        var okm: [UInt8] = []
-        var t: [UInt8] = []
-        var counter: UInt8 = 1
-        while okm.count < length {
-            var input = t + info + [counter]
-            var block = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-            CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), prk, prk.count, &input, input.count, &block)
-            t = block
-            okm.append(contentsOf: block)
-            counter += 1
-        }
-        return Array(okm.prefix(length))
     }
 }
 

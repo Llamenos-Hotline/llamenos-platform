@@ -3,7 +3,6 @@ import SwiftUI
 struct CreateContactView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
-    @Environment(HubKeyStore.self) private var hubKeyStore
     @State private var vm: ContactFormViewModel?
 
     var onCreated: (Contact) -> Void
@@ -21,6 +20,7 @@ struct CreateContactView: View {
                         ToolbarItem(placement: .confirmationAction) {
                             Button(NSLocalizedString("common_save", comment: "Save")) { save() }
                                 .disabled(vm.displayName.trimmingCharacters(in: .whitespaces).isEmpty || vm.isSaving)
+                                .accessibilityIdentifier("contact-save")
                         }
                     }
                     .overlay { if vm.isSaving { ProgressView() } }
@@ -35,10 +35,6 @@ struct CreateContactView: View {
 
     private func save() {
         guard let vm else { return }
-        guard let hubKey = hubKeyStore.currentHubKey else {
-            vm.error = NSLocalizedString("error_no_hub_key", comment: "Hub key not available")
-            return
-        }
         guard let hubId = appState.hubContext.activeHubId else {
             vm.error = NSLocalizedString("error_no_hub_selected", comment: "No hub selected")
             return
@@ -61,7 +57,6 @@ struct CreateContactView: View {
                 }
                 let contact = try await vm.save(
                     hubId: hubId,
-                    hubKey: hubKey,
                     readerPubkeys: readerPubkeys,
                     apiService: contactsAPI
                 )

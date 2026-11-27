@@ -190,6 +190,10 @@ private struct TagCreateSheet: View {
                                             .stroke(Color.brandForeground, lineWidth: selectedColor == hex ? 2 : 0)
                                     )
                             }
+                            // `.plain`: in a Form row every Button of the row fires on any tap inside
+                            // the row, so with the default style the LAST swatch is always the one
+                            // selected (#2792: the stored color was #8b5cf6 whichever was tapped).
+                            .buttonStyle(.plain)
                             .accessibilityIdentifier("tag-create-color-\(hex.dropFirst())")
                         }
                     }
@@ -210,6 +214,7 @@ private struct TagCreateSheet: View {
                         Text(errorMessage)
                             .foregroundStyle(Color.brandDestructive)
                             .font(.brand(.caption))
+                            .accessibilityIdentifier("tag-create-error")
                     }
                 }
             }

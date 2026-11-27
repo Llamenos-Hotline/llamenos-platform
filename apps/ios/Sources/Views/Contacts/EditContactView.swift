@@ -3,7 +3,6 @@ import SwiftUI
 struct EditContactView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
-    @Environment(HubKeyStore.self) private var hubKeyStore
     @State private var vm: ContactFormViewModel?
 
     let contact: DirectoryContact
@@ -22,6 +21,7 @@ struct EditContactView: View {
                         ToolbarItem(placement: .confirmationAction) {
                             Button(NSLocalizedString("common_save", comment: "Save")) { update() }
                                 .disabled(vm.displayName.trimmingCharacters(in: .whitespaces).isEmpty || vm.isSaving)
+                                .accessibilityIdentifier("contact-save")
                         }
                     }
             }
@@ -37,10 +37,6 @@ struct EditContactView: View {
 
     private func update() {
         guard let vm else { return }
-        guard let hubKey = hubKeyStore.currentHubKey else {
-            vm.error = NSLocalizedString("error_no_hub_key", comment: "Hub key not available")
-            return
-        }
         guard let hubId = appState.hubContext.activeHubId else {
             vm.error = NSLocalizedString("error_no_hub_selected", comment: "No hub selected")
             return
@@ -63,7 +59,6 @@ struct EditContactView: View {
                 let updated = try await vm.update(
                     contactId: contact.id,
                     hubId: hubId,
-                    hubKey: hubKey,
                     readerPubkeys: readerPubkeys,
                     apiService: contactsAPI
                 )
@@ -88,13 +83,16 @@ struct ContactFormFields: View {
                     .accessibilityIdentifier("contact-display-name")
                 TextField(NSLocalizedString("contacts_phone", comment: "Phone"), text: $vm.phone)
                     .keyboardType(.phonePad)
+                    .accessibilityIdentifier("contact-phone")
                 TextField(NSLocalizedString("contacts_email", comment: "Email"), text: $vm.email)
                     .keyboardType(.emailAddress)
                     .autocapitalization(.none)
+                    .accessibilityIdentifier("contact-email")
             }
             Section(NSLocalizedString("contacts_section_notes", comment: "Notes")) {
                 TextEditor(text: $vm.notes)
                     .frame(minHeight: 80)
+                    .accessibilityIdentifier("contact-notes")
             }
             if appState.hasPermission("tags:view") {
                 Section(NSLocalizedString("tags_title", comment: "Tags")) {

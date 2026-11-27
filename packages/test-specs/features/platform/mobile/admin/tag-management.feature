@@ -18,9 +18,20 @@ Feature: Tag Management (Mobile)
 
   @ios @regression
   Scenario: Admin creates a tag with label and color
+    Given this device holds the hub's key
+    When I navigate to the Tags admin screen
+    And I create a tag named "Urgent" with the red color
+    Then the tag should appear in the list
+    And the server should hold the tag's color and a label that only the hub's key opens
+    And another member holding the hub key should be able to open the stored label
+
+  @ios @regression
+  Scenario: Creating a tag without the hub key is refused and stores nothing
+    Given this device holds no hub key
     When I navigate to the Tags admin screen
     And I create a tag named "Urgent"
-    Then the tag should appear in the list with its decrypted label
+    Then the form should say the hub key is not available
+    And the server should hold no such tag
 
   @ios @regression
   Scenario: Admin deletes a tag
@@ -37,8 +48,9 @@ Feature: Tag Management (Mobile)
     Then the selected tag should appear as a badge in the form
 
   # "Contact form saves selected tags into the contact" is not specified here
-  # yet: saving a contact needs the hub key in Swift (blind indexes), and no
-  # client is ever given one (#1042). Add the scenario with that fix.
+  # yet. Saving a contact no longer needs a hub key (#2792) and the stored
+  # summary tier carries the tags, so the scenario can be added once the
+  # contact screens list directory contacts.
 
   @ios @regression
   Scenario: Tags admin is hidden without the tags view permission

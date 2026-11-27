@@ -14,9 +14,6 @@ struct LlamenosApp: App {
     @State private var hubContext: HubContext
     @State private var appState: AppState
     @State private var router = Router()
-    /// The contact create/edit forms read this from the Environment; without an
-    /// injected instance opening either form traps in `EnvironmentValues`.
-    @State private var hubKeyStore = HubKeyStore()
 
     init() {
         // Before any service exists that could perform a request: no HTTP response
@@ -80,7 +77,6 @@ struct LlamenosApp: App {
                             .environment(appState)
                             .environment(router)
                             .environment(hubContext)
-                            .environment(hubKeyStore)
                     }
                 }
             }
