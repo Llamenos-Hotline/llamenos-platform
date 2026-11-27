@@ -42,6 +42,16 @@ function cannedGitHub(args: string[]): string {
   const joined = args.join(' ')
   if (args[0] === 'api' && args[1] === 'graphql') {
     if (joined.includes('pullRequest(number')) return JSON.stringify(PR)
+    // #3076: GitHub's own rollup, agreeing with the check-runs below.
+    if (joined.includes('statusCheckRollup') && joined.includes(`sha=${HEAD}`)) {
+      const node = (databaseId: number, name: string) => ({
+        __typename: 'CheckRun', databaseId, name, status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: '2026-11-05T10:00:00Z',
+        checkSuite: { databaseId: databaseId * 10, app: { slug: 'github-actions' }, workflowRun: { databaseId: databaseId * 100, event: 'pull_request' } },
+      })
+      return JSON.stringify({ data: { repository: { object: { statusCheckRollup: { state: 'SUCCESS', contexts: {
+        pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node(1, 'ci-status'), node(2, 'fleet/review')],
+      } } } } } })
+    }
     if (joined.includes('checkSuites')) return REVIEW_RUNS
     if (joined.includes('object(expression')) return JSON.stringify({ data: { repository: { github: null, root: { text: 'apps/worker/lib/ @rhonda-rodododo\n' }, docs: null } } })
   }
@@ -93,6 +103,7 @@ describe('pr-why\'s whole default path is read-only', () => {
     expect(joined.some((a) => a.includes('/check-runs'))).toBe(true)
     expect(joined.some((a) => a.includes('actions/runs?head_sha='))).toBe(true)
     expect(joined.some((a) => a.includes('pullRequest(number'))).toBe(true)
+    expect(joined.some((a) => a.includes('statusCheckRollup'))).toBe(true)
     // #2480: the second membership probe, one read per live run status.
     for (const status of ['requested', 'waiting', 'pending', 'queued', 'in_progress']) {
       expect(joined.some((a) => a.includes(`actions/runs?event=merge_group&status=${status}&`)), status).toBe(true)
@@ -110,7 +121,7 @@ describe('pr-why\'s whole default path is read-only', () => {
   })
 
   it('a 502 from GitHub on any one read makes the exit 2, never 0 or 1', async () => {
-    for (const marker of ['pullRequest(number', 'checkSuites', '/check-runs', 'actions/runs?head_sha=', 'actions/runs?event=merge_group', '/pulls/2470/files', '/rules/branches/main', 'object(expression']) {
+    for (const marker of ['pullRequest(number', 'statusCheckRollup', 'checkSuites', '/check-runs', 'actions/runs?head_sha=', 'actions/runs?event=merge_group', '/pulls/2470/files', '/rules/branches/main', 'object(expression']) {
       respond = (args) => {
         if (args.join(' ').includes(marker)) throw Object.assign(new Error('Command failed'), { code: 1, stderr: 'HTTP 502: Bad Gateway' })
         return cannedGitHub(args)

@@ -723,7 +723,11 @@ describe('rail: pr-why is read-only (#2469)', () => {
   const ALLOWED_IMPORTS: Record<string, string[]> = {
     './gh.js': ['REPO', 'describeGhFailure', 'gh'],
     './board.js': ['CODEOWNERS_QUERY', 'codeOwnersOf', 'codeOwnersTextFrom', 'deriveBranchRuleset', 'parseCodeOwners', 'type BranchRuleset', 'type CodeOwnerRule', 'type CodeOwnersResponse'],
-    './missing-checks.js': ['defaultMissingChecksDeps', 'diagnosePrHead', 'type Carrier', 'type HeadDiagnosis', 'type MissingChecksDeps'],
+    // #3076: `carrierFromCheckRun` / `carrierFromCommitStatus` / `verdictFor`
+    // (pure) normalise GitHub's statusCheckRollup carriers exactly as the
+    // derived verdict's carriers are normalised, so the comparison between
+    // the two is never a disagreement between two normalisers.
+    './missing-checks.js': ['carrierFromCheckRun', 'carrierFromCommitStatus', 'defaultMissingChecksDeps', 'diagnosePrHead', 'verdictFor', 'type Carrier', 'type HeadDiagnosis', 'type MissingChecksDeps', 'type RequiredContextDiagnosis', 'type RequiredVerdict'],
     // #2490: `reviewOutcomeFromAnnotations` is the ONE reader of the
     // fleet/review outcome annotation, pure — shared with board so the two
     // cannot drift on where the token lives.
