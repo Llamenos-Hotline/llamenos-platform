@@ -1,7 +1,9 @@
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Properties
+import java.util.zip.ZipFile
 import javax.inject.Inject
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 
 plugins {
     alias(libs.plugins.android.application)
@@ -290,8 +292,101 @@ val copyProductionNetworkSecurityConfig by tasks.registering(Copy::class) {
     into(layout.buildDirectory.dir("generated/testFixtures/fixtures"))
 }
 
+// ─── Robolectric's Android framework jars, resolved by Gradle (#3101) ───────────────
+// Left to itself Robolectric downloads `android-all-instrumented` from Maven Central in
+// the middle of the test run, into ~/.m2 — a directory the Gradle cache never saw, so
+// every merge group fetched ~150 MB at test time from a runner egress address shared
+// with other jobs. A miss surfaced as a JUnit AssertionError ("Failed to fetch maven
+// artifact"), which no dependency-resolution retry can tell from a real failing test
+// (and gradle-retry.sh rightly refuses to retry one). So the jars are an ordinary Gradle
+// dependency: resolved, retried and cached with every other artifact, copied into one
+// directory, and handed to Robolectric in offline mode, where it makes no request at all.
+//
+// The API levels are read from the tests (`@Config(sdk = [..])`), the versions live in
+// libs.versions.toml next to Robolectric's own. A level a test pins with no catalog entry
+// — or a Robolectric test that pins none, which would run on the default level — fails
+// HERE, at configuration, instead of as a download failure in a test.
+val robolectricSdkLevels: List<Int> = run {
+    val sdkPin = Regex("""\bsdk\s*=\s*\[([^\]]*)]""")
+    val levels = sortedSetOf<Int>()
+    fileTree("src/test") { include("**/*.kt", "**/*.java") }.files.sorted().forEach { file ->
+        val text = file.readText()
+        if ("RobolectricTestRunner" !in text) return@forEach
+        val pins = sdkPin.findAll(text).toList()
+        check(pins.isNotEmpty()) {
+            "${file.name} runs under Robolectric without @Config(sdk = [..]): it would use Robolectric's default " +
+                "API level, whose framework jar is not prefetched (#3101). Pin the level."
+        }
+        pins.forEach { pin -> pin.groupValues[1].split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { levels += it.toInt() } }
+    }
+    levels.toList()
+}
+
+val robolectricAndroidAll: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    description = "Robolectric android-all-instrumented jars for every API level the unit tests pin (#3101)."
+}
+
+val versionCatalog = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
+
+dependencies {
+    robolectricSdkLevels.forEach { level ->
+        val alias = "robolectric-android-all-$level"
+        val lib = versionCatalog.findLibrary(alias)
+        check(lib.isPresent) {
+            "a unit test pins @Config(sdk = [$level]) but libs.versions.toml has no `$alias` library: Robolectric would " +
+                "download its framework jar during the test run (#3101). Add it, with the version Robolectric ${versionCatalog.findVersion("robolectric").get()} pairs with API $level."
+        }
+        robolectricAndroidAll(lib.get())
+    }
+}
+
+val robolectricSdkDir = layout.buildDirectory.dir("robolectric-sdks")
+
+val prepareRobolectricSdks by tasks.registering(Sync::class) {
+    group = "verification"
+    description = "Resolves the Robolectric framework jars the unit tests need into one directory (#3101)."
+    from(robolectricAndroidAll)
+    into(robolectricSdkDir)
+    // The catalog's build string must still be the one the Robolectric on the test
+    // classpath asks for. Robolectric's own table (DefaultSdkProvider) holds each build
+    // number; one that is gone means a Robolectric bump left the catalog behind, and
+    // offline mode would only say so when a test starts.
+    val robolectricJar = configurations.named("debugUnitTestRuntimeClasspath").map { classpath ->
+        classpath.incoming.artifactView {
+            componentFilter { it is ModuleComponentIdentifier && it.module == "robolectric" }
+        }.files
+    }
+    inputs.files(robolectricJar)
+    doLast {
+        val table = robolectricJar.get().single()
+        val provider = ZipFile(table).use { zip ->
+            zip.getInputStream(zip.getEntry("org/robolectric/plugins/DefaultSdkProvider.class")).readBytes().toString(Charsets.ISO_8859_1)
+        }
+        robolectricAndroidAll.incoming.dependencies.forEach { dep ->
+            val build = Regex("""-robolectric-(\d+)-""").find("${dep.version}")?.groupValues?.get(1)
+            check(build != null && build in provider) {
+                "libs.versions.toml pins ${dep.name}:${dep.version}, but Robolectric ${table.name} no longer lists build $build: " +
+                    "update the robolectric-android-all-* versions to the ones this Robolectric release pairs with its API levels (#3101)."
+            }
+        }
+        val have = robolectricSdkDir.get().asFile.list().orEmpty()
+        check(robolectricSdkLevels.isEmpty() || have.count { it.endsWith(".jar") } >= robolectricSdkLevels.size) {
+            "expected a framework jar for each of API levels $robolectricSdkLevels in ${robolectricSdkDir.get().asFile}, found $have"
+        }
+    }
+}
+
 tasks.withType<Test>().configureEach {
     dependsOn(copyProductionNetworkSecurityConfig)
+    dependsOn(prepareRobolectricSdks)
+    inputs.dir(robolectricSdkDir).withPropertyName("robolectricSdks").withPathSensitivity(PathSensitivity.NAME_ONLY)
+    // Offline: Robolectric looks only in this directory and fails at once, naming the
+    // missing jar, instead of reaching for Maven. The path is set at execution so the
+    // absolute location is not part of the task's cache key.
+    systemProperty("robolectric.offline", "true")
+    doFirst { systemProperty("robolectric.dependency.dir", robolectricSdkDir.get().asFile.absolutePath) }
     // A failure prints its message, cause chain and stack in the build log itself. The
     // default ("AssertionError at Foo.kt:757", no expected/actual) left #1811's queue
     // ejection undiagnosable from CI, where the log is often the only evidence.
