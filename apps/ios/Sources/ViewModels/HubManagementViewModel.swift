@@ -178,6 +178,7 @@ final class HubManagementViewModel {
             description: description?.trimmingCharacters(in: .whitespacesAndNewlines),
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             phoneNumber: phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
+            phoneNumbers: nil,
             slug: slug?.trimmingCharacters(in: .whitespacesAndNewlines),
             timezone: Self.deviceTimezone()
         )

@@ -95,6 +95,7 @@ private func makeHub(id: String, slug: String = "test-hub") -> SharedHub {
         id: id,
         name: "Test Hub",
         phoneNumber: nil,
+        phoneNumbers: nil,
         slug: slug,
         status: .active,
         timezone: "UTC",

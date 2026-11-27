@@ -346,6 +346,7 @@ final class APIServiceWireFormatTests: XCTestCase {
                               "authToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
                 hubID: nil,
                 phoneNumber: "+15550001111",
+                phoneNumbers: nil,
                 provider: .twilio
             )),
 

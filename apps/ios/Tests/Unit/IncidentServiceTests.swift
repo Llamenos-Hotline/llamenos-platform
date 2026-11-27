@@ -213,6 +213,7 @@ private func makeIncidentHub(id: String, name: String) -> SharedHub {
         id: id,
         name: name,
         phoneNumber: nil,
+        phoneNumbers: nil,
         slug: id,
         status: .active,
         timezone: "UTC",
