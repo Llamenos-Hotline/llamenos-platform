@@ -355,7 +355,7 @@ F5). The process that holds the keys only receives drafts of allowed types.
   - the firehose message-buffer and window-key tables.
 
   The per-window forward-secrecy buffers become the connector's own local, TTL-bound state.
-- **Pilot data:** existing firehose report conversations stay readable as format-1 conversations and migrate with the conversation re-encryption job (#2964). Existing connections are not migrated. Each hub that uses the firehose re-enrolls it as a connector, which is an admin action shown in the release notes.
+- **Pilot data** (only if real data exists when connectors land; otherwise the deployment is reset, operator 2026-11-26): existing firehose report conversations stay readable as format-1 conversations and migrate with the conversation re-encryption job (#2964). Existing connections are not migrated. Each hub that uses the firehose re-enrolls it as a connector, which is an admin action shown in the release notes.
 
 ---
 

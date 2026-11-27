@@ -104,6 +104,11 @@ data that isn't secret.
 
 ## 5. L4: giving pilot devices an X-Wing key — decided
 
+> **Conditional on real data (operator, 2026-11-26).** `device_kem` exists only for devices that predate v2, ahead of a migration genesis
+> (wire §3). New devices get their X-Wing key in `device_add` (§2, L1 and L3). With no real data
+> before M2, the deployment is reset, so **`device_kem` is not built** and K-A ships L5 only. If
+> real data exists when stage 1 lands, this section applies as written.
+
 Pilot devices hold X25519 encryption keys (D16). Before their hub's migration genesis (wire §3.2),
 each needs an X-Wing key that grants and headers can be sealed to.
 
