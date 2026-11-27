@@ -464,7 +464,7 @@
     "micDenied": "음성 입력을 사용하려면 마이크 접근 권한이 필요합니다. 설정 > 개인정보 보호 및 보안 > 마이크에서 허용하세요.",
     "speechDenied": "음성 입력을 사용하려면 음성 인식 권한이 필요합니다. 설정 > 개인정보 보호 및 보안 > 음성 인식에서 허용하세요.",
     "unavailable": "이 기기에서는 음성 인식을 사용할 수 없습니다",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "auditLog": {
     "actor": "수행자",

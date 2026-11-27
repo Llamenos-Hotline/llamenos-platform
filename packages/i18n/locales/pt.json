@@ -464,7 +464,7 @@
     "micDenied": "O acesso ao microfone é necessário para a entrada por voz. Ative-o em Ajustes > Privacidade e Segurança > Microfone.",
     "speechDenied": "A permissão de reconhecimento de fala é necessária para a entrada por voz. Ative-a em Ajustes > Privacidade e Segurança > Reconhecimento de Fala.",
     "unavailable": "O reconhecimento de fala não está disponível neste dispositivo",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "auditLog": {
     "actor": "Ator",

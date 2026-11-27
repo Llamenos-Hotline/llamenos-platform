@@ -464,7 +464,7 @@
     "micDenied": "Для голосового ввода нужен доступ к микрофону. Включите его в Настройки > Конфиденциальность и безопасность > Микрофон.",
     "speechDenied": "Для голосового ввода нужно разрешение на распознавание речи. Включите его в Настройки > Конфиденциальность и безопасность > Распознавание речи.",
     "unavailable": "Распознавание речи недоступно на этом устройстве",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "auditLog": {
     "actor": "Исполнитель",

@@ -1,6 +1,6 @@
 //! Runtime-enforced network egress for the desktop webview (#739).
 //!
-//! A packaged Tauri build's CSP `connect-src` allows only `ipc: http://ipc.localhost`
+//! A packaged Tauri build's CSP `connect-src` allows only `ipc: http://ipc.localhost` (plus `'self'`, the app's own bundle)
 //! (see `apps/desktop/tauri.conf.json`) — the webview cannot open a raw `fetch` or
 //! `WebSocket` to any remote host. All HTTP and WebSocket traffic to the configured
 //! backend is instead proxied through the commands in this module, which check the

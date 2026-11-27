@@ -110,3 +110,7 @@ deploy/docker/secrets/
 # Python bytecode (a compiled copy of .github/scripts/classify-infra-failure.py was committed, #2875)
 __pycache__/
 *.pyc
+
+# Whisper ONNX models + ONNX runtime, fetched at build time and verified against
+# src/client/lib/transcription/model-manifest.json (#2951). Never commit model bytes.
+/public/models/

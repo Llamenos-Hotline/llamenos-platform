@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
+import org.llamenos.hotline.service.OnDeviceSpeech
 
 /**
  * State holder for the speech recognition lifecycle.
@@ -59,7 +60,8 @@ private enum class AudioInputState {
  *
  * Handles:
  * - RECORD_AUDIO runtime permission request
- * - Graceful fallback if SpeechRecognizer is not available on the device
+ * - On-device recognition only (API 31+): when the device has no on-device recognizer the
+ *   button reports why and never falls back to the default (cloud) service
  * - Error states with user-visible status text
  *
  * @param currentText The current text in the associated field
@@ -76,7 +78,7 @@ fun AudioInputButton(
 ) {
     val context = LocalContext.current
     val strPermissionDenied = stringResource(R.string.report_typed_audio_permission_denied)
-    val strUnavailable = stringResource(R.string.report_typed_audio_unavailable)
+    val strUnavailable = stringResource(R.string.audio_input_on_device_unavailable)
     val strListening = stringResource(R.string.report_typed_audio_listening)
     val strError = stringResource(R.string.report_typed_audio_error)
     var audioState by remember { mutableStateOf(AudioInputState.IDLE) }
@@ -84,9 +86,10 @@ fun AudioInputButton(
     var speechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
     var hasPermission by remember { mutableStateOf(false) }
 
-    // Check if SpeechRecognizer is available on this device
+    // Dictation is on-device only (#2951): without an on-device recognizer the button is
+    // unavailable and says why. It never uses the default (cloud) recognition service.
     val isAvailable = remember {
-        SpeechRecognizer.isRecognitionAvailable(context)
+        OnDeviceSpeech.isAvailable(context)
     }
 
     // Permission launcher
@@ -126,7 +129,13 @@ fun AudioInputButton(
 
         // Create a fresh recognizer each time (Android quirk: reused recognizers can stall)
         speechRecognizer?.destroy()
-        val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+        val recognizer = OnDeviceSpeech.create(context)
+        if (recognizer == null) {
+            speechRecognizer = null
+            audioState = AudioInputState.UNAVAILABLE
+            statusText = strUnavailable
+            return
+        }
         speechRecognizer = recognizer
 
         recognizer.setRecognitionListener(object : RecognitionListener {
@@ -303,6 +312,7 @@ private fun createRecognizerIntent(context: Context): Intent {
             RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
         )
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(
             RecognizerIntent.EXTRA_LANGUAGE,
             java.util.Locale.getDefault().toLanguageTag(),

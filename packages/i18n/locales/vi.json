@@ -464,7 +464,7 @@
     "micDenied": "Cần quyền truy cập micrô để nhập bằng giọng nói. Hãy bật trong Cài đặt > Quyền riêng tư & Bảo mật > Micrô.",
     "speechDenied": "Cần quyền nhận dạng giọng nói để nhập bằng giọng nói. Hãy bật trong Cài đặt > Quyền riêng tư & Bảo mật > Nhận dạng giọng nói.",
     "unavailable": "Nhận dạng giọng nói không khả dụng trên thiết bị này",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "auditLog": {
     "actor": "Người thực hiện",

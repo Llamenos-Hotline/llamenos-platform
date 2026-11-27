@@ -4556,7 +4556,7 @@
     "micDenied": "Sesli giriş için mikrofon erişimi gerekir. Ayarlar > Gizlilik ve Güvenlik > Mikrofon bölümünden etkinleştirin.",
     "speechDenied": "Sesli giriş için konuşma tanıma izni gerekir. Ayarlar > Gizlilik ve Güvenlik > Konuşma Tanıma bölümünden etkinleştirin.",
     "unavailable": "Bu cihazda konuşma tanıma kullanılamıyor",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "biometric": {
     "cancel": "Use PIN",

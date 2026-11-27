@@ -464,7 +464,7 @@
     "micDenied": "वॉइस इनपुट के लिए माइक्रोफ़ोन की अनुमति आवश्यक है। इसे सेटिंग्स > गोपनीयता और सुरक्षा > माइक्रोफ़ोन में चालू करें।",
     "speechDenied": "वॉइस इनपुट के लिए वाक् पहचान की अनुमति आवश्यक है। इसे सेटिंग्स > गोपनीयता और सुरक्षा > वाक् पहचान में चालू करें।",
     "unavailable": "इस डिवाइस पर वाक् पहचान उपलब्ध नहीं है",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "auditLog": {
     "actor": "कर्ता",

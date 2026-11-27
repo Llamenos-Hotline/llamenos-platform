@@ -4556,7 +4556,7 @@
     "micDenied": "برای ورودی صوتی به دسترسی میکروفون نیاز است. آن را در تنظیمات > حریم خصوصی و امنیت > میکروفون فعال کنید.",
     "speechDenied": "برای ورودی صوتی به مجوز تشخیص گفتار نیاز است. آن را در تنظیمات > حریم خصوصی و امنیت > تشخیص گفتار فعال کنید.",
     "unavailable": "تشخیص گفتار در این دستگاه در دسترس نیست",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "biometric": {
     "cancel": "Use PIN",

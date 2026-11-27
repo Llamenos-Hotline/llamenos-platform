@@ -464,7 +464,7 @@
     "micDenied": "Ou bezwen bay aksè mikwofòn nan pou antre vwa. Aktive l nan Settings > Privacy & Security > Microphone.",
     "speechDenied": "Ou bezwen bay pèmisyon rekonesans vwa pou antre vwa. Aktive l nan Settings > Privacy & Security > Speech Recognition.",
     "unavailable": "Rekonesans vwa pa disponib sou aparèy sa a",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "auditLog": {
     "actor": "Aktè",

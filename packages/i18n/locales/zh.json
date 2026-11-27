@@ -464,7 +464,7 @@
     "micDenied": "语音输入需要麦克风权限。请在“设置 > 隐私与安全性 > 麦克风”中开启。",
     "speechDenied": "语音输入需要语音识别权限。请在“设置 > 隐私与安全性 > 语音识别”中开启。",
     "unavailable": "此设备不支持语音识别",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "auditLog": {
     "actor": "操作者",

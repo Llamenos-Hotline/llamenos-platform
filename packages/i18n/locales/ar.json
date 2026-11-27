@@ -464,7 +464,7 @@
     "micDenied": "يلزم الوصول إلى الميكروفون للإدخال الصوتي. فعّله من الإعدادات > الخصوصية والأمن > الميكروفون.",
     "speechDenied": "يلزم إذن التعرف على الكلام للإدخال الصوتي. فعّله من الإعدادات > الخصوصية والأمن > التعرف على الكلام.",
     "unavailable": "التعرف على الكلام غير متاح على هذا الجهاز",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
   },
   "auditLog": {
     "actor": "الفاعل",

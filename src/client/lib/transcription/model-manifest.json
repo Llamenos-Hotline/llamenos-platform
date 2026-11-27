@@ -1,0 +1,195 @@
+{
+  "$comment": "Pinned Whisper ONNX assets for client-side transcription (#2951). Every file the worker loads is listed with its SHA-256 and byte length; the worker verifies each one before use and refuses to run on a mismatch. Model files are fetched from `repo` at the exact `revision` commit by `bun run models:fetch` at build time and shipped inside the app — the client never reaches a model host at runtime. ORT runtime files come from the lockfile-pinned onnxruntime-web package. Regenerate with `bun run models:pin` after changing a revision, file list or onnxruntime-web version.",
+  "models": {
+    "tiny": {
+      "repo": "onnx-community/whisper-tiny",
+      "revision": "ff4177021cc41f7db950912b73ea4fdf7d01d8e7",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "46aeea0a406afbeb563fc8e59ca10609203df4299af6a83f73752fef369efd2d",
+          "bytes": 2243
+        },
+        {
+          "path": "generation_config.json",
+          "sha256": "f5c67e5a4f7102f8cb4d058bc95da276bbc19eeec997267c3bb0f25ef68facd1",
+          "bytes": 3772
+        },
+        {
+          "path": "preprocessor_config.json",
+          "sha256": "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d",
+          "bytes": 339
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
+          "bytes": 2480466
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce",
+          "bytes": 282683
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "sha256": "2af4a414ca47aa30f61246017e5fe82b0a8d229281d1255ba666a2a7f6b84d19",
+          "bytes": 10124990
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "25e807a962b6349356d0ea5d0dfe530b7e5bf0e2a484aeca0359d03143faddd3",
+          "bytes": 30719241
+        }
+      ]
+    },
+    "tiny.en": {
+      "repo": "onnx-community/whisper-tiny.en",
+      "revision": "794207fec2761281fe63a23a94b7e9f53a4efbc1",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "251ea843b5901a99efa58c0b99b8052c6019aa3e7d2baf46693a1128ff606233",
+          "bytes": 2197
+        },
+        {
+          "path": "generation_config.json",
+          "sha256": "7b2e8451ed5f118e75fdd991409d72119d21d2fef1eba9723f68fb9c57fe5dc9",
+          "bytes": 1646
+        },
+        {
+          "path": "preprocessor_config.json",
+          "sha256": "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d",
+          "bytes": 339
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0",
+          "bytes": 2405679
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "93879c3dccdd4b976f709acd85b44778873f30c275e67026f30ca1e4c975230c",
+          "bytes": 282662
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "sha256": "e93ec822f16a8fd264e7de972ad17d615ea7334b75a52d54c50c2e18dd503a25",
+          "bytes": 10124993
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "c0592d0749413c960569e1c7fb806b060d5d18f3ebad4a95cbf9a77dc6e9be52",
+          "bytes": 30718858
+        }
+      ]
+    },
+    "base": {
+      "repo": "onnx-community/whisper-base",
+      "revision": "27a07b4b52b3a4c5886134bb4320e93e1a4bbc7c",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "f4d0608f7d918166da7edb3e188de5ef1bfe70d9802e785d271fd88111e9cf4b",
+          "bytes": 2243
+        },
+        {
+          "path": "generation_config.json",
+          "sha256": "61070cf8de25b1e9256e8e102ded49d8d24a8369ed36ef84fdf21549e68125a0",
+          "bytes": 3832
+        },
+        {
+          "path": "preprocessor_config.json",
+          "sha256": "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d",
+          "bytes": 339
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
+          "bytes": 2480466
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "2e036e4dbacfdeb7242c7d4ec4149f4a16e86026048f94d1637e3a8ee9c6a573",
+          "bytes": 282682
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "sha256": "5862993336bf33acd23736071aae2b32261d3b1b2f37780194460d4ef974dd46",
+          "bytes": 23201314
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "fa3ef9902734ce5ae6f9ef2bdb2ba9a6c4b5785b09f4f420ce036573dc9d090b",
+          "bytes": 53693315
+        }
+      ]
+    },
+    "base.en": {
+      "repo": "onnx-community/whisper-base.en",
+      "revision": "51eefc0af78b103839eda9e7e4f4186acc6517fe",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "c8a0de5ed8a083565a4319db29d0c210fda35b4d6076c2d711cae53ae00f3cb1",
+          "bytes": 2197
+        },
+        {
+          "path": "generation_config.json",
+          "sha256": "3479b1f44a07e41db799e22599222fee5816738036def94a39841cb9cdbb4120",
+          "bytes": 1556
+        },
+        {
+          "path": "preprocessor_config.json",
+          "sha256": "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d",
+          "bytes": 339
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0",
+          "bytes": 2405679
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "93879c3dccdd4b976f709acd85b44778873f30c275e67026f30ca1e4c975230c",
+          "bytes": 282662
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "sha256": "6e8001198c490bbae018c0044f630c2915efb826bad957006ce36152d0ab2a10",
+          "bytes": 23201320
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "dd4761a3f7add26afda3512abff4706920404c2517e85a9f2ff090b0c0987909",
+          "bytes": 53692803
+        }
+      ]
+    }
+  },
+  "runtime": {
+    "package": "onnxruntime-web",
+    "version": "1.31.0-dev.20260914-8d85527a0",
+    "files": [
+      {
+        "path": "ort-wasm-simd-threaded.asyncify.mjs",
+        "sha256": "0966b6105cd936744498aa60df7a22cbd47af3374dbc64a9ab561c08a71e3611",
+        "bytes": 53057
+      },
+      {
+        "path": "ort-wasm-simd-threaded.asyncify.wasm",
+        "sha256": "49871f5a4409519797e127440868a6d1923339d9185907f301a5b2a1d90af082",
+        "bytes": 26861777
+      },
+      {
+        "path": "ort-wasm-simd-threaded.mjs",
+        "sha256": "c57ca56328877353a575e51bbca6f18450027d6c9bf2307a2cb2c41363b4de9f",
+        "bytes": 24381
+      },
+      {
+        "path": "ort-wasm-simd-threaded.wasm",
+        "sha256": "06ba057753da3847e4c24f02d91ab133455b0817c69a44993a9a53a2146df9e3",
+        "bytes": 14264838
+      }
+    ]
+  }
+}
