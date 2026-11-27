@@ -111,8 +111,10 @@ class DeepLinkActivity : ComponentActivity() {
             if (BuildConfig.DEBUG) Log.d(TAG, "Hub deep link received")
             // Hub switch was already confirmed via showConfirmationDialog() before reaching here.
             // This is an explicit user action (tap → confirmation dialog → proceed), not background processing.
+            // The link comes from outside the app, so its hub is switched to only if the
+            // server lists it among the user's hubs; otherwise the app opens unchanged.
             lifecycleScope.launch {
-                hubRepository.switchHub(hubId)
+                hubRepository.switchToMemberHub(hubId)
                 val intent = Intent(this@DeepLinkActivity, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 }

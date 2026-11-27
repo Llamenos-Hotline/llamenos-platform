@@ -34,7 +34,7 @@ class PushServiceTest {
     fun `shift reminder wake payload does NOT register call hub mapping`() = runTest(testDispatcher) {
         val router = PushNotificationRouter(linphoneService)
         router.routeWakePayload(type = "shift_reminder", hubId = "hub-001", callId = "call-001")
-        assert(linphoneService.pendingCallHubIdForTesting("call-001") == null) {
+        assert(linphoneService.pushedCallHubIdForTesting("call-001") == null) {
             "shift_reminder must not store a pending call hub mapping"
         }
     }
@@ -43,7 +43,7 @@ class PushServiceTest {
     fun `announcement wake payload does NOT register call hub mapping`() = runTest(testDispatcher) {
         val router = PushNotificationRouter(linphoneService)
         router.routeWakePayload(type = "announcement", hubId = "hub-001", callId = "call-002")
-        assert(linphoneService.pendingCallHubIdForTesting("call-002") == null) {
+        assert(linphoneService.pushedCallHubIdForTesting("call-002") == null) {
             "announcement must not store a pending call hub mapping"
         }
     }
@@ -52,7 +52,7 @@ class PushServiceTest {
     fun `incoming call wake payload stores pending call hub with correct hub`() = runTest(testDispatcher) {
         val router = PushNotificationRouter(linphoneService)
         router.routeWakePayload(type = "incoming_call", hubId = "hub-B", callId = "call-xyz")
-        val stored = linphoneService.pendingCallHubIdForTesting("call-xyz")
+        val stored = linphoneService.pushedCallHubIdForTesting("call-xyz")
         assert(stored == "hub-B") { "Expected hub-B but got $stored" }
     }
 

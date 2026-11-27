@@ -134,7 +134,7 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const { callSid, callerNumber, volunteers, appTargets, callbackUrl, hubId } = params
+    const { callSid, callerNumber, volunteers, appTargets, pushRef, callbackUrl, hubId } = params
     let result: unknown
     try {
       result = await this.bridgeRequest('POST', '/ring', {
@@ -146,7 +146,10 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
         // entirely when there are none, so the bridge's payload is unchanged for
         // a phone-only call.
         ...(appTargets && appTargets.length > 0
-          ? { appTargets: appTargets.map((t) => ({ callToken: t.callToken, sipAor: t.sipAor })) }
+          ? {
+              appTargets: appTargets.map((t) => ({ callToken: t.callToken, sipAor: t.sipAor })),
+              ...(pushRef ? { pushRef } : {}),
+            }
           : {}),
         callbackUrl,
         hubId,

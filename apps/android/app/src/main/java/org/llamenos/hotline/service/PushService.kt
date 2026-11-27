@@ -1,5 +1,6 @@
 package org.llamenos.hotline.service
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -17,6 +18,7 @@ import org.llamenos.hotline.MainActivity
 import org.llamenos.hotline.R
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.WakeKeyService
+import org.llamenos.hotline.telephony.CallNotificationTap
 import org.llamenos.hotline.telephony.LinphoneService
 import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.MessagingReceiver
@@ -136,35 +138,17 @@ class PushService : MessagingReceiver() {
      * No PII in payload; the app fetches details from the server.
      */
     private fun handleVoipPush(context: Context, data: Map<String, String>) {
-        val callId = data["call-id"] ?: ""
+        // The push's `call-id` is the call's opaque pushRef, not a SIP Call-ID.
+        val pushRef = data["call-id"] ?: ""
         val hubId = data["hub-id"] ?: ""
 
-        if (callId.isNotEmpty() && hubId.isNotEmpty()) {
-            linphoneService.storePendingCallHub(callId, hubId)
+        if (pushRef.isNotEmpty() && hubId.isNotEmpty()) {
+            linphoneService.storePendingCallHub(pushRef, hubId)
         }
         // Multi-hub axiom: do NOT call setActiveHub here.
         // The hub switch happens only once the call is answered with the app unlocked
-        // (LinphoneService, Call.State.Connected).
-
-        ensureNotificationChannel(
-            context,
-            CHANNEL_CALLS,
-            context.getString(R.string.notification_channel_calls),
-            NotificationManager.IMPORTANCE_HIGH,
-        )
-
-        val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(context.getString(R.string.incoming_call))
-            .setContentText(context.getString(R.string.incoming_call_body))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 500, 200, 500))
-            .build()
-
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID_CALL, notification)
+        // (LinphoneService, Call.State.Connected), or when the user taps this notification.
+        showCallNotification(context, hubId, context.getString(R.string.incoming_call_body))
     }
 
     /**
@@ -188,7 +172,7 @@ class PushService : MessagingReceiver() {
                         showIncidentNotification(context)
                     } else if (!cryptoService.isUnlocked) {
                         // Use wake payload for notification content when app is locked
-                        showNotificationFromWakePayload(context, wakePayload.type, wakePayload.message)
+                        showNotificationFromWakePayload(context, wakePayload.type, wakePayload.message, wakePayload.hubId)
                     }
                 }
             }
@@ -218,28 +202,10 @@ class PushService : MessagingReceiver() {
      * Show a notification using wake-tier decrypted content.
      * Used when the app is locked and full-tier decryption is unavailable.
      */
-    private fun showNotificationFromWakePayload(context: Context, type: String, message: String?) {
+    private fun showNotificationFromWakePayload(context: Context, type: String, message: String?, hubId: String?) {
         when (type) {
-            "incoming_call" -> {
-                ensureNotificationChannel(
-                    context,
-                    CHANNEL_CALLS,
-                    context.getString(R.string.notification_channel_calls),
-                    NotificationManager.IMPORTANCE_HIGH,
-                )
-                val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
-                    .setSmallIcon(R.drawable.ic_notification)
-                    .setContentTitle(context.getString(R.string.incoming_call))
-                    .setContentText(message ?: context.getString(R.string.incoming_call_body))
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                    .setCategory(NotificationCompat.CATEGORY_CALL)
-                    .setAutoCancel(true)
-                    .setVibrate(longArrayOf(0, 500, 200, 500))
-                    .build()
-
-                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                notificationManager.notify(NOTIFICATION_ID_CALL, notification)
-            }
+            "incoming_call" ->
+                showCallNotification(context, hubId, message ?: context.getString(R.string.incoming_call_body))
 
             "shift_reminder" -> {
                 ensureNotificationChannel(
@@ -318,32 +284,30 @@ class PushService : MessagingReceiver() {
     }
 
     private fun handleIncomingCall(context: Context, data: Map<String, String>) {
-        val callId = data["call-id"] ?: ""
+        // The push's `call-id` is the call's opaque pushRef, not a SIP Call-ID.
+        val pushRef = data["call-id"] ?: ""
         val hubId = data["hub-id"] ?: ""
-        if (callId.isNotEmpty() && hubId.isNotEmpty()) {
-            linphoneService.storePendingCallHub(callId, hubId)
+        if (pushRef.isNotEmpty() && hubId.isNotEmpty()) {
+            linphoneService.storePendingCallHub(pushRef, hubId)
         }
         // Multi-hub axiom: do NOT call setActiveHub here.
+        showCallNotification(context, hubId, context.getString(R.string.incoming_call_body))
+    }
 
+    /**
+     * The incoming-call notification every push path posts. Its content intent is the tap
+     * path ([CallNotificationTap]): tapping it switches to [hubId] — the only switch a push
+     * may lead to, and only through the user's tap. Posting it switches nothing.
+     */
+    private fun showCallNotification(context: Context, hubId: String?, text: String) {
         ensureNotificationChannel(
             context,
             CHANNEL_CALLS,
             context.getString(R.string.notification_channel_calls),
             NotificationManager.IMPORTANCE_HIGH,
         )
-
-        val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(context.getString(R.string.incoming_call))
-            .setContentText(context.getString(R.string.incoming_call_body))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 500, 200, 500))
-            .build()
-
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID_CALL, notification)
+        notificationManager.notify(NOTIFICATION_ID_CALL, buildCallNotification(context, hubId, text))
     }
 
     private fun handleCallEnded(context: Context) {
@@ -430,6 +394,19 @@ class PushService : MessagingReceiver() {
     }
 
     companion object {
+        /** See [showCallNotification]. Internal so a test can read the intent it carries. */
+        internal fun buildCallNotification(context: Context, hubId: String?, text: String): Notification =
+            NotificationCompat.Builder(context, CHANNEL_CALLS)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(context.getString(R.string.incoming_call))
+                .setContentText(text)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setContentIntent(CallNotificationTap.pendingIntent(context, hubId))
+                .setAutoCancel(true)
+                .setVibrate(longArrayOf(0, 500, 200, 500))
+                .build()
+
         private const val CHANNEL_CALLS = "llamenos_calls"
         private const val CHANNEL_SHIFTS = "llamenos_shifts"
         private const val CHANNEL_GENERAL = "llamenos_general"

@@ -113,7 +113,8 @@ final class AppState {
         let crashReporting = CrashReportingService()
         let offline = OfflineQueue(apiService: api)
         let hubActivity = HubActivityService()
-        let linphone = LinphoneService()
+        // The answer path switches the hub only while the app is unlocked (multi-hub axiom).
+        let linphone = LinphoneService(isAppUnlocked: { [crypto] in crypto.isUnlocked })
         let permission = PermissionService()
 
         self.cryptoService = crypto

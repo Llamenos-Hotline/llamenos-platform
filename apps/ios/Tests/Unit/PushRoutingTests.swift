@@ -9,7 +9,7 @@ import UserNotifications
 //   Background APNs push must NEVER call setActiveHub.
 //   Only the user-initiated tap handler (userNotificationCenter(_:didReceive:)) may
 //   switch UI browsing context. Background push routes incoming_call pushes to
-//   LinphoneService.handleVoipPush(callId:hubId:) so the call→hub mapping is
+//   LinphoneService.handleVoipPush(pushRef:hubId:) so the call→hub mapping is
 //   available when onCallStateChanged fires.
 //
 // The payloadDecryptorForTesting hook on AppDelegate bypasses real HPKE crypto,
@@ -116,7 +116,7 @@ final class PushRoutingTests: XCTestCase {
         wait(for: [expectation], timeout: 5)
 
         XCTAssertEqual(
-            linphoneService.pendingCallHubIdForTesting(callId), "hub-B",
+            linphoneService.pushedCallHubIdForTesting(callId), "hub-B",
             "incoming_call push must register call→hub mapping in LinphoneService"
         )
     }
@@ -137,7 +137,7 @@ final class PushRoutingTests: XCTestCase {
         wait(for: [expectation], timeout: 5)
 
         XCTAssertNil(
-            linphoneService.pendingCallHubIdForTesting(callId),
+            linphoneService.pushedCallHubIdForTesting(callId),
             "Non-call push must not register a call→hub mapping in LinphoneService"
         )
     }

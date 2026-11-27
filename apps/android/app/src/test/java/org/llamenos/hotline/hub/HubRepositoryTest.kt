@@ -102,6 +102,36 @@ class HubRepositoryTest {
         coVerify(exactly = 0) { cryptoService.loadHubKey(any(), any()) }
     }
 
+    // ── A call notification's hub (#1019): switched to only once membership is confirmed ──
+
+    @Test
+    fun `switchToMemberHub switches to a hub the server lists`() = runTest {
+        coEvery { apiService.getHubs() } returns HubsListResponse(listOf(makeHub("hub-a"), makeHub("hub-b")))
+        coEvery { apiService.getHubKey(any()) } throws ApiException(500, "server error")
+
+        assertTrue(repo.switchToMemberHub("hub-b"))
+
+        coVerify(exactly = 1) { activeHubState.setActiveHub("hub-b") }
+    }
+
+    @Test
+    fun `switchToMemberHub refuses a hub the user is not a member of`() = runTest {
+        coEvery { apiService.getHubs() } returns HubsListResponse(listOf(makeHub("hub-a")))
+
+        assertEquals(false, repo.switchToMemberHub("hub-forged"))
+
+        coVerify(exactly = 0) { activeHubState.setActiveHub(any()) }
+    }
+
+    @Test
+    fun `switchToMemberHub leaves the hub alone when membership cannot be checked`() = runTest {
+        coEvery { apiService.getHubs() } throws IOException("offline")
+
+        assertEquals(false, repo.switchToMemberHub("hub-b"))
+
+        coVerify(exactly = 0) { activeHubState.setActiveHub(any()) }
+    }
+
     // ── Stale hub keys (#1090): a cached key is never trusted over the server ──
 
     @Test

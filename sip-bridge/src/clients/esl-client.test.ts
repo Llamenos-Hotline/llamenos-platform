@@ -252,6 +252,28 @@ describe('EslClient', () => {
     expect(sockets).toHaveLength(1)
   })
 
+  it('originate puts each SIP header on the INVITE as a sip_h_ channel variable', async () => {
+    const sock = await connected(client)
+    const p = client.originate({
+      endpoint: 'sofia/internal/vol_0123456789abcdef',
+      callerId: 'Llamenos',
+      timeout: 30,
+      sipHeaders: { 'X-Llamenos-Push-Ref': '3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6' },
+    })
+    await flush()
+    sock.apiResponse('+OK leg-uuid-1')
+    await expect(p).resolves.toEqual({ id: 'leg-uuid-1' })
+    const command = sock.written[sock.written.length - 1]
+    expect(command).toContain('{origination_caller_id_number=Llamenos,originate_timeout=30,sip_h_X-Llamenos-Push-Ref=3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6}sofia/internal/vol_0123456789abcdef')
+  })
+
+  it('originate refuses a SIP header value that could rewrite the dial string', async () => {
+    await connected(client)
+    await expect(
+      client.originate({ endpoint: 'sofia/internal/x', sipHeaders: { 'X-Llamenos-Push-Ref': 'a,absolute_codec_string=PCMU}' } })
+    ).rejects.toThrow(/Refusing SIP header value/)
+  })
+
   it('listChannels parses FreeSWITCH `show channels as json`, including the empty reply', async () => {
     const sock = await connected(client)
     const p = client.listChannels()

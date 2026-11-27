@@ -19,10 +19,15 @@ import org.llamenos.hotline.crypto.CryptoService
  * ring ends (answered, declined, or the caller hung up).
  *
  * The notification is what reaches the user when the app is backgrounded or the device is
- * dozing/locked: high priority + [NotificationCompat.CATEGORY_CALL], a content intent that
- * brings [MainActivity] forward (the #1019 tap-intent gap for inbound calls), and a
- * full-screen intent (USE_FULL_SCREEN_INTENT is already declared) so the incoming-call
- * screen shows over the lockscreen instead of a heads-up banner.
+ * dozing/locked: high priority + [NotificationCompat.CATEGORY_CALL], and two intents that
+ * must stay different:
+ *
+ * - the CONTENT intent, fired only by the user tapping the notification: it switches to the
+ *   call's hub and brings the app forward ([CallNotificationTap], #1019);
+ * - the FULL-SCREEN intent (USE_FULL_SCREEN_INTENT is declared), which the system fires BY
+ *   ITSELF when the call rings on a locked or idle device so the incoming-call screen shows
+ *   over the lockscreen. It is part of the ring, so it carries no hub and switches nothing
+ *   (multi-hub axiom).
  *
  * Uses the same channel and notification id as the VoIP-push notification in PushService:
  * this notification replaces that one when the INVITE actually arrives, so the user never
@@ -44,14 +49,13 @@ class IncomingCallNotifier @Inject constructor(
             context.getString(R.string.incoming_call_body)
         }
 
-        val launch = Intent(context, MainActivity::class.java)
-            .setAction(ACTION_INCOMING_CALL)
-            .putExtra(EXTRA_CALL_ID, info.callId)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val launchPending = PendingIntent.getActivity(
+        val fullScreen = PendingIntent.getActivity(
             context,
             REQUEST_INCOMING_CALL,
-            launch,
+            Intent(context, MainActivity::class.java)
+                .setAction(ACTION_INCOMING_CALL)
+                .putExtra(EXTRA_CALL_ID, info.callId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
@@ -63,8 +67,8 @@ class IncomingCallNotifier @Inject constructor(
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
             .setAutoCancel(false)
-            .setContentIntent(launchPending)
-            .setFullScreenIntent(launchPending, true)
+            .setContentIntent(CallNotificationTap.pendingIntent(context, info.hubId))
+            .setFullScreenIntent(fullScreen, true)
             .setVibrate(longArrayOf(0, 500, 200, 500))
             .build()
 

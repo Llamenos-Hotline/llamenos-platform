@@ -395,12 +395,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                     // browsing context and breaks multi-hub operation.
                     content.userInfo["hubId"] = hubId
 
-                    // For incoming calls, register the call→hub mapping so LinphoneService
-                    // can switch context at call-answer time (onCallStateChanged).
+                    // For incoming calls, record the call→hub mapping so LinphoneService can
+                    // switch context when the call is ANSWERED with the app unlocked — never
+                    // on the ring.
                     if let type = payload["type"] as? String, type == "incoming_call",
-                       let callId = payload["callId"] as? String, !callId.isEmpty,
+                       // The push's call reference is the call's opaque pushRef, never a
+                       // SIP Call-ID — LinphoneService joins it to the INVITE by header.
+                       let pushRef = payload["callId"] as? String, !pushRef.isEmpty,
                        !hubId.isEmpty {
-                        appState.linphoneService.handleVoipPush(callId: callId, hubId: hubId)
+                        appState.linphoneService.handleVoipPush(pushRef: pushRef, hubId: hubId)
                     }
                 }
 

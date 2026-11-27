@@ -1015,7 +1015,20 @@ describe('startParallelRinging — in-app legs', () => {
   const ringArgs = () => mockAdapter.ringVolunteers.mock.calls[0][0] as {
     volunteers: Array<{ phone: string; callToken: string }>
     appTargets?: Array<{ sipAor: string; callToken: string }>
+    pushRef?: string
   }
+
+  it('hands the adapter the call\'s push ref, the value its VoIP push carries as call-id (#1019)', async () => {
+    // The in-app leg's SIP Call-ID is minted by the PBX; the push ref is the only value the
+    // INVITE and the push share, so it is what lets the app tell which call is ringing.
+    const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
+    reachable.mockResolvedValue(new Set([AOR]))
+    mockAdapter.ringVolunteers.mockResolvedValue(['leg-phone', 'leg-app'])
+
+    await startParallelRinging('CA-app-ref', '+15551234567', 'http://localhost', makeEnv(), servicesWith([vol]), 'hub-1')
+
+    expect(ringArgs().pushRef).toBe('push-ref-test')
+  })
 
   it('dials the registered AOR as well as the phone, for a volunteer who has both', async () => {
     const vol = makeUser({ pubkey: PK, callPreference: 'both', phone: '+15550001111' })
