@@ -16,6 +16,7 @@ import io.cucumber.java.en.Then
 import io.cucumber.java.en.When
 import org.llamenos.hotline.di.CryptoEntryPoint
 import org.llamenos.hotline.helpers.SimulationClient
+import org.llamenos.hotline.helpers.SeedFailedException
 import org.llamenos.hotline.helpers.TestApiClient
 import org.llamenos.hotline.steps.BaseSteps
 import org.llamenos.hotline.steps.ScenarioHooks
@@ -43,25 +44,23 @@ class CaseListSteps : BaseSteps() {
         // records. The scenario runs as an admin (Phase 3), so no role is edited.
         // Pass hubId so records are created in the scenario's hub (otherwise
         // hub-scoped queries return empty results).
-        val client = ScenarioHooks.apiClient
-        try {
-            val result = client?.seed(
-                TestApiClient.SeedSpec(
-                    hubId = hubId,
-                    adminSeed = ScenarioHooks.ADMIN_SEED,
-                    permissions = TestApiClient.SeedPermissions(
-                        enableCaseManagement = true,
-                    ),
-                    entityTypes = listOf(
-                        TestApiClient.SeedEntityType(template = "arrest_case", records = 1),
-                        TestApiClient.SeedEntityType(template = "protest_event", records = 1),
-                    ),
-                )
+        // A seed that fails — or only partly happens — fails the scenario here,
+        // naming the step (TestApiClient.seed throws SeedFailedException, #3088).
+        val client = checkNotNull(ScenarioHooks.apiClient) { "No test API client — cannot seed CMS" }
+        val result = client.seed(
+            TestApiClient.SeedSpec(
+                hubId = hubId,
+                adminSeed = ScenarioHooks.ADMIN_SEED,
+                permissions = TestApiClient.SeedPermissions(
+                    enableCaseManagement = true,
+                ),
+                entityTypes = listOf(
+                    TestApiClient.SeedEntityType(template = "arrest_case", records = 1),
+                    TestApiClient.SeedEntityType(template = "protest_event", records = 1),
+                ),
             )
-            Log.d("CaseListSteps", "CMS setup: ok=${result?.ok}, entityTypes=${result?.entityTypes?.size}, records=${result?.records?.size}")
-        } catch (e: Throwable) {
-            Log.w("CaseListSteps", "CMS setup failed: ${e.message}")
-        }
+        )
+        Log.d("CaseListSteps", "CMS setup: ok=${result.ok}, entityTypes=${result.entityTypes.size}, records=${result.records.size}")
 
         // Phase 2: Launch app — onboarding creates a local identity and registers
         // it as a volunteer on the backend.
@@ -79,7 +78,7 @@ class CaseListSteps : BaseSteps() {
 
                 // Re-run seed with the pubkey so the sample record is assigned
                 // to this user AND scoped to the scenario hub
-                val cmsResult = client?.seed(
+                val cmsResult = client.seed(
                     TestApiClient.SeedSpec(
                         hubId = hubId,
                         adminSeed = ScenarioHooks.ADMIN_SEED,
@@ -92,7 +91,9 @@ class CaseListSteps : BaseSteps() {
                         ),
                     )
                 )
-                Log.d("CaseListSteps", "CMS re-setup with pubkey: ok=${cmsResult?.ok}, entityTypes=${cmsResult?.entityTypes?.size}")
+                Log.d("CaseListSteps", "CMS re-setup with pubkey: ok=${cmsResult.ok}, entityTypes=${cmsResult.entityTypes.size}")
+            } catch (e: SeedFailedException) {
+                throw e // a seed that did not happen fails the scenario, naming the step
             } catch (e: Throwable) {
                 Log.w("CaseListSteps", "Post-launch setup failed: ${e.message}")
             }

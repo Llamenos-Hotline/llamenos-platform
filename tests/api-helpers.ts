@@ -22,6 +22,7 @@ import type { FileOwner, UploadCompleteResponse } from '@protocol/schemas'
 import { LABEL_NOTE_KEY, LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import { sealCaseMock, type CasePurposeMock } from './mocks/case-record-mock'
+import type { SeedResultBody } from '@worker/lib/test-seed-result'
 import {
   ADMIN_SIGNING_SEED,
   generateContentKey,
@@ -2765,17 +2766,8 @@ export interface SeedSpec {
   }>
 }
 
-export interface SeedResult {
-  ok: boolean
-  entityTypes: Array<{ id: string; name: string; category: string; defaultStatus: string }>
-  records: Array<{ id: string; entityTypeId: string; caseNumber?: string }>
-  reportTypes: Array<{ id: string; name: string }>
-  triageReports: Array<{ id: string }>
-  shifts: Array<{ id: string }>
-  contacts: Array<{ id: string }>
-  members: Array<{ pubkey: string }>
-  errors: string[]
-}
+/** The `POST /api/test-seed` response — derived from the server's own schema, never hand-written. */
+export type SeedResult = SeedResultBody
 
 export async function seedViaApi(
   request: APIRequestContext,
@@ -2788,5 +2780,7 @@ export async function seedViaApi(
     spec as unknown as Record<string, unknown>,
   )
   if (status !== 200) throw new Error(`test-seed failed: HTTP ${status}`)
+  // A seed that did not do everything it was asked is a failed seed (#3088).
+  if (!data.ok) throw new Error(`test-seed failed: ${data.failures.join('; ')}`)
   return data
 }
