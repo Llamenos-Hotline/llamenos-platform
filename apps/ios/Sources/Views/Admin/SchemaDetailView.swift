@@ -297,7 +297,7 @@ private struct FieldRow: View {
 
             // Badges row
             HStack(spacing: 6) {
-                if field.sharedEntityTypeDefinitionFielRequired {
+                if field.fieldRequired {
                     RequiredBadge()
                 } else {
                     OptionalBadge()

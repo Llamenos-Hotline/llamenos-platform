@@ -1013,7 +1013,11 @@ function postProcessKotlin(
   raw: string,
   schemas: Array<{ name: string; schema: string }>,
 ): string {
-  const output = raw
+  // A top-level array schema (`recoveryListSessionsResponseSchema`). quicktype's
+  // kotlinx renderer aliases it to `JsonArray<T>`, but kotlinx's `JsonArray` is a
+  // non-generic `List<JsonElement>` — the alias does not compile. The decoded type
+  // is a plain list of the element class.
+  const output = raw.replace(/^(typealias \w+ = )JsonArray<(\w+)>$/gm, '$1List<$2>')
 
   // Build a map of schema defaults: { TypeName: { fieldName: defaultValue } }
   const defaultsMap = new Map<string, Map<string, unknown>>()

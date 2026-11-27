@@ -8,7 +8,7 @@ import SwiftUI
 /// A note belongs to a call, chosen from `choices` — never typed: the server accepts only a
 /// real call of the hub (#2125), and iOS never shows a volunteer a call's id.
 struct NoteCreateView: View {
-    let customFields: [CustomFieldsListResponseField]
+    let customFields: [ProtocolCustomFieldDefinition]
     /// The calls the note can be filed against.
     let choices: [CallReference]
     /// Whether more choices are still being fetched.
@@ -36,7 +36,7 @@ struct NoteCreateView: View {
 
     /// - Parameter initialCall: The call the note is prefilled with (it must be in `choices`).
     init(
-        customFields: [CustomFieldsListResponseField],
+        customFields: [ProtocolCustomFieldDefinition],
         choices: [CallReference],
         initialCall: CallReference? = nil,
         isLoadingChoices: Bool = false,
@@ -57,7 +57,7 @@ struct NoteCreateView: View {
     ///
     /// `editableByUsers` is the wire field (`customFieldDefinitionSchema`); a
     /// field an admin marked read-only must not render an input here.
-    private var editableFields: [CustomFieldsListResponseField] {
+    private var editableFields: [ProtocolCustomFieldDefinition] {
         customFields
             .filter { $0.editableByUsers }
             .sorted { $0.order < $1.order }
@@ -268,7 +268,7 @@ struct NoteCreateView: View {
     // MARK: - Custom Field Input
 
     @ViewBuilder
-    private func customFieldInput(for field: CustomFieldsListResponseField) -> some View {
+    private func customFieldInput(for field: ProtocolCustomFieldDefinition) -> some View {
         switch field.type {
         case .text:
             TextField(
@@ -436,17 +436,17 @@ struct NoteCreateView: View {
 #Preview("Create Note") {
     NoteCreateView(
         customFields: [
-            CustomFieldsListResponseField(
+            ProtocolCustomFieldDefinition(
                 name: "severity", label: "Severity (1-5)", type: .number,
                 required: true, order: 0
             ),
-            CustomFieldsListResponseField(
+            ProtocolCustomFieldDefinition(
                 name: "category", label: "Category", type: .select,
                 required: false,
                 options: ["Legal", "Medical", "Housing", "Financial", "Other"],
                 order: 1
             ),
-            CustomFieldsListResponseField(
+            ProtocolCustomFieldDefinition(
                 name: "followUp", label: "Follow-up Needed", type: .checkbox,
                 required: false, order: 2
             ),

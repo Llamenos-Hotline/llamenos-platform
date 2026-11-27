@@ -23,7 +23,7 @@ final class NotesViewModel {
     var notes: [DecryptedNote] = []
 
     /// Custom field definitions fetched from the server.
-    var customFields: [CustomFieldsListResponseField] = []
+    var customFields: [ProtocolCustomFieldDefinition] = []
 
     /// Whether the initial load is in progress.
     var isLoading: Bool = false

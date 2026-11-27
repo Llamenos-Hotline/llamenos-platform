@@ -34,7 +34,7 @@ class NoteEnvelopesTest {
                 enc = "enc-$tag", ct = "ct-$tag"),
     )
 
-    // List/reply payloads use SharedNote's generated AuthorEnvelope and
+    // Note list payloads use SharedNote's generated AuthorEnvelope and
     // SharedNoteAdminEnvelope types, distinct from NoteResponse's envelope types.
     private fun note(
         authorEnvelope: AuthorEnvelope? = null,
