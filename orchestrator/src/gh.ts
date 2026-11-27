@@ -46,6 +46,32 @@ export function commitSha(ref: string): string {
 }
 
 /**
+ * A worker's terminal status file carries `pr:` as "<number or URL or none>"
+ * — the template leaves the choice to the worker, and both forms have been
+ * observed in production. Every `gh pr <n>` CLI call tolerates either, which
+ * is exactly why the one place that does NOT broke: 2026-11-26, item 3065 /
+ * PR #3066 — the verified, reviewed PR reached `armAutoMergeWithQueueClearance`
+ * (automerge.ts) in URL form, whose merge-queue-history read runs
+ * `gh api graphql -F pr=${Number(pr)}`; `Number("https://…/pull/3066")` is
+ * NaN, gh answered "Variable $pr of type Int! was provided invalid value",
+ * the history read failed closed ("whether a person dequeued it is unknown"),
+ * and the PR was never armed. Normalise at the boundary where worker output
+ * enters (engines.ts's `resolveLaunchOutcome`) and again at the one arming
+ * point that needs an Int, never at each gh-CLI call site that tolerates both
+ * forms.
+ *
+ * An unrecognised value is returned VERBATIM rather than dropped: `gh pr
+ * view` may still resolve it, and silently erasing a PR reference from the
+ * ledger is worse than a downstream read failing closed on it.
+ */
+export function normalizePrReference(raw: string): string {
+  const s = raw.trim()
+  if (/^\d+$/.test(s)) return s
+  const m = /\/pull\/(\d+)/.exec(s)
+  return m?.[1] ?? s
+}
+
+/**
  * `gh api` has no `-R`/`--repo` flag at all — confirmed against the real
  * binary (`gh api <endpoint> -R owner/repo` and `gh -R owner/repo api
  * <endpoint>` both fail with `unknown shorthand flag: 'R' in -R`; `--repo`

@@ -1,6 +1,7 @@
 import { isKnopeReleasePr } from './roles/release.js'
 import { laneIdFromBranch, QUEUE_CLEARED_LABEL } from './ci.js'
 import { decideHold, recordHold, MergeHeldError, type QueueHistory } from './merge-hold.js'
+import { normalizePrReference } from './gh.js'
 
 /**
  * Where this fleet does NOT arm auto-merge, and why (#2732).
@@ -92,13 +93,19 @@ export interface ArmAutoMergeDeps {
  */
 export async function armAutoMergeWithQueueClearance(pr: string, deps: ArmAutoMergeDeps): Promise<void> {
   const { headRefName, labels } = await deps.readPr(pr)
-  const history = await deps.readQueueHistory(Number(pr))
+  // `pr` may be the bare number or a pull URL — the worker's status template
+  // allows both, and a URL form reached this GraphQL Int! parameter as
+  // Number(URL)=NaN on 2026-11-26 (item 3065 / PR #3066), failing the history
+  // read and leaving a verified, reviewed PR unarmed. An unrecognised form
+  // still maps to NaN, which fails CLOSED exactly as before.
+  const prNumber = Number(normalizePrReference(pr))
+  const history = await deps.readQueueHistory(prNumber)
   if (history === undefined) {
     throw new Error(`PR ${pr}'s merge-queue history could not be read — whether a person dequeued it (a hold) is unknown, so it is not armed`)
   }
   const hold = decideHold(labels, history)
   if (hold.held) {
-    await recordHold(Number(pr), hold, history, deps)
+    await recordHold(prNumber, hold, history, deps)
     throw new MergeHeldError(pr, hold)
   }
   const needsLabel = laneIdFromBranch(headRefName) !== undefined && !labels.includes(QUEUE_CLEARED_LABEL)

@@ -119,6 +119,28 @@ describe('armAutoMergeWithQueueClearance — every arm clears a fleet PR for the
     expect(calls).toEqual(['label+ 9'])
   })
 
+  it('a URL-form pr reference reaches the merge-queue-history read as a number (2026-11-26 NaN arm failure)', async () => {
+    // The worker's status template allows `pr:` as a URL; Number(URL) is NaN,
+    // and the GraphQL history read with -F pr=NaN failed, leaving a verified,
+    // reviewed PR unarmed (item 3065 / PR #3066). The arming point must
+    // normalise before the one call that needs an Int.
+    const calls: string[] = []
+    const seen: number[] = []
+    const deps: ArmAutoMergeDeps = {
+      readPr: async () => ({ headRefName: 'fleet/infra/3065', labels: [] }),
+      readQueueHistory: async (n) => { seen.push(n); return { last: null, holdClearedAt: undefined } },
+      addHoldLabel: async () => {},
+      postPrComment: async () => {},
+      addQueueClearedLabel: async (p) => { calls.push(`label+ ${p}`) },
+      removeQueueClearedLabel: async (p) => { calls.push(`label- ${p}`) },
+      requestAutoMerge: async (p) => { calls.push(`arm ${p}`) },
+      log: () => {},
+    }
+    await armAutoMergeWithQueueClearance('https://github.com/Llamenos-Hotline/llamenos-platform/pull/3066', deps)
+    expect(seen).toEqual([3066])
+    expect(calls).toEqual(['label+ https://github.com/Llamenos-Hotline/llamenos-platform/pull/3066', 'arm https://github.com/Llamenos-Hotline/llamenos-platform/pull/3066'])
+  })
+
   it('hands back a label it added when the arm itself fails, but never one it found', async () => {
     const added = harness({ headRefName: 'fleet/ios/9', armFails: true })
     await expect(armAutoMergeWithQueueClearance('9', added.deps)).rejects.toThrow('arm refused')
