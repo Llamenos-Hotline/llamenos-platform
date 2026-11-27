@@ -53,6 +53,8 @@ Surveyed against `origin/main` @ `bf99f880d`.
 
 ## 2. C1: a connector is its own principal kind — decided
 
+**Amended by #3033 (releases §6), effective once #2977 stage 3's full-stack PR (releases) lands.** Two read-only connector routes are added to C1's list: user sigchains (for release signers) and the hub chain.
+
 **Shape.**
 
 - A table `hub_connectors(hub_id, connector_id, signing_pk, manifest_core jsonb, manifest_hash, enrolled_seq, revoked_seq)`.
@@ -179,6 +181,8 @@ exactly that.
 ---
 
 ## 5. C4: capabilities come from the manifest, not from roles — decided
+
+**Amended by #3033 (releases §5.3), effective once #2977 stage 3's full-stack PR (releases) lands.** `records:release` is superseded by E3's `doc:<type>:release` and `approve-release`.
 
 #2939 proposed `integration:ingest`, `integration:release-consume` and `integration:reference-sync`
 as catalog scopes that no default role carries.
@@ -320,6 +324,8 @@ same shape as D13's stale-signer window.
 ---
 
 ## 8. C11: SDK and runtime — decided
+
+**Amended by #3033 (reference collections §10.2), effective once #2977 stage 4's full-stack PR lands, and only for hubs of one org under #3032.** One boundary may host one reference connector per hub, for hubs of the same org. It may not host one that holds `ingest` or `releases`. Until then, one boundary per hub.
 
 **One implementation.**
 

@@ -139,6 +139,8 @@ work automatically (#2961 §5–6).
 
 ## 4. E3: per-type permissions — decided
 
+**Amended by #3033 (releases §5.3), effective once #2977 stage 3's full-stack PR (releases) lands.** `approve-release` joins the action list beside stage 3's `release`, each with a `doc:*:` wildcard.
+
 Each definition gets permission ids `doc:<type_ref>:<action>` for these actions: `read-summary`,
 `read-fields`, `read-pii`, `create`, `update`, `update-own`, `close`, `delete`, `assign` and
 `link`. Stage 3 of #2977 adds `release`.
@@ -212,6 +214,8 @@ plaintext.** No kind exists for them.
 ---
 
 ## 8. E7: changing a definition — decided
+
+**Amended by #3033 (releases §3.1), effective once #2977 stage 3's full-stack PR (releases) lands.** Every field declares a `class`. Once any document exists, changing a field from a non-releasable class to a releasable one is refused, like sealed → plaintext.
 
 ### 8.1 Every change raises the version
 
