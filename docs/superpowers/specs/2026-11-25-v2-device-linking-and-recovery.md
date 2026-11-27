@@ -117,6 +117,12 @@ data that isn't secret.
 >   doesn't name. Rotating a device key means removing the device and linking it again (L6). There is
 >   no in-place replacement link, so the alternating-overwrite failure found in K-A's review can't
 >   occur. Don't fix it by carrying a seed in the provisioning bundle.
+>   **The device's backup carries its X-Wing seed** (#3053), next to the signing and X25519 seeds it
+>   already holds. The backup is user-held and PIN-protected, and already holds this device's secrets,
+>   so this changes nothing about what it's trusted with. A restore reconstitutes the same key the
+>   chain names. **A backup without the X-Wing seed is refused** by name. It's never half-restored to
+>   a device that authenticates but can't decrypt. Recovery then goes through L7 onto a new device
+>   identity. Older backup versions hold only test data after the reset, so they aren't read.
 >
 > If real data exists when stage 1 lands, this section applies as written.
 
