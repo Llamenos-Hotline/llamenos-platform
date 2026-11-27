@@ -315,9 +315,8 @@ export class RolesService {
     })
 
     // Invalidate the roles cache so subsequent requests pick up the updated
-    // permissions immediately. Without this, the 30-second cache TTL causes
-    // stale permissions in E2E tests where test-seed updates the volunteer
-    // role then the app immediately queries a newly-permitted endpoint.
+    // permissions immediately. Without this, the 30-second cache TTL serves the
+    // old permissions to the very next request after an admin edits a role.
     invalidateRolesCache()
   }
 

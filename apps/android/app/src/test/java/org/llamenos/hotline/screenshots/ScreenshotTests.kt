@@ -566,7 +566,6 @@ class ScreenshotTests {
                 totalNotes = sampleNotes.size,
             )
         )
-        every { vm.filteredNotes() } returns sampleNotes
         captureRoboImage("$OUT/notes-android.png") {
             LlamenosTheme(darkTheme = true) {
                 NotesScreen(

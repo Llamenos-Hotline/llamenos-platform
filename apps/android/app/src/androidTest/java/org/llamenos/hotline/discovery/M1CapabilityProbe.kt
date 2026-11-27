@@ -36,6 +36,7 @@ import org.llamenos.hotline.di.ActiveHubEntryPoint
 import org.llamenos.hotline.di.CryptoEntryPoint
 import org.llamenos.hotline.helpers.TestPermissions
 import org.llamenos.hotline.helpers.createAppComposeRule
+import org.llamenos.protocol.CryptoLabels
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -205,26 +206,55 @@ class M1CapabilityProbe {
         probe("logout", "RESULT after logout the login screen is shown: tags=${visibleTags()}")
     }
 
-    /** Phase 1: create and save a note. State is kept for [notesAfterRestart]. */
+    /**
+     * Phase 1: write a note from the Notes tab, and read it back. There is no note about
+     * nothing (#1341, operator Q5): the server requires a call or a conversation, and the
+     * Notes FAB opens the editor on the volunteer's own call. So the flow writes one with
+     * no call — which must file nothing — then answers a call and writes one that must be
+     * filed to that call. State is kept for [notesAfterRestart].
+     */
     @Test
     fun notesCreate() {
         val (pubkey, hub) = enrollViaInvite("notes", "probe-notes")
+        backdoor("notes", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         ensureActiveHub("notes", hub)
+
+        // No call: the editor opens on none, and Save must not file a note about nothing.
+        writeNoteFromNotesTab("probe-note-nocall-${System.currentTimeMillis()}")
+        val nocallLeftEditor = !has("note-text-input")
+        probe("notes", "no call: Save left the editor=$nocallLeftEditor tags=${visibleTags()}")
+        check(!nocallLeftEditor) { fail("notes", "with no call, Save left the editor as if a note had been filed") }
+        compose.onNodeWithTag("note-create-back").performClick()
+
+        // The volunteer's own call: the FAB's note is about it.
+        val callId = simulateAnsweredCall("notes", hub, pubkey, "+15555550150")
+        tapTab("nav-dashboard")
+        waitForTag("notes", "active-call-card", 15_000)
         val marker = "probe-note-${System.currentTimeMillis()}"
         stateFile.parentFile?.mkdirs()
         stateFile.writeText("$hub\n$marker\n")
+        writeNoteFromNotesTab(marker)
+        val listed = pollFor(20_000) { !has("note-text-input") && hasText(marker) }
+        probe("notes", "own call: saved and listed=$listed tags=${visibleTags()}" + if (listed) "" else " texts=${screenTexts()}")
+        check(listed) { fail("notes", "the note written on the volunteer's call never appeared in the Notes list") }
 
-        createNote(marker)
-        // Read back from the server within the session: leave, return, refresh.
+        // Read back within the session: leave, return.
         tapTab("nav-dashboard")
         tapTab("nav-notes")
         val reread = pollFor(20_000) { hasText(marker) }
         probe("notes", "re-read after leaving and returning to Notes: shown=$reread")
         check(reread) { fail("notes", "note not shown when the list is reloaded") }
-        // What the list shows could be the screen's own state; the server must hold a note by this user.
-        val onServer = serverNotes("notes", hub, pubkey)
-        check(onServer.size == 1) { fail("notes", "the server holds ${onServer.size} notes by this user, expected 1") }
-        probe("notes", "RESULT saved note visible in list and on reload, and held by the server: $marker")
+        // The list could be the screen's own state; the server must hold exactly this one note,
+        // filed to the call — the no-call save above filed nothing.
+        val forCall = serverNotes("notes", hub, pubkey, callId)
+        val all = serverNotes("notes", hub, pubkey)
+        check(forCall.size == 1 && all == forCall) {
+            fail("notes", "the server holds ${all.size} notes by this user, ${forCall.size} for call $callId; expected exactly 1, for the call")
+        }
+        check(adminReadsNote("notes", hub, forCall.single(), callId, marker)) {
+            fail("notes", "the hub admin cannot open the note through an admin envelope")
+        }
+        probe("notes", "RESULT a note about nothing is not filed; the note on the volunteer's call is listed, re-listed, held by the server for the call and readable by the hub admin: $marker")
     }
 
     /** Phase 2 — a new process, same app data: unlock with PIN and read the note back. */
@@ -275,6 +305,9 @@ class M1CapabilityProbe {
         check(reread) { fail("quicknote", "note missing when the Notes list reloads") }
         val forCall = serverNotes("quicknote", hub, pubkey, callId)
         check(forCall.size == 1) { fail("quicknote", "the server holds ${forCall.size} notes by this user for call $callId, expected 1") }
+        check(adminReadsNote("quicknote", hub, forCall.single(), callId, marker)) {
+            fail("quicknote", "the hub admin cannot open the note through an admin envelope")
+        }
     }
 
     /**
@@ -310,7 +343,11 @@ class M1CapabilityProbe {
         check(inList) { fail("callnote", "saved call note not shown in Notes") }
         val forCall = serverNotes("callnote", hub, pubkey, callId)
         check(forCall.size == 1) { fail("callnote", "the server holds ${forCall.size} notes by this user for call $callId, expected 1") }
-        probe("callnote", "RESULT note attached to a call saved, read back, and held by the server for the call")
+        // At least one admin can always read (#3082): the hub admin opens the note through
+        // its own admin envelope and recovers what the volunteer wrote.
+        val adminRead = adminReadsNote("callnote", hub, forCall.single(), callId, marker)
+        check(adminRead) { fail("callnote", "the hub admin cannot open the call note through an admin envelope") }
+        probe("callnote", "RESULT note attached to a call saved, read back by its author and by the hub admin, and held by the server for the call")
     }
 
     /** View the schedule, clock in, clock out. */
@@ -565,26 +602,38 @@ class M1CapabilityProbe {
         check(sealedAfter > sealedBefore.toInt()) { fail("deviceRelaunch", "a message after the relaunch carries no envelope for the app's key") }
     }
 
-    /** An inbound SMS creates a conversation; open it, read it, reply. */
+    /**
+     * An inbound SMS, handed to the volunteer by an admin, is listed, readable and answerable.
+     *
+     * Nobody is assigned an inbound conversation: it waits, sealed to the hub's admins only, so
+     * a volunteer cannot read what arrived before it was theirs. An admin assigns it, as the
+     * desktop's Reassign does (`PATCH … {assignedTo}`, BACKDOOR only in that no admin client
+     * runs here); from then on the server also seals to the volunteer's device. The flow then
+     * requires: the conversation appears in the volunteer's default (Active) list, a message
+     * that arrives after the assignment is readable, and a reply reaches the server.
+     */
     @Test
     fun conversations() {
         val (pubkey, hub) = enrollViaInvite("conversations", "probe-conv")
         ensureActiveHub("conversations", hub)
+        val sender = "+15555550199"
+        val first = inboundMessage("conversations", hub, sender, "probe-sms-before-${System.currentTimeMillis()}")
+        val conversationId = json.parseToJsonElement(first).jsonObject["conversationId"]!!.jsonPrimitive.content
+        adminApi("conversations", "PATCH", "/api/hubs/$hub/conversations/$conversationId", """{"assignedTo":"$pubkey"}""")
         val body = "probe-sms-${System.currentTimeMillis()}"
-        inboundMessage("conversations", hub, "+15555550199", body)
+        inboundMessage("conversations", hub, sender, body)
 
         tapTab("nav-conversations")
-        val cardAppeared = pollFor(20_000) { tagsWithPrefix("conversation-card-").isNotEmpty() }
+        val listed = pollFor(20_000) { has("conversation-card-$conversationId") }
         probe("conversations", "list: cards=${tagsWithPrefix("conversation-card-")} tags=${visibleTags()}")
-        if (!cardAppeared) probe("conversations", "list texts=${screenTexts()}")
-        check(cardAppeared) { fail("conversations", "inbound conversation never listed") }
+        if (!listed) probe("conversations", "list texts=${screenTexts()}")
+        check(listed) { fail("conversations", "the conversation assigned to this volunteer is not in their conversation list") }
 
-        val conversationId = tagsWithPrefix("conversation-card-").first().removePrefix("conversation-card-")
         compose.onNodeWithTag("conversation-card-$conversationId", useUnmergedTree = true).performClick()
         waitForAnyTag("conversations", 15_000, "messages-list", "messages-empty", "messages-error")
-        Thread.sleep(2_000)
-        val readable = hasText(body)
-        probe("conversations", "detail: inbound text readable=$readable tags=${visibleTags()}")
+        val readable = pollFor(15_000) { hasReadOnlyText(body) }
+        probe("conversations", "detail: message after assignment readable=$readable tags=${visibleTags()}")
+        check(readable) { fail("conversations", "a message that arrived after the assignment is not readable in the thread; errors=${visibleErrorTexts()}") }
 
         waitForTag("conversations", "reply-text-input", 10_000)
         val reply = "probe-reply-${System.currentTimeMillis()}"
@@ -596,10 +645,9 @@ class M1CapabilityProbe {
         val sent = pollFor(15_000) { hasReadOnlyText(reply) && !hasInputText(reply) }
         val outboundOnServer = pollFor(15_000) { serverOutboundMessages("conversations", hub, conversationId, pubkey) >= 1 }
         probe("conversations", "reply shown in thread=$sent, server holds an outbound message=$outboundOnServer tags=${visibleTags()}")
-        check(readable) { fail("conversations", "inbound message text not readable in the thread") }
         check(sent) { fail("conversations", "sent reply never appeared in the thread") }
         check(outboundOnServer) { fail("conversations", "the server holds no outbound message from this user in the conversation") }
-        probe("conversations", "RESULT inbound readable, reply sent")
+        probe("conversations", "RESULT assigned conversation listed, message readable, reply sent")
     }
 
     // ─── UI helpers ─────────────────────────────────────────────────────────
@@ -715,16 +763,15 @@ class M1CapabilityProbe {
         compose.waitForIdle()
     }
 
-    private fun createNote(text: String) {
+    /** Notes tab → FAB → type [text] → Save. Leaves the caller to judge what Save did. */
+    private fun writeNoteFromNotesTab(text: String) {
         tapTab("nav-notes")
         waitForTag("notes", "create-note-fab", 10_000)
         compose.onNodeWithTag("create-note-fab").performClick()
         waitForTag("notes", "note-text-input", 10_000)
         compose.onNodeWithTag("note-text-input").performTextReplacement(text)
         compose.onNodeWithTag("note-save-button").performClick()
-        val listed = pollFor(20_000) { hasText(text) && !has("note-text-input") }
-        probe("notes", "after save: listed=$listed tags=${visibleTags()} texts=${screenTexts()}")
-        check(listed) { fail("notes", "saved note never appeared in the notes list") }
+        compose.waitForIdle()
     }
 
     private fun has(tag: String): Boolean =
@@ -864,6 +911,32 @@ class M1CapabilityProbe {
             .map { it.jsonObject["id"]!!.jsonPrimitive.content }
     }
 
+    /**
+     * Whether the test admin can open note [noteId] through one of its `adminEnvelopes`, and
+     * finds [marker] in the text. The note is read with the published crypto core
+     * ([org.llamenos.core.decryptNote]) under the admin's own X25519 secret, not the device
+     * under test's keys, so this shows that the envelope the app sealed for the admin opens for
+     * the admin.
+     */
+    private fun adminReadsNote(flow: String, hub: String, noteId: String, callId: String, marker: String): Boolean {
+        val note = json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/notes?callId=$callId")).jsonObject["notes"]!!.jsonArray
+            .map { it.jsonObject }
+            .single { it["id"]!!.jsonPrimitive.content == noteId }
+        val content = note["encryptedContent"]!!.jsonPrimitive.content
+        val envelopes = note["adminEnvelopes"]?.jsonArray.orEmpty().map { it.jsonObject }
+        val opened = envelopes.firstNotNullOfOrNull { env ->
+            runCatching {
+                org.llamenos.core.decryptNote(
+                    content,
+                    org.llamenos.core.HpkeEnvelope(env["enc"]!!.jsonPrimitive.content, env["ct"]!!.jsonPrimitive.content),
+                    ADMIN_X25519_SECRET,
+                )
+            }.getOrNull()
+        }
+        probe(flow, "admin read: adminEnvelopes=${envelopes.size} opened=${opened != null} marker=${opened?.contains(marker) == true}")
+        return opened?.contains(marker) == true
+    }
+
     /** Outbound messages by [pubkey] the server holds in a conversation. Content is ciphertext; only existence is checkable. */
     private fun serverOutboundMessages(flow: String, hub: String, conversationId: String, pubkey: String): Int =
         json.parseToJsonElement(adminApi(flow, "GET", "/api/hubs/$hub/conversations/$conversationId/messages")).jsonObject["messages"]!!.jsonArray
@@ -889,7 +962,9 @@ class M1CapabilityProbe {
      */
     private fun adminApi(flow: String, method: String, path: String, body: String? = null): String {
         ensureAdminReady(flow)
-        return http(flow, method, path, body, "ADMIN", adminHeaders(method, path))
+        // The token signs the PATH, never the query (apps/worker/middleware/auth.ts verifies
+        // `URL.pathname`), exactly as the app's own ApiService signs it.
+        return http(flow, method, path, body, "ADMIN", adminHeaders(method, path.substringBefore('?')))
     }
 
     /**
@@ -1026,5 +1101,23 @@ class M1CapabilityProbe {
          * pin — a different key from the Ed25519 signing pubkey (#1283).
          */
         const val ADMIN_X25519 = "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
+
+        /**
+         * The secret half of [ADMIN_X25519]: HKDF-SHA256(ADMIN_SEED, salt = "",
+         * info = LABEL_DEVICE_ENCRYPTION_SEED), the one device derivation
+         * (`tests/crypto-helpers.ts` `deviceEncryptionSeed`, `device_import_and_load` in Rust).
+         * One HKDF block: 32 bytes is SHA-256's output length.
+         */
+        val ADMIN_X25519_SECRET: String by lazy {
+            fun hmac(key: ByteArray, data: ByteArray): ByteArray =
+                javax.crypto.Mac.getInstance("HmacSHA256").run {
+                    init(javax.crypto.spec.SecretKeySpec(key, "HmacSHA256"))
+                    doFinal(data)
+                }
+            val ikm = ADMIN_SEED.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            val prk = hmac(ByteArray(32), ikm)
+            val okm = hmac(prk, CryptoLabels.LABEL_DEVICE_ENCRYPTION_SEED.toByteArray(Charsets.UTF_8) + byteArrayOf(1))
+            okm.joinToString("") { "%02x".format(it) }
+        }
     }
 }

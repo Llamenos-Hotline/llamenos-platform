@@ -39,7 +39,6 @@ class EventsSteps : BaseSteps() {
                 hubId = hubId,
                 adminSeed = ScenarioHooks.ADMIN_SEED,
                 permissions = TestApiClient.SeedPermissions(
-                    grantVolunteerCms = true,
                     enableCaseManagement = true,
                 ),
                 entityTypes = listOf(

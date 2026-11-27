@@ -100,6 +100,21 @@ data class NotesUiState(
 )
 
 /**
+ * The notes the list shows: [NotesUiState.notes] narrowed by [NotesUiState.searchQuery].
+ *
+ * Derived from the state the screen collected, never read off the view model's flow: the
+ * screen used to call a view-model method that read `_uiState.value`, which Compose cannot
+ * observe, so when only the list's own scope recomposed on a new load it kept the stale
+ * (empty) copy — a loaded note was held and never drawn (#1705).
+ */
+val NotesUiState.filteredNotes: List<DecryptedNote>
+    get() {
+        val query = searchQuery.lowercase()
+        if (query.isBlank()) return notes
+        return notes.filter { note -> note.text.lowercase().contains(query) }
+    }
+
+/**
  * ViewModel for the Notes feature.
  *
  * Handles fetching, decrypting, and creating encrypted notes.
@@ -265,6 +280,16 @@ class NotesViewModel @Inject constructor(
     }
 
     /**
+     * Select the loaded note with [noteId] — what a route that names a note shows. A note
+     * not in the loaded list clears the selection rather than leaving another note on screen.
+     */
+    fun selectNoteById(noteId: String) {
+        _uiState.update { state ->
+            if (state.selectedNote?.id == noteId) state else state.copy(selectedNote = state.notes.firstOrNull { it.id == noteId })
+        }
+    }
+
+    /**
      * Clear the selected note (navigating back from detail).
      */
     fun clearSelectedNote() {
@@ -401,17 +426,6 @@ class NotesViewModel @Inject constructor(
      */
     fun setSearchQuery(query: String) {
         _uiState.update { it.copy(searchQuery = query) }
-    }
-
-    /**
-     * Get notes filtered by the current search query.
-     */
-    fun filteredNotes(): List<DecryptedNote> {
-        val query = _uiState.value.searchQuery.lowercase()
-        if (query.isBlank()) return _uiState.value.notes
-        return _uiState.value.notes.filter { note ->
-            note.text.lowercase().contains(query)
-        }
     }
 
     // ---- Note Editing ----

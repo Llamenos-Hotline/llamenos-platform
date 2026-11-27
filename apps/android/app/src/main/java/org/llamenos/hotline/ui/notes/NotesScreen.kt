@@ -72,13 +72,13 @@ fun NotesScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
-    val filteredNotes = viewModel.filteredNotes()
+    val filteredNotes = uiState.filteredNotes
 
     // Paginate when reaching the end of the list
     val shouldLoadMore by remember {
         derivedStateOf {
             val lastVisibleItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisibleItem >= filteredNotes.size - 3 && uiState.hasMorePages && !uiState.isLoading
+            lastVisibleItem >= uiState.filteredNotes.size - 3 && uiState.hasMorePages && !uiState.isLoading
         }
     }
 

@@ -180,6 +180,30 @@ class DashboardEndedCallTest {
     }
 
     @Test
+    fun `a ringing call is counted, and becomes my call card only once I answer it`() = runTest(UnconfinedTestDispatcher()) {
+        val vm = viewModel()
+        activeCalls["hub-a"] = """{"id":"call-7","startedAt":"2026-10-26T10:00:00.000Z","status":"ringing"}"""
+        events.emit(AttributedHubEvent(hubId = "hub-a", event = LlamenosEvent.CallRing("call-7")))
+        advanceUntilIdle()
+        assertEquals(1, vm.uiState.value.activeCallCount)
+        assertNull("a ringing call is nobody's call yet — no Hang Up / Ban on it", vm.uiState.value.currentCall)
+
+        activeCalls["hub-a"] = inProgress("call-7", me)
+        events.emit(AttributedHubEvent(hubId = "hub-a", event = LlamenosEvent.CallAnswered("call-7", me)))
+        advanceUntilIdle()
+        assertEquals("call-7", vm.uiState.value.currentCall?.id)
+    }
+
+    @Test
+    fun `a call a colleague answered is not my call card`() = runTest(UnconfinedTestDispatcher()) {
+        val vm = viewModel()
+        activeCalls["hub-a"] = inProgress("call-8", someoneElse)
+        events.emit(AttributedHubEvent(hubId = "hub-a", event = LlamenosEvent.CallAnswered("call-8", someoneElse)))
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.currentCall)
+    }
+
+    @Test
     fun `an empty read of another hub does not end the call I am on`() = runTest(UnconfinedTestDispatcher()) {
         val vm = viewModel()
         activeCalls["hub-a"] = inProgress("call-4", me)

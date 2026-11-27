@@ -38,7 +38,6 @@ class TriageSteps : BaseSteps() {
                 hubId = hubId,
                 adminSeed = ScenarioHooks.ADMIN_SEED,
                 permissions = TestApiClient.SeedPermissions(
-                    grantVolunteerCms = true,
                     enableCaseManagement = true,
                 ),
                 reportTypes = listOf(

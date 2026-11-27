@@ -460,7 +460,15 @@ class DashboardViewModel @Inject constructor(
             // hub there is no hub to ask, so there is nothing to read — never the bare path.
             val fetchedFrom = hubId?.takeUnless { it.isEmpty() } ?: apiService.activeHubIdOrNull() ?: return
             val response = apiService.request<ActiveCallsResponse>("GET", apiService.hubPath(fetchedFrom, "/api/calls/active"))
-            val call = response.calls.firstOrNull()?.inHub(fetchedFrom)
+            // The hub lists every live call: ringing ones, and ones other volunteers are on.
+            // The in-call card is for the call THIS volunteer answered — never "whichever the
+            // hub lists first", which put Hang Up / Ban on a call still ringing for the whole
+            // shift, or on a colleague's call (the server refuses those actions with a 403).
+            // A ring is the call counter's to show. Same rule as iOS's DashboardViewModel.
+            val signingPubkey = _uiState.value.signingPubkey
+            val call = response.calls
+                .firstOrNull { signingPubkey.isNotEmpty() && it.answeredBy == signingPubkey && it.status == org.llamenos.protocol.CallRecordStatus.InProgress.value }
+                ?.inHub(fetchedFrom)
             if (call != null) {
                 if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "fetchActiveCall: found call id=${call.id} status=${call.status}")
             }

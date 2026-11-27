@@ -41,7 +41,8 @@ data class ActiveCallWire(
 }
 
 /**
- * Response from GET /api/hubs/{hubId}/calls/active — list of the volunteer's active calls.
+ * Response from GET /api/hubs/{hubId}/calls/active — every live call in the hub (ringing, or
+ * answered by anyone), not only this volunteer's.
  * Client-only type wrapping [ActiveCallWire] (not the generated one).
  */
 @Serializable

@@ -442,12 +442,19 @@ export class ConversationsService {
   }
 
   async update(id: string, input: UpdateConversationInput): Promise<ConversationRow> {
-    await this.getById(id) // throws 404 if not found
+    const current = await this.getById(id) // throws 404 if not found
     const updates: Record<string, unknown> = {
       updatedAt: new Date(),
     }
     if (input.status !== undefined) updates.status = input.status
     if (input.assignedTo !== undefined) updates.assignedTo = input.assignedTo
+    // Handing a WAITING conversation to someone ends the wait, exactly as their own claim
+    // does (`claim` below). Left `waiting`, it was assigned yet absent from the assignee's
+    // Active list, and still offered to everyone else as unclaimed (#1705). An explicit
+    // status wins: "return to queue" sends `status: 'waiting'` itself.
+    if (input.status === undefined && input.assignedTo && current.status === 'waiting') {
+      updates.status = 'active'
+    }
     if (input.metadata) {
       // Encoded by the column, never JSON.stringify'd — see the comment on
       // HubSettingsService.updateHubSettings for both halves of why.

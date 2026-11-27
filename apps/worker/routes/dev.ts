@@ -461,10 +461,17 @@ const seedContactSchema = z.object({
 const seedSpecSchema = z.object({
   hubId: z.string().uuid(),
   adminSeed: z.string().length(64).regex(/^[0-9a-f]+$/),
+  // Hub-scoped switches only. There is deliberately no option that edits a
+  // deployment-wide role: roles without a hubId are shared by every hub on the
+  // server, so a seed that rewrote one (the old `grantVolunteerCms`, which
+  // replaced `role-volunteer`'s permissions with a stale hand-written list)
+  // outlived its scenario and silently stripped every later volunteer of
+  // `calls:hangup`, `calls:read-own-history` and `shifts:set-availability`
+  // (#3082, #3083). `.strict()` so a caller still sending that flag is refused,
+  // not quietly ignored.
   permissions: z.object({
-    grantVolunteerCms: z.boolean().optional().default(false),
     enableCaseManagement: z.boolean().optional().default(false),
-  }).optional().default({ grantVolunteerCms: false, enableCaseManagement: false }),
+  }).strict().optional().default({ enableCaseManagement: false }),
   entityTypes: z.array(seedEntityTypeSchema).optional().default([]),
   reportTypes: z.array(seedReportTypeSchema).optional().default([]),
   shifts: z.array(seedShiftSchema).optional().default([]),
@@ -547,28 +554,6 @@ dev.post('/test-seed', async (c) => {
       await services.hubSettings.setCaseManagementEnabled({ enabled: true }, hubId)
     } catch (e) {
       warnings.push(`setCaseManagementEnabled: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
-
-  if (spec.permissions.grantVolunteerCms) {
-    try {
-      await services.roles.updateRole('role-volunteer', {
-        permissions: [
-          'calls:answer', 'calls:read-active',
-          'notes:create', 'notes:read-own', 'notes:update-own', 'notes:reply',
-          'conversations:claim', 'conversations:send', 'conversations:read-assigned',
-          'conversations:claim-sms', 'conversations:claim-whatsapp',
-          'conversations:claim-signal', 'conversations:claim-rcs', 'conversations:claim-web',
-          'shifts:read-own', 'bans:report',
-          'reports:read-assigned', 'reports:send-message',
-          'files:upload', 'files:download-own',
-          'cases:create', 'cases:read-all', 'cases:update', 'cases:assign',
-          'events:read', 'events:create', 'evidence:upload', 'evidence:download',
-          'settings:read', 'hubs:read',
-        ],
-      })
-    } catch (e) {
-      warnings.push(`grantVolunteerCms: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 

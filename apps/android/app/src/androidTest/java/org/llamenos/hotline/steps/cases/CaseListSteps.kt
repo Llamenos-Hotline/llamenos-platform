@@ -39,8 +39,8 @@ class CaseListSteps : BaseSteps() {
         Log.i("CaseListSteps", "=== theAppIsLaunchedAndAuthenticatedAsAdmin: hubId=$hubId ===")
 
         // Phase 1: Set up CMS on backend BEFORE app launch.
-        // This enables CMS, applies entity type templates, grants the default
-        // volunteer role cases:read permission, and creates sample records.
+        // This enables CMS, applies entity type templates and creates sample
+        // records. The scenario runs as an admin (Phase 3), so no role is edited.
         // Pass hubId so records are created in the scenario's hub (otherwise
         // hub-scoped queries return empty results).
         val client = ScenarioHooks.apiClient
@@ -50,7 +50,6 @@ class CaseListSteps : BaseSteps() {
                     hubId = hubId,
                     adminSeed = ScenarioHooks.ADMIN_SEED,
                     permissions = TestApiClient.SeedPermissions(
-                        grantVolunteerCms = true,
                         enableCaseManagement = true,
                     ),
                     entityTypes = listOf(
