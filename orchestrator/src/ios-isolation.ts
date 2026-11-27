@@ -34,7 +34,8 @@
  *    content, not the name: an `Info.plist` edit to ATS or URL schemes is
  *    exactly as risky as a Swift change;
  *  - what is compiled INTO the app: `packages/crypto/**` (UniFFI
- *    XCFramework), `packages/protocol/**` (Swift Codable types),
+ *    XCFramework), `packages/protocol/**` (Swift Codable types) except the five
+ *    trust snapshot tooling files `TRUST_TOOLING_FILES` names (#3108),
  *    `packages/i18n/**`'s generator and language table (`.strings`) — plus
  *    `packages/i18n/locales/en.json` when an EXISTING key's value changes or
  *    a key is removed: the UI tests launch in English
@@ -97,6 +98,29 @@ export type IosGateFileClass =
   | { kind: 'risky'; why: string }
   | { kind: 'content'; check: ContentCheck }
 
+/** The trust snapshot tooling under `packages/protocol/` (#3108): the extractor,
+ *  its CLI, the two suites that break it on purpose, and the committed
+ *  extraction. They share a directory with the schemas but none of them is read
+ *  by codegen, listed in `project.yml` or compiled into anything, so a diff of
+ *  only these cannot change what the iOS gate builds or runs.
+ *
+ *  An explicit list a reader can check, never a pattern: a file under
+ *  `packages/protocol/` that is NOT named here stays risky, so a new codegen
+ *  input fails toward isolation. tests/orchestrator/ios-trust-tooling.test.ts
+ *  binds it to `TRUST_ANCHOR_FILES`, `SNAPSHOT_PATH`, the codegen import closure
+ *  and `detect-changed-platforms.sh`'s own tier regexes.
+ *
+ *  Pinned values are not hidden by this: a change to one lands in `apps/ios/**`
+ *  or `packages/crypto/**` (risky as whole trees, whatever else is in the diff)
+ *  or in a client the iOS gate never builds (`apps/android/**`, `apps/desktop/**`). */
+export const TRUST_TOOLING_FILES: readonly string[] = [
+  'packages/protocol/trust.snapshot.json',
+  'packages/protocol/tools/trust-snapshot.ts',
+  'packages/protocol/tools/trust-snapshot-cli.ts',
+  'packages/protocol/tools/trust-snapshot.test.ts',
+  'packages/protocol/tools/trust-release.test.ts',
+]
+
 const CI_YML = '.github/workflows/ci.yml'
 const EN_STRINGS = 'packages/i18n/locales/en.json'
 
@@ -110,6 +134,7 @@ export function classifyIosGateFile(path: string): IosGateFileClass {
     return { kind: 'risky', why: 'iOS app source or project' }
   }
   if (path.startsWith('packages/crypto/')) return { kind: 'risky', why: 'compiled into the app as the UniFFI XCFramework' }
+  if (TRUST_TOOLING_FILES.includes(path)) return { kind: 'inert' }
   if (path.startsWith('packages/protocol/')) return { kind: 'risky', why: 'generates the Swift types compiled into the app' }
   if (path === EN_STRINGS) return { kind: 'content', check: 'en-strings' }
   if (/^packages\/i18n\/locales\/[^/]+\.json$/.test(path) || path === 'packages/i18n/deferred.json') {
