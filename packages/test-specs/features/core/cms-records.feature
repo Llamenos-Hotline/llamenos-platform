@@ -7,10 +7,11 @@ Feature: CMS Records
   Scenario: Create record with encrypted content and blind indexes
     Given case management is enabled
     And an entity type "record_test_type" exists
-    When the admin creates a record of type "record_test_type" with status hash "status_open_hash"
+    When the admin creates a record of type "record_test_type" with status "open"
     Then the record should have a generated UUID id
     And the record should have entity type "record_test_type"
-    And the record should have status hash "status_open_hash"
+    And the record's sealed summary should carry status "open"
+    And the record should expose no status, severity or category to the server
 
   @cases
   Scenario: List records filtered by entity type
@@ -54,9 +55,23 @@ Feature: CMS Records
   Scenario: Update record status
     Given case management is enabled
     And an entity type "status_test_type" exists
-    And a record of type "status_test_type" exists with status hash "status_open_hash"
-    When the admin updates the record status hash to "status_closed_hash"
-    Then the record should have status hash "status_closed_hash"
+    And a record of type "status_test_type" exists with status "open"
+    When the admin changes the record status to "closed"
+    Then the record's sealed summary should carry status "closed"
+    And the record should expose no status, severity or category to the server
+
+  @cases
+  Scenario Outline: A record write that names a plaintext triage field is refused
+    Given case management is enabled
+    And an entity type "refused_plaintext_type" exists
+    When the admin tries to create a record that names "<field>" in plaintext
+    Then the response status should be 400
+
+    Examples:
+      | field        |
+      | statusHash   |
+      | severityHash |
+      | categoryHash |
 
   @cases @permissions
   Scenario: Volunteer sees only assigned records

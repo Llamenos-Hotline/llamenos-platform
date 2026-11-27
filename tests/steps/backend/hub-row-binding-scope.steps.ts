@@ -32,7 +32,7 @@ import { TestDB } from '../../db-helpers'
 interface HubRowState {
   hubId?: string
   recordId?: string
-  recordStatusHash?: string
+  recordSummary?: string
   eventId?: string
   shiftId?: string
   ringGroupId?: string
@@ -67,7 +67,7 @@ function resolve(state: HubRowState, path: string): string {
 async function send(request: Parameters<typeof apiGet>[0], method: string, path: string, seed: string) {
   switch (method) {
     case 'GET': return apiGet(request, path, seed)
-    case 'PATCH': return apiPatch(request, path, { statusHash: 'tampered_by_unscoped_request' }, seed)
+    case 'PATCH': return apiPatch(request, path, { locationApproximate: 'tampered_by_unscoped_request' }, seed)
     case 'DELETE': return apiDelete(request, path, seed)
     default: throw new Error(`unsupported method ${method}`)
   }
@@ -79,9 +79,9 @@ Given('hub {string} holds a case record, an event, a shift, a ring group and a c
   state.hubId = hubId
 
   const caseType = await createEntityTypeViaApi(request, { name: uniqueName('row_binding_case', '_'), category: 'case', hubId })
-  const record = await createRecordViaApi(request, caseType.id as string, { hubId, statusHash: 'status_open_hash' })
+  const record = await createRecordViaApi(request, caseType.id as string, { hubId })
   state.recordId = record.id as string
-  state.recordStatusHash = 'status_open_hash'
+  state.recordSummary = record.encryptedSummary as string
 
   const eventType = await createEntityTypeViaApi(request, { name: uniqueName('row_binding_event', '_'), category: 'event', hubId })
   state.eventId = (await createEventViaApi(request, eventType.id as string, { hubId })).id as string
@@ -127,9 +127,9 @@ Then('the response names no row of hub {string}', async ({ world }, _label: stri
 
 Then('the admin of hub {string} still reads the record unchanged', async ({ request, world }, _label: string) => {
   const state = s(world)
-  const res = await apiGet<{ id: string; statusHash: string }>(request, `/hubs/${state.hubId}/records/${state.recordId}`, state.hubAdminSeed!)
+  const res = await apiGet<{ id: string; encryptedSummary: string }>(request, `/hubs/${state.hubId}/records/${state.recordId}`, state.hubAdminSeed!)
   expect(res.status, 'the record still exists in hub A').toBe(200)
-  expect(res.data.statusHash).toBe(state.recordStatusHash)
+  expect(res.data.encryptedSummary).toBe(state.recordSummary)
 })
 
 When('the super-admin creates a record at the unscoped {string}', async ({ request, world }, path: string) => {
@@ -148,8 +148,7 @@ Then('no record was created outside hub {string}', async ({ world }, _label: str
 
 When('the admin of hub {string} updates the record', async ({ request, world }, _label: string) => {
   const state = s(world)
-  state.recordStatusHash = 'status_updated_by_hub_admin'
-  setLastResponse(world, await apiPatch(request, `/hubs/${state.hubId}/records/${state.recordId}`, { statusHash: state.recordStatusHash }, state.hubAdminSeed!))
+  setLastResponse(world, await apiPatch(request, `/hubs/${state.hubId}/records/${state.recordId}`, { closedAt: new Date().toISOString() }, state.hubAdminSeed!))
 })
 
 type AuditPage = { entries: Array<{ action: string; hubId?: string | null; details?: Record<string, unknown> }> }

@@ -77,7 +77,7 @@ beforeAll(async () => {
   }
   for (const [id, hub] of [[RECORD_A, HUB_A], [RECORD_B, HUB_B]]) {
     await db.execute(sql`
-      INSERT INTO case_records (id, hub_id, status_hash, created_by) VALUES (${id}, ${hub}, ${'h'}, ${'pk-creator'})`)
+      INSERT INTO case_records (id, hub_id, created_by) VALUES (${id}, ${hub}, ${'pk-creator'})`)
   }
 })
 

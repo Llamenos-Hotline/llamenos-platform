@@ -186,9 +186,9 @@ test.describe('App Screenshots', () => {
       const entityTypeId = (entityType as Record<string, unknown>).id as string
       if (entityTypeId) {
         await Promise.all([
-          createRecordViaApi(request, entityTypeId, { statusHash: 'open', assignedTo: [volunteers[0].pubkey], hubId }),
-          createRecordViaApi(request, entityTypeId, { statusHash: 'in_progress', assignedTo: [volunteers[1].pubkey], hubId }),
-          createRecordViaApi(request, entityTypeId, { statusHash: 'resolved', hubId }),
+          createRecordViaApi(request, entityTypeId, { status: 'open', assignedTo: [volunteers[0].pubkey], hubId }),
+          createRecordViaApi(request, entityTypeId, { status: 'in_progress', assignedTo: [volunteers[1].pubkey], hubId }),
+          createRecordViaApi(request, entityTypeId, { status: 'resolved', hubId }),
         ])
       }
     }

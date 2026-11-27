@@ -145,12 +145,12 @@ const data = {} as Record<'A' | 'B', HubData>
 async function seedHub(hubId: string, owner: Actor, numbers: string[], sealedTo: string[]): Promise<HubData> {
   const envelopes = sealedTo.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }))
   const [record] = await db.insert(caseRecords).values({
-    hubId, entityTypeId: ENTITY_TYPE, caseNumber: numbers[0], statusHash: 'open', createdBy: owner.pubkey,
+    hubId, entityTypeId: ENTITY_TYPE, caseNumber: numbers[0], createdBy: owner.pubkey,
     summaryEnvelopes: envelopes,
   }).returning()
   for (const extra of numbers.slice(1)) {
     await db.insert(caseRecords).values({
-      hubId, entityTypeId: ENTITY_TYPE, caseNumber: extra, statusHash: 'open', createdBy: owner.pubkey,
+      hubId, entityTypeId: ENTITY_TYPE, caseNumber: extra, createdBy: owner.pubkey,
       summaryEnvelopes: envelopes,
     })
   }

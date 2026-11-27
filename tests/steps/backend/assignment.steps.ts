@@ -229,7 +229,7 @@ Given('an arrest case linked to an entity type requiring specialization {string}
   expect(etStatus, `create entity type: ${JSON.stringify(etData)}`).toBe(201)
   const entityTypeId = (etData as Record<string, unknown>).id as string
 
-  const record = await createRecordViaApi(request, entityTypeId, { statusHash: 'open', hubId })
+  const record = await createRecordViaApi(request, entityTypeId, { status: 'open', hubId })
   getAssignmentState(world).recordId = (record as Record<string, unknown>).id as string
   getAssignmentState(world).entityTypeId = entityTypeId
 })

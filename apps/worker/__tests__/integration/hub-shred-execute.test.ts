@@ -172,7 +172,7 @@ describe('HubShredService.execute', () => {
     if (kind === 'case_record') {
       const [record] = await fresh.db
         .insert(schema.caseRecords)
-        .values({ hubId, statusHash: 'status', createdBy: 'creator-pk' })
+        .values({ hubId, createdBy: 'creator-pk' })
         .returning()
       return { ownerKind: kind, caseRecordId: record!.id }
     }

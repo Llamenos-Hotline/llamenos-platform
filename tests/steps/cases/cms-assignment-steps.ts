@@ -54,7 +54,7 @@ Given('volunteers with different profiles exist', async ({ backendRequest: reque
 
 Given('an unassigned arrest case exists', async ({ backendRequest: request, casesWorld, workerHub }) => {
   const etId = await arrestCaseTypeId(request, workerHub)
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   casesWorld.lastRecordId = (record as { id: string }).id
 })
 
@@ -206,7 +206,7 @@ Then('the auto-assignment indicator should be visible', async ({ page }) => {
 
 When('a new arrest case is created via API', async ({ backendRequest: request, casesWorld, workerHub }) => {
   const etId = await arrestCaseTypeId(request, workerHub)
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   casesWorld.lastRecordId = (record as { id: string }).id
 })
 

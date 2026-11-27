@@ -21,7 +21,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import type { FileOwner, UploadCompleteResponse } from '@protocol/schemas'
 import { LABEL_NOTE_KEY, LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
-import { sealCaseMock, type CasePurposeMock } from './mocks/case-record-mock'
+import { openCaseMock, sealCaseMock, type CasePurposeMock } from './mocks/case-record-mock'
 import type { SeedResultBody } from '@worker/lib/test-seed-result'
 import {
   ADMIN_SIGNING_SEED,
@@ -1658,10 +1658,10 @@ export async function deleteCmsReportTypeViaApi(
 export async function createContactByNameViaApi(
   request: APIRequestContext,
   displayName: string,
-  extraOptions: { contactTypeHash?: string; hubId: string },
+  extraOptions: { contactType?: string; hubId: string },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const contactType = extraOptions.contactTypeHash ?? 'individual'
+  const contactType = extraOptions.contactType ?? 'individual'
   // Build trigram tokens for name search
   const normalized = displayName.toLowerCase()
   const trigrams: string[] = []
@@ -1751,7 +1751,7 @@ export async function realEnvelopesForWriterAndAdmin(
  * server-persisted vectors by tests/crypto-interop.spec.ts — so seeded case
  * records and comments open in the desktop UI like any client-written one.
  */
-async function sealCaseForSeed(
+export async function sealCaseForSeed(
   purpose: CasePurposeMock,
   plaintext: string,
   seedHex = ADMIN_SEED,
@@ -1837,7 +1837,6 @@ export async function createContactViaApi(
      * decrypt the summary, but the contact is then permanently undecryptable.
      */
     summaryEnvelopes?: DesktopReaderEnvelope[]
-    contactTypeHash?: string
     hubId: string
   },
   seedHex = ADMIN_SEED,
@@ -1870,13 +1869,12 @@ export async function createContactViaApi(
 
 export async function listContactsViaApi(
   request: APIRequestContext,
-  params: { page?: number; limit?: number; contactTypeHash?: string; hubId: string },
+  params: { page?: number; limit?: number; hubId: string },
   seedHex = ADMIN_SEED,
 ): Promise<{ contacts: Record<string, unknown>[]; total: number; hasMore: boolean }> {
   const qs = new URLSearchParams()
   if (params.page) qs.set('page', String(params.page))
   if (params.limit) qs.set('limit', String(params.limit))
-  if (params.contactTypeHash) qs.set('contactTypeHash', params.contactTypeHash)
   const qsStr = qs.toString()
   const path = `${hubOwnedPath('/directory', params.hubId)}${qsStr ? `?${qsStr}` : ''}`
   const { status, data } = await apiGet<{ contacts: Record<string, unknown>[]; total: number; hasMore: boolean }>(request, path, seedHex)
@@ -1923,7 +1921,9 @@ export async function createRecordViaApi(
   request: APIRequestContext,
   entityTypeId: string,
   options: {
-    statusHash?: string
+    /** Sealed into the summary — the server never sees it. */
+    status?: string
+    severity?: string
     assignedTo?: string[]
     blindIndexes?: Record<string, string>
     parentRecordId?: string
@@ -1931,7 +1931,11 @@ export async function createRecordViaApi(
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const summary = await sealCaseForSeed('summary', JSON.stringify({ title: 'test record' }), seedHex)
+  const summary = await sealCaseForSeed(
+    'summary',
+    JSON.stringify({ title: 'test record', status: options.status, severity: options.severity }),
+    seedHex,
+  )
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
     hubOwnedPath('/records', options.hubId),
@@ -1951,14 +1955,13 @@ export async function createRecordViaApi(
 
 export async function listRecordsViaApi(
   request: APIRequestContext,
-  params: { entityTypeId?: string; statusHash?: string; assignedTo?: string; parentRecordId?: string; page?: number; limit?: number; hubId: string },
+  params: { entityTypeId?: string; assignedTo?: string; parentRecordId?: string; page?: number; limit?: number; hubId: string },
   seedHex = ADMIN_SEED,
 ): Promise<{ records: Record<string, unknown>[]; total: number; hasMore: boolean }> {
   const qs = new URLSearchParams()
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
   if (params?.entityTypeId) qs.set('entityTypeId', params.entityTypeId)
-  if (params?.statusHash) qs.set('statusHash', params.statusHash)
   if (params?.assignedTo) qs.set('assignedTo', params.assignedTo)
   if (params?.parentRecordId) qs.set('parentRecordId', params.parentRecordId)
   const qsStr = qs.toString()
@@ -1977,6 +1980,31 @@ export async function getRecordViaApi(
   const { status, data } = await apiGet<Record<string, unknown>>(request, `${hubOwnedPath('/records', hubId)}/${recordId}`, seedHex)
   if (status !== 200) throw new Error(`Failed to get record: ${status}`)
   return data
+}
+
+/**
+ * A record's sealed summary, opened as `seedHex`'s device. The server holds no
+ * status or severity, so a test that needs to know what a record says reads it
+ * where the clients do.
+ */
+export async function readRecordSummaryViaApi(
+  request: APIRequestContext,
+  recordId: string,
+  hubId: string,
+  seedHex = ADMIN_SEED,
+): Promise<{ title?: string; description?: string; status?: string; severity?: string; category?: string }> {
+  const record = await getRecordViaApi(request, recordId, hubId, seedHex)
+  const recipient = hpkeRecipientForSeed(seedHex)
+  const plaintext = await openCaseMock(
+    'summary',
+    {
+      encryptedContent: record.encryptedSummary as string,
+      readerEnvelopes: record.summaryEnvelopes as Array<{ pubkey: string; enc: string; ct: string }>,
+    },
+    { encryptionPubkeyHex: recipient.pubkeyHex },
+    recipient.skHex,
+  )
+  return JSON.parse(plaintext)
 }
 
 export async function updateRecordViaApi(
@@ -2040,7 +2068,6 @@ export async function createEventViaApi(
     startDate?: string
     endDate?: string
     eventTypeHash?: string
-    statusHash?: string
     parentEventId?: string
     hubId: string
   },
@@ -2123,8 +2150,6 @@ export async function createInteractionViaApi(
     sourceId?: string
     encryptedContent?: string
     interactionTypeHash?: string
-    previousStatusHash?: string
-    newStatusHash?: string
     hubId: string
   },
   seedHex = ADMIN_SEED,
@@ -2148,8 +2173,6 @@ export async function createInteractionViaApi(
     body.encryptedContent = options.encryptedContent
     body.contentEnvelopes = await realEnvelopesForWriterAndAdmin(contentKey, seedHex)
   }
-  if (options.previousStatusHash) body.previousStatusHash = options.previousStatusHash
-  if (options.newStatusHash) body.newStatusHash = options.newStatusHash
 
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,

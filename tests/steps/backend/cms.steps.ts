@@ -26,6 +26,8 @@ import {
   updateContactViaApi,
   deleteContactViaApi,
   createRecordViaApi,
+  readRecordSummaryViaApi,
+  sealCaseForSeed,
   listRecordsViaApi,
   getRecordViaApi,
   updateRecordViaApi,
@@ -384,10 +386,10 @@ When('the volunteer tries to create a contact', async ({ request, world }) => {
 // NOTE: "an entity type {string} exists" is defined in entity-schema.steps.ts.
 // CMS steps use resolveEntityTypeId() internally to get the ID when needed.
 
-When('the admin creates a record of type {string} with status hash {string}', async ({ request, world }, typeName: string, statusHash: string) => {
+When('the admin creates a record of type {string} with status {string}', async ({ request, world }, typeName: string, status: string) => {
   const entityTypeId = await resolveEntityTypeId(world, request, typeName)
   const hubId = getScenarioState(world).hubId
-  const record = await createRecordViaApi(request, entityTypeId, { statusHash, hubId })
+  const record = await createRecordViaApi(request, entityTypeId, { status, hubId })
   getCmsState(world).lastRecord = record
   getCmsState(world).records.push(record)
 })
@@ -403,8 +405,28 @@ Then('the record should have entity type {string}', async ({ request, world }, t
   expect(getCmsState(world).lastRecord!.entityTypeId).toBe(entityTypeId)
 })
 
-Then('the record should have status hash {string}', async ({ world }, statusHash: string) => {
-  expect(getCmsState(world).lastRecord!.statusHash).toBe(statusHash)
+Then('the record\'s sealed summary should carry status {string}', async ({ request, world }, status: string) => {
+  const summary = await readRecordSummaryViaApi(request, getCmsState(world).lastRecord!.id as string, getScenarioState(world).hubId)
+  expect(summary.status).toBe(status)
+})
+
+Then('the record should expose no status, severity or category to the server', async ({ request, world }) => {
+  const stored = await getRecordViaApi(request, getCmsState(world).lastRecord!.id as string, getScenarioState(world).hubId)
+  for (const field of ['statusHash', 'severityHash', 'categoryHash']) {
+    expect(stored, `the record response carries ${field}`).not.toHaveProperty(field)
+  }
+})
+
+When('the admin tries to create a record that names {string} in plaintext', async ({ request, world }, field: string) => {
+  const entityTypeId = await resolveEntityTypeId(world, request, 'refused_plaintext_type')
+  const summary = await sealCaseForSeed('summary', JSON.stringify({ title: 'refused' }))
+  const res = await apiPost(request, `/hubs/${getScenarioState(world).hubId}/records`, {
+    entityTypeId,
+    encryptedSummary: summary.encryptedContent,
+    summaryEnvelopes: summary.envelopes,
+    [field]: 'open',
+  })
+  setLastResponse(world, { status: res.status, data: res.data })
 })
 
 Given('a record of type {string} exists', async ({ request, world }, typeName: string) => {
@@ -415,10 +437,10 @@ Given('a record of type {string} exists', async ({ request, world }, typeName: s
   getCmsState(world).records.push(record)
 })
 
-Given('a record of type {string} exists with status hash {string}', async ({ request, world }, typeName: string, statusHash: string) => {
+Given('a record of type {string} exists with status {string}', async ({ request, world }, typeName: string, status: string) => {
   const entityTypeId = await resolveEntityTypeId(world, request, typeName)
   const hubId = getScenarioState(world).hubId
-  const record = await createRecordViaApi(request, entityTypeId, { statusHash, hubId })
+  const record = await createRecordViaApi(request, entityTypeId, { status, hubId })
   getCmsState(world).lastRecord = record
   getCmsState(world).records.push(record)
 })
@@ -559,12 +581,18 @@ Then('the second record should have a case number matching {string}', async ({ w
   expect(getCmsState(world).lastRecord!.caseNumber).toBe(expected)
 })
 
-When('the admin updates the record status hash to {string}', async ({ request, world }, statusHash: string) => {
+When('the admin changes the record status to {string}', async ({ request, world }, status: string) => {
+  // A status change re-seals the summary; the server is told only that one happened.
   const hubId = getScenarioState(world).hubId
+  const summary = await sealCaseForSeed('summary', JSON.stringify({ title: 'test record', status }))
   const updated = await updateRecordViaApi(
     request,
     getCmsState(world).lastRecord!.id as string,
-    { statusHash },
+    {
+      encryptedSummary: summary.encryptedContent,
+      summaryEnvelopes: summary.envelopes,
+      statusChangeTypeHash: 'status_change_token',
+    },
     hubId,
   )
   getCmsState(world).lastRecord = updated

@@ -167,8 +167,8 @@ Given('contacts exist', async ({ backendRequest: request, workerHub }) => {
 Given('contacts of type {string} and {string} exist', async ({ backendRequest: request, workerHub }, type1: string, type2: string) => {
   const hash1 = type1.toLowerCase().replace(/\s+/g, '_')
   const hash2 = type2.toLowerCase().replace(/\s+/g, '_')
-  await createContactByNameViaApi(request, `${type1} Contact ${Date.now()}`, { contactTypeHash: hash1, hubId: workerHub })
-  await createContactByNameViaApi(request, `${type2} Contact ${Date.now()}`, { contactTypeHash: hash2, hubId: workerHub })
+  await createContactByNameViaApi(request, `${type1} Contact ${Date.now()}`, { contactType: hash1, hubId: workerHub })
+  await createContactByNameViaApi(request, `${type2} Contact ${Date.now()}`, { contactType: hash2, hubId: workerHub })
 })
 
 When('I type {string} in the contact search input', async ({ page }, query: string) => {
@@ -370,7 +370,7 @@ async function createTrackedContact(
   request: APIRequestContext,
   casesWorld: CasesWorld,
   name: string,
-  opts: { contactTypeHash?: string; hubId: string },
+  opts: { contactType?: string; hubId: string },
 ): Promise<Record<string, unknown>> {
   const created = await createContactByNameViaApi(request, name, opts)
   casesWorld.contactWithDataId = (created as { id: string }).id
@@ -417,7 +417,7 @@ Given('a contact exists with linked cases', async ({ backendRequest: request, ca
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   expect(arrestType, 'jail-support template should define the arrest_case entity type').toBeDefined()
   const contact = await createTrackedContact(request, casesWorld, `Cases Contact ${Date.now()}`, { hubId: workerHub })
-  const record = await createRecordViaApi(request, (arrestType as { id: string }).id, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, (arrestType as { id: string }).id, { status: 'reported', hubId: workerHub })
   await linkContactToRecordViaApi(request, (record as { id: string }).id, (contact as { id: string }).id, 'defendant', ADMIN_NSEC, workerHub)
 })
 

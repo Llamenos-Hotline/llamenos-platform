@@ -16,7 +16,7 @@ Feature: CMS Interactions
   Scenario: Auto-create status_change interaction on status update
     Given case management is enabled
     And an entity type "sc_case_type" exists
-    And a record of type "sc_case_type" exists with status hash "status_initial"
+    And a record of type "sc_case_type" exists with status "initial"
     When the admin updates the record status with change metadata
     Then the record interactions should include a "status_change" entry
 

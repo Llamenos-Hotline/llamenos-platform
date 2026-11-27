@@ -192,7 +192,7 @@ beforeAll(async () => {
   reportB = await insertReport(HUB_B)
   const insertRecord = async (hubId: string, entityTypeId: string, owner: Actor) =>
     (await db.insert(caseRecords).values({
-      hubId, entityTypeId, statusHash: 'open', createdBy: owner.pubkey,
+      hubId, entityTypeId, createdBy: owner.pubkey,
       summaryEnvelopes: envelopes(owner.pubkey),
     }).returning())[0].id
   recordA = await insertRecord(HUB_A, typeA, ADMIN_A)
