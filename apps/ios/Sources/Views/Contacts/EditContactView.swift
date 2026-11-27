@@ -3,7 +3,6 @@ import SwiftUI
 struct EditContactView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
-    @Environment(HubKeyStore.self) private var hubKeyStore
     @State private var vm: ContactFormViewModel?
 
     let contact: DirectoryContact
@@ -37,10 +36,6 @@ struct EditContactView: View {
 
     private func update() {
         guard let vm else { return }
-        guard let hubKey = hubKeyStore.currentHubKey else {
-            vm.error = NSLocalizedString("error_no_hub_key", comment: "Hub key not available")
-            return
-        }
         guard let hubId = appState.hubContext.activeHubId else {
             vm.error = NSLocalizedString("error_no_hub_selected", comment: "No hub selected")
             return
@@ -63,7 +58,6 @@ struct EditContactView: View {
                 let updated = try await vm.update(
                     contactId: contact.id,
                     hubId: hubId,
-                    hubKey: hubKey,
                     readerPubkeys: readerPubkeys,
                     apiService: contactsAPI
                 )
