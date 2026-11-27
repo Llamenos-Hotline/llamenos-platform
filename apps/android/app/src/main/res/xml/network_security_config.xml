@@ -42,7 +42,7 @@
         validated chain still ends at X1 / X2. Once a platform trust store anchors Root YR / YE,
         the chain ends there instead, and a client that pinned only X1 / X2 would hard-fail on
         every connection while the web stayed healthy (#2505). A chain containing ANY of the four
-        is accepted. The same four are pinned by ApiService.DEFAULT_PIN_HASHES, the iOS
+        is accepted. The same four are pinned by CertificatePins.DEFAULT_PIN_HASHES, the iOS
         CertificatePins and the desktop ISRG_ROOT_PINS — change them together.
 
         IMPORTANT FOR SELF-HOSTERS: Replace "llamenos-hotline.org" (the default) with your hub's

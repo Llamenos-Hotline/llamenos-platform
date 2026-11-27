@@ -407,6 +407,8 @@ describe('#3069 — the trust snapshot in the gate: shown, never signed per PR',
     return { [f]: after }
   }
   const API = 'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt'
+  // Android's trust decision — the pin set and the loopback exemption — lives here, not in ApiService.kt.
+  const PINS = 'apps/android/app/src/main/java/org/llamenos/hotline/api/CertificatePins.kt'
   const MANIFEST = 'apps/android/app/src/main/AndroidManifest.xml'
   const NSC = 'apps/android/app/src/main/res/xml/network_security_config.xml'
   const PROJECT = 'apps/ios/project.yml'
@@ -460,7 +462,7 @@ describe('#3069 — the trust snapshot in the gate: shown, never signed per PR',
       ['usesCleartextTraffic flipped to true', () => edit(MANIFEST, '<application', '<application android:usesCleartextTraffic="true"'), /usesCleartextTraffic/],
       ['App Transport Security weakened', () => edit(PROJECT, 'NSAllowsArbitraryLoads: false', 'NSAllowsArbitraryLoads: true'), /appTransportSecurity/],
       ['a new HTTP client built without the pinner', () => ({ 'apps/android/app/src/main/java/org/llamenos/hotline/api/Telemetry.kt': 'package x\nval c = okhttp3.OkHttpClient.Builder().build()\n' }), /Telemetry\.kt/],
-      ['the localhost exemption widened to a suffix match', () => edit(API, 'hostname == "localhost"', 'hostname.endsWith("localhost")'), /loopbackExemptions/],
+      ['the localhost exemption widened to a suffix match', () => edit(PINS, 'hostname == "localhost"', 'hostname.endsWith("localhost")'), /loopbackExemptions/],
     ]
     it.each(cases)('%s', async (_name, change, mention) => {
       const rep = await gate(judged(tree, change()))
@@ -487,7 +489,7 @@ describe('#3069 — the trust snapshot in the gate: shown, never signed per PR',
   })
 
   it('a head the extractor cannot read is REPORTED, never read as "nothing changed"', async () => {
-    const rep = await gate(judged(tree, edit(API, /DEFAULT_PIN_HASHES/g, 'PIN_HASHES')))
+    const rep = await gate(judged(tree, edit(PINS, /DEFAULT_PIN_HASHES/g, 'PIN_HASHES')))
     NEG(rep)
     expect(rep.trustSnapshot?.error).toMatch(/could not be read/)
     expect(trustSnapshotLines(rep).join('\n')).toMatch(/trust snapshot: .*could not be read.*repo test .*fails/)
