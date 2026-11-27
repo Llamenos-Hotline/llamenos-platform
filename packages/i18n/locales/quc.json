@@ -2350,8 +2350,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "Xtzelaj",
+        "suspended": "Q'atal"
       },
       "companyName": "Company Name",
       "brandSid": "Brand SID",
@@ -4810,6 +4810,7 @@
     "erasure.envelopeRevocationComplete",
     "erasure.envelopeRevocationFailed",
     "erasure.envelopeRevocationProcessed",
-    "erasure.envelopeRevocationProgress"
+    "erasure.envelopeRevocationProgress",
+    "userProfile.channelTelegram"
   ]
 }

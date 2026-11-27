@@ -1275,8 +1275,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "거부됨",
+        "suspended": "정지됨"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4805,5 +4805,8 @@
     "push": "핫라인에 확인이 필요한 활동이 있습니다.",
     "signalAlert": "핫라인 알림 — {{category}}: {{state}}. 자세한 내용은 앱을 여세요.",
     "title": "진행 중인 사건"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

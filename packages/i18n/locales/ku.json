@@ -2424,8 +2424,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "Redkirî",
+        "suspended": "Rawestandî"
       },
       "addSampleMessage": "Add sample message",
       "approved": "A2P Approved",
@@ -4803,5 +4803,8 @@
     "push": "Li ser xeta we çalakiyek heye ku divê lê were nêrîn.",
     "signalAlert": "Hişyariya xetê — {{category}}: {{state}}. Ji bo hûrguliyan sepanê vekin.",
     "title": "Bûyerên çalak"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

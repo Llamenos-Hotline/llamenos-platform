@@ -1275,8 +1275,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "Rechazado",
+        "suspended": "Suspendido"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4805,5 +4805,8 @@
     "push": "Hay actividad en su línea que requiere atención.",
     "signalAlert": "Alerta de la línea — {{category}}: {{state}}. Abra la aplicación para ver los detalles.",
     "title": "Incidentes activos"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

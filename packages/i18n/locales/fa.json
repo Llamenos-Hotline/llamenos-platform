@@ -2653,8 +2653,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "رد شده",
+        "suspended": "تعلیق شده"
       },
       "email": "ایمیل",
       "campaignFormTitle": "Campaign Registration",
@@ -4803,5 +4803,8 @@
     "push": "در خط تلفن شما فعالیتی هست که باید نگاهی به آن بیندازید.",
     "signalAlert": "هشدار خط تلفن — {{category}}: {{state}}. برای جزئیات برنامه را باز کنید.",
     "title": "رویدادهای فعال"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

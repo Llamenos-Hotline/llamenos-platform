@@ -1275,8 +1275,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "مرفوض",
+        "suspended": "معلّق"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4805,5 +4805,8 @@
     "push": "هناك نشاط على خطك الساخن يحتاج إلى نظرة.",
     "signalAlert": "تنبيه الخط الساخن — {{category}}: {{state}}. افتح التطبيق لمعرفة التفاصيل.",
     "title": "حوادث نشطة"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

@@ -1275,8 +1275,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "Bị từ chối",
+        "suspended": "Bị tạm ngưng"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4805,5 +4805,8 @@
     "push": "Có hoạt động trên đường dây nóng của bạn cần được xem xét.",
     "signalAlert": "Cảnh báo đường dây nóng — {{category}}: {{state}}. Mở ứng dụng để xem chi tiết.",
     "title": "Sự cố đang diễn ra"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

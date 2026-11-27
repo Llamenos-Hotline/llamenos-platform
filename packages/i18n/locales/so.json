@@ -2360,8 +2360,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "La diiday",
+        "suspended": "La hakiyay"
       },
       "brandFormTitle": "Brand Registration",
       "address": "Cinwaan",
@@ -4803,5 +4803,8 @@
     "push": "Khadkaaga waxaa ka jira dhaqdhaqaaq u baahan in la eego.",
     "signalAlert": "Digniinta khadka — {{category}}: {{state}}. Fur app-ka si aad u aragto faahfaahinta.",
     "title": "Dhacdooyinka socda"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

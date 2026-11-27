@@ -1958,8 +1958,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "ငြင်းပယ်ခံရသည်",
+        "suspended": "ဆိုင်းငံ့ထားသည်"
       },
       "email": "အီးမေးလ်",
       "ein": "EIN / Tax ID",
@@ -4803,5 +4803,8 @@
     "push": "သင့်လိုင်းတွင် ကြည့်ရှုရန်လိုအပ်သော လှုပ်ရှားမှု ရှိသည်။",
     "signalAlert": "လိုင်းသတိပေးချက် — {{category}}: {{state}}။ အသေးစိတ်အတွက် အက်ပ်ကို ဖွင့်ပါ။",
     "title": "လက်ရှိ ဖြစ်ရပ်များ"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

@@ -1275,8 +1275,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "Rejte",
+        "suspended": "Sispann"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4805,5 +4805,8 @@
     "push": "Gen aktivite sou liy dirèk ou a ki bezwen yon koutje.",
     "signalAlert": "Alèt liy dirèk — {{category}}: {{state}}. Louvri aplikasyon an pou detay yo.",
     "title": "Ensidan ki aktif"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

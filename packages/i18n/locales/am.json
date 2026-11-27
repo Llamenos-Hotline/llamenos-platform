@@ -2964,8 +2964,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "ውድቅ ተደርጓል",
+        "suspended": "ታግዷል"
       },
       "email": "ኢሜይል",
       "phone": "ስልክ",
@@ -4803,5 +4803,8 @@
     "push": "በመስመርዎ ላይ መታየት ያለበት እንቅስቃሴ አለ።",
     "signalAlert": "የመስመር ማንቂያ — {{category}}: {{state}}። ለዝርዝሮች መተግበሪያውን ይክፈቱ።",
     "title": "ንቁ ክስተቶች"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

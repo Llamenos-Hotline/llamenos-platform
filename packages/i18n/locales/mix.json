@@ -2389,8 +2389,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "Rechazado",
+        "suspended": "Suspendido"
       },
       "brandFormTitle": "Brand Registration",
       "addSampleMessage": "Add sample message",
@@ -4810,6 +4810,7 @@
     "erasure.envelopeRevocationComplete",
     "erasure.envelopeRevocationFailed",
     "erasure.envelopeRevocationProcessed",
-    "erasure.envelopeRevocationProgress"
+    "erasure.envelopeRevocationProgress",
+    "userProfile.channelTelegram"
   ]
 }

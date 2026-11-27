@@ -1275,8 +1275,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "Отклонено",
+        "suspended": "Приостановлено"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4805,5 +4805,8 @@
     "push": "На вашей горячей линии есть активность, на которую стоит взглянуть.",
     "signalAlert": "Оповещение горячей линии — {{category}}: {{state}}. Подробности в приложении.",
     "title": "Активные инциденты"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

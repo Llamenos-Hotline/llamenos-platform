@@ -1275,8 +1275,8 @@
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
         "skipped": "Skipped",
-        "rejected": "Rejected",
-        "suspended": "Suspended"
+        "rejected": "अस्वीकृत",
+        "suspended": "निलंबित"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4805,5 +4805,8 @@
     "push": "आपकी हॉटलाइन पर ऐसी गतिविधि है जिसे देखने की ज़रूरत है।",
     "signalAlert": "हॉटलाइन अलर्ट — {{category}}: {{state}}। विवरण के लिए ऐप खोलें।",
     "title": "सक्रिय घटनाएँ"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }
