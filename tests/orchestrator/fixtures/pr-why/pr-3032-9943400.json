@@ -1,0 +1,2275 @@
+{
+ "_source": "PR #3032, head 9943400bdb4c4cc10cccafddb601d8c493485448, captured 2026-11-27 (#3076). checkRunsNow and rollupNow are verbatim reads taken after the carrier was refreshed in place at 06:22Z (REST commits/<sha>/check-runs, required names only; GraphQL Commit.statusCheckRollup). The AtIncident variants are the same reads with the one fleet/review carrier of suite 124249318728 put back to its attempt-1 run 140266047267 (failure, 01:58:48Z; read verbatim from GET check-runs/140266047267) and the rollup state to FAILURE — the state #3076 measured, when gh pr checks printed fleet/review fail. 140266957072 (success, 02:01:34Z) is the workflow_dispatch run 45925885153 of fleet-review.yml, in its own suite 124250083504, which never reaches the PR rollup.",
+ "headRefOid": "9943400bdb4c4cc10cccafddb601d8c493485448",
+ "requiredContexts": [
+  "ci-status",
+  "gitleaks",
+  "CodeQL",
+  "fleet/verify",
+  "fleet/review"
+ ],
+ "checkRunsAtIncident": [
+  {
+   "id": 140348068078,
+   "name": "fleet/verify",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T06:22:50Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318792
+   }
+  },
+  {
+   "id": 140266047267,
+   "name": "fleet/review",
+   "status": "completed",
+   "conclusion": "failure",
+   "started_at": "2026-11-27T01:58:48Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318728
+   }
+  },
+  {
+   "id": 140269442596,
+   "name": "CodeQL",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T02:09:29Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318753
+   }
+  },
+  {
+   "id": 140267412073,
+   "name": "ci-status",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T02:03:04Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318710
+   }
+  },
+  {
+   "id": 140266957072,
+   "name": "fleet/review",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T02:01:34Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124250083504
+   }
+  },
+  {
+   "id": 140266449996,
+   "name": "CodeQL",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T01:59:58Z",
+   "app": {
+    "slug": "github-advanced-security"
+   },
+   "check_suite": {
+    "id": 124249416323
+   }
+  },
+  {
+   "id": 140266046775,
+   "name": "gitleaks",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T01:59:02Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318625
+   }
+  }
+ ],
+ "checkRunsNow": [
+  {
+   "id": 140348068078,
+   "name": "fleet/verify",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T06:22:50Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318792
+   }
+  },
+  {
+   "id": 140348047470,
+   "name": "fleet/review",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T06:22:45Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318728
+   }
+  },
+  {
+   "id": 140269442596,
+   "name": "CodeQL",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T02:09:29Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318753
+   }
+  },
+  {
+   "id": 140267412073,
+   "name": "ci-status",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T02:03:04Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318710
+   }
+  },
+  {
+   "id": 140266957072,
+   "name": "fleet/review",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T02:01:34Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124250083504
+   }
+  },
+  {
+   "id": 140266449996,
+   "name": "CodeQL",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T01:59:58Z",
+   "app": {
+    "slug": "github-advanced-security"
+   },
+   "check_suite": {
+    "id": 124249416323
+   }
+  },
+  {
+   "id": 140266046775,
+   "name": "gitleaks",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-11-27T01:59:02Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 124249318625
+   }
+  }
+ ],
+ "rollupAtIncident": {
+  "data": {
+   "repository": {
+    "object": {
+     "statusCheckRollup": {
+      "state": "FAILURE",
+      "contexts": {
+       "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "NTc"
+       },
+       "nodes": [
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047050,
+         "name": "api-contract",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:58:36Z",
+         "checkSuite": {
+          "databaseId": 124249318731,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593258,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047624,
+         "name": "changes",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:14Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163711,
+         "name": "Analyze advanced (actions)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:20Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047267,
+         "name": "fleet/review",
+         "status": "COMPLETED",
+         "conclusion": "FAILURE",
+         "startedAt": "2026-11-27T01:58:48Z",
+         "checkSuite": {
+          "databaseId": 124249318728,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593257,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140347884779,
+         "name": "re-evaluate / fleet/review/re-evaluate",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:17Z",
+         "checkSuite": {
+          "databaseId": 124316995025,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408134,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348068078,
+         "name": "fleet/verify",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:50Z",
+         "checkSuite": {
+          "databaseId": 124249318792,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593279,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140347884674,
+         "name": "re-evaluate / fleet/verify/re-evaluate",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:17Z",
+         "checkSuite": {
+          "databaseId": 124316995034,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408137,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047141,
+         "name": "knope-versions-check",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:58:59Z",
+         "checkSuite": {
+          "databaseId": 124249318818,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593285,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266046775,
+         "name": "gitleaks",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:02Z",
+         "checkSuite": {
+          "databaseId": 124249318625,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593221,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047167,
+         "name": "Scan",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:58:37Z",
+         "checkSuite": {
+          "databaseId": 124249318877,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593308,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163789,
+         "name": "Analyze advanced (javascript-typescript)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:29Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163460,
+         "name": "Analyze advanced (python)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:17Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163834,
+         "name": "Analyze advanced (ruby)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:31Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163769,
+         "name": "Analyze advanced (rust)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:26Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266164582,
+         "name": "Analyze staged (java-kotlin)",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:58:58Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348215738,
+         "name": "fleet-verify/refresh-carrier",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T06:23:13Z",
+         "checkSuite": {
+          "databaseId": 124249318792,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593279,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047433,
+         "name": "authorship",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:13Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348181811,
+         "name": "fleet-review/publish",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:23:09Z",
+         "checkSuite": {
+          "databaseId": 124249318728,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593257,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140347999758,
+         "name": "re-evaluate / fleet-review/publish",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:37Z",
+         "checkSuite": {
+          "databaseId": 124316995025,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408134,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348023939,
+         "name": "re-evaluate / fleet-verify/refresh-carrier",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:41Z",
+         "checkSuite": {
+          "databaseId": 124316995034,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408137,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266199465,
+         "name": "Analyze staged (swift)",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:05Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348184159,
+         "name": "fleet-review/refresh-carrier",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T06:23:07Z",
+         "checkSuite": {
+          "databaseId": 124249318728,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593257,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303188,
+         "name": "No generated files in git",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:21Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140347999787,
+         "name": "re-evaluate / fleet-review/refresh-carrier",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:37Z",
+         "checkSuite": {
+          "databaseId": 124316995025,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408134,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303204,
+         "name": "Updater pubkey is set",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:22Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140269442596,
+         "name": "CodeQL",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:09:29Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303263,
+         "name": "build",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:35Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304799,
+         "name": "crypto-tests",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305025,
+         "name": "audit",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305084,
+         "name": "backend-bdd",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304593,
+         "name": "backend-bdd-opt-in",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304650,
+         "name": "backend-unit",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304522,
+         "name": "backend-integration-bun",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304800,
+         "name": "backend-integration",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305048,
+         "name": "sidecar-tests",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305321,
+         "name": "repo-tests",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305285,
+         "name": "desktop-rust",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305082,
+         "name": "ansible-validate",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305141,
+         "name": "backup-restore-roundtrip",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305250,
+         "name": "desktop-unit",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305268,
+         "name": "android-build-test",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305372,
+         "name": "android-compile-check",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304451,
+         "name": "android-e2e",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304790,
+         "name": "ios-build-test",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305020,
+         "name": "ios-compile-check",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304706,
+         "name": "ios-e2e",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305567,
+         "name": "crypto-guardrails",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303400,
+         "name": "lint",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:39Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304355,
+         "name": "migration-drift",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303355,
+         "name": "docs-guard",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:32Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304857,
+         "name": "production-smoke",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140267378998,
+         "name": "e2e",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T02:02:55Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140267378188,
+         "name": "E2E (${{ matrix.os_label }})",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T02:02:55Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140267377164,
+         "name": "platform-suite-coverage",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:02:57Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140267412073,
+         "name": "ci-status",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:03:04Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266449996,
+         "name": "CodeQL",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:58Z",
+         "checkSuite": {
+          "databaseId": 124249416323,
+          "app": {
+           "slug": "github-advanced-security"
+          },
+          "workflowRun": null
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266160845,
+         "name": "semgrep",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:58:57Z",
+         "checkSuite": {
+          "databaseId": 124249416323,
+          "app": {
+           "slug": "github-advanced-security"
+          },
+          "workflowRun": null
+         }
+        }
+       ]
+      }
+     }
+    }
+   }
+  }
+ },
+ "rollupNow": {
+  "data": {
+   "repository": {
+    "object": {
+     "statusCheckRollup": {
+      "state": "SUCCESS",
+      "contexts": {
+       "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "NTc"
+       },
+       "nodes": [
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047050,
+         "name": "api-contract",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:58:36Z",
+         "checkSuite": {
+          "databaseId": 124249318731,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593258,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047624,
+         "name": "changes",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:14Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163711,
+         "name": "Analyze advanced (actions)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:20Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348047470,
+         "name": "fleet/review",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:45Z",
+         "checkSuite": {
+          "databaseId": 124249318728,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593257,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140347884779,
+         "name": "re-evaluate / fleet/review/re-evaluate",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:17Z",
+         "checkSuite": {
+          "databaseId": 124316995025,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408134,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348068078,
+         "name": "fleet/verify",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:50Z",
+         "checkSuite": {
+          "databaseId": 124249318792,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593279,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140347884674,
+         "name": "re-evaluate / fleet/verify/re-evaluate",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:17Z",
+         "checkSuite": {
+          "databaseId": 124316995034,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408137,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047141,
+         "name": "knope-versions-check",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:58:59Z",
+         "checkSuite": {
+          "databaseId": 124249318818,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593285,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266046775,
+         "name": "gitleaks",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:02Z",
+         "checkSuite": {
+          "databaseId": 124249318625,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593221,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047167,
+         "name": "Scan",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:58:37Z",
+         "checkSuite": {
+          "databaseId": 124249318877,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593308,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163789,
+         "name": "Analyze advanced (javascript-typescript)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:29Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163460,
+         "name": "Analyze advanced (python)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:17Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163834,
+         "name": "Analyze advanced (ruby)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:31Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266163769,
+         "name": "Analyze advanced (rust)",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:26Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266164582,
+         "name": "Analyze staged (java-kotlin)",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:58:58Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348215738,
+         "name": "fleet-verify/refresh-carrier",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T06:23:13Z",
+         "checkSuite": {
+          "databaseId": 124249318792,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593279,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266047433,
+         "name": "authorship",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:13Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348181811,
+         "name": "fleet-review/publish",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:23:09Z",
+         "checkSuite": {
+          "databaseId": 124249318728,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593257,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140347999758,
+         "name": "re-evaluate / fleet-review/publish",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:37Z",
+         "checkSuite": {
+          "databaseId": 124316995025,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408134,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348023939,
+         "name": "re-evaluate / fleet-verify/refresh-carrier",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:41Z",
+         "checkSuite": {
+          "databaseId": 124316995034,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408137,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266199465,
+         "name": "Analyze staged (swift)",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:05Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140348184159,
+         "name": "fleet-review/refresh-carrier",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T06:23:07Z",
+         "checkSuite": {
+          "databaseId": 124249318728,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593257,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303188,
+         "name": "No generated files in git",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:21Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140347999787,
+         "name": "re-evaluate / fleet-review/refresh-carrier",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T06:22:37Z",
+         "checkSuite": {
+          "databaseId": 124316995025,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45951408134,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303204,
+         "name": "Updater pubkey is set",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:22Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140269442596,
+         "name": "CodeQL",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:09:29Z",
+         "checkSuite": {
+          "databaseId": 124249318753,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593264,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303263,
+         "name": "build",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:35Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304799,
+         "name": "crypto-tests",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305025,
+         "name": "audit",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305084,
+         "name": "backend-bdd",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304593,
+         "name": "backend-bdd-opt-in",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304650,
+         "name": "backend-unit",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304522,
+         "name": "backend-integration-bun",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304800,
+         "name": "backend-integration",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305048,
+         "name": "sidecar-tests",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305321,
+         "name": "repo-tests",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305285,
+         "name": "desktop-rust",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305082,
+         "name": "ansible-validate",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305141,
+         "name": "backup-restore-roundtrip",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305250,
+         "name": "desktop-unit",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305268,
+         "name": "android-build-test",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305372,
+         "name": "android-compile-check",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304451,
+         "name": "android-e2e",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304790,
+         "name": "ios-build-test",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305020,
+         "name": "ios-compile-check",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304706,
+         "name": "ios-e2e",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266305567,
+         "name": "crypto-guardrails",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303400,
+         "name": "lint",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:39Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304355,
+         "name": "migration-drift",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266303355,
+         "name": "docs-guard",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:00:32Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266304857,
+         "name": "production-smoke",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T01:59:27Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140267378998,
+         "name": "e2e",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T02:02:55Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140267378188,
+         "name": "E2E (${{ matrix.os_label }})",
+         "status": "COMPLETED",
+         "conclusion": "SKIPPED",
+         "startedAt": "2026-11-27T02:02:55Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140267377164,
+         "name": "platform-suite-coverage",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:02:57Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140267412073,
+         "name": "ci-status",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T02:03:04Z",
+         "checkSuite": {
+          "databaseId": 124249318710,
+          "app": {
+           "slug": "github-actions"
+          },
+          "workflowRun": {
+           "databaseId": 45925593249,
+           "event": "pull_request"
+          }
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266449996,
+         "name": "CodeQL",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:59:58Z",
+         "checkSuite": {
+          "databaseId": 124249416323,
+          "app": {
+           "slug": "github-advanced-security"
+          },
+          "workflowRun": null
+         }
+        },
+        {
+         "__typename": "CheckRun",
+         "databaseId": 140266160845,
+         "name": "semgrep",
+         "status": "COMPLETED",
+         "conclusion": "SUCCESS",
+         "startedAt": "2026-11-27T01:58:57Z",
+         "checkSuite": {
+          "databaseId": 124249416323,
+          "app": {
+           "slug": "github-advanced-security"
+          },
+          "workflowRun": null
+         }
+        }
+       ]
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -100,7 +100,7 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet halt "<reason>"` | Writes the local halt file and reason, and logs `HALTED`. |
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
 | `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
-| `llamenos-fleet pr-why <pr> [--porcelain]` | Why is this PR not merging (#2469)? Reads ONE PR's live state and prints a **ranked list of named verdicts**, each with the evidence it was derived from and the remedy — `codeowner-approval-missing` (never reported for a path whose only owner is the PR's author — GitHub treats that as satisfied, so it is the `codeowner-approval-vacuous` note instead, #2897), `automerge-stale`, `not-queued`, `queued-ok`, `required-context-absent` (via `missing-checks`), `review-verdict-stale-by-tree`, `fleet-queue-guard-unsatisfied`, `check-carrier-ambiguous`, `head-moved`, and the rest of `VERDICT_NAMES` in `orchestrator/src/pr-why.ts`. Read-only: it prints remedies and runs none. Exits `0` when nothing is owed (queued, merged), `1` when blocked, `2` when any verdict could not be observed. See below. |
+| `llamenos-fleet pr-why <pr> [--porcelain]` | Why is this PR not merging (#2469)? Reads ONE PR's live state and prints a **ranked list of named verdicts**, each with the evidence it was derived from and the remedy — `codeowner-approval-missing` (never reported for a path whose only owner is the PR's author — GitHub treats that as satisfied, so it is the `codeowner-approval-vacuous` note instead, #2897), `automerge-stale`, `not-queued`, `queued-ok`, `required-context-absent` (via `missing-checks`), `review-verdict-stale-by-tree`, `fleet-queue-guard-unsatisfied`, `check-carrier-ambiguous`, `stale-failing-carrier` / `rollup-disagrees` (a required context on which GitHub's `statusCheckRollup` and the derived carrier rule split, #3076), `head-moved`, and the rest of `VERDICT_NAMES` in `orchestrator/src/pr-why.ts`. Read-only: it prints remedies and runs none. Exits `0` when nothing is owed (queued, merged), `1` when blocked, `2` when any verdict could not be observed. See below. |
 | `llamenos-fleet queue-sweep [--porcelain]` | Cancels **orphaned `merge_group` runs** (#1868): runs on `gh-readonly-queue/<base>/pr-<n>-<basesha>` branches whose PR is no longer in the merge queue, or is queued with a different base commit than the branch was built from (a dequeued, ejected, or rebuilt entry's old run keeps executing otherwise and holds a Mac mini hostage). Only a run that still has a **non-completed job** is cancelled — liveness is judged by job `status`, never by the run's own status or any `conclusion` (both are unreliable in observed ways; see the module comment in `orchestrator/src/queue-sweep.ts`). An unreadable run list, queue, or jobs list cancels NOTHING (fail closed). Also runs automatically at the start of every `tick` pass, so an orphan lives at most one tick interval; this command is the on-demand form. Exits `2` when the sweep could not decide or a cancel was refused, `0` otherwise — a cancelled orphan is the sweep working, not a defect. |
 | `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Bounds only the ADDITION of never-admitted PRs by queue depth — an ejected or dequeued PR (last merge-queue timeline event a removal) is re-armed at any depth (#2619), and a fleet-dispatched one is given the `queue-cleared` label first, because the queue guard reads it inside the group. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, changes that git merges cleanly onto the queue and the same pass's picks, iOS-gate-risk PRs alone), never re-queues a PR whose last queue attempt failed on its own diff, and re-queues a cancellation-only ejection only when it was provably an infrastructure timeout — once per head, recorded on the PR (#2458). Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
 
@@ -458,6 +458,29 @@ against `isInMergeQueue`), never inferred from `autoMergeRequest`, which is
 consumed on entry. `fleet/review`'s outcome token is the message of its
 `fleet/review outcome` annotation — the job has no `checks: write`, so the
 check run's `output.title` is always empty.
+
+**Required checks are judged against GitHub's own rollup (#3076).** The
+per-app latest-by-`started_at` carrier rule (`missing-checks`, #1662) is a
+DERIVED verdict; the merge box gates on the head's `statusCheckRollup`, which
+counts the latest run of each check suite attached to the PR. The two can
+split: on #3032 a `workflow_dispatch` of `fleet-review.yml` published a newer
+PASS in its own suite, the derived rule read PASS, and GitHub kept counting the
+older failing `pull_request` carrier — rollup FAILURE, PR BLOCKED, and
+`pr-why` said `blocked-unexplained` with "every required context passes".
+Every required context is now compared with the rollup, and a split is a named
+verdict, never silence:
+
+- `stale-failing-carrier` (blocker) — GitHub counts a failing carrier the
+  derived rule does not pick. It names the carrier GitHub counts (suite,
+  workflow run, event), the one latest-by-`started_at` picks, and the
+  carriers outside the rollup; the remedy is to refresh the counted carrier
+  IN PLACE (`gh run rerun <its run>`, or for `fleet/review` a genuine review
+  request), never another suite. Do not arm a PR carrying it.
+- `rollup-disagrees` (unknown, exit 2) — any other split (derived FAIL /
+  GitHub PASS, a carrier one side lists and the other does not).
+
+An unreadable rollup is `unknown`. An ABSENT context agreeing on both sides
+stays `missing-checks`'s `required-context-absent`.
 
 ### `attempted` vs `failed` vs `shadowed`
 

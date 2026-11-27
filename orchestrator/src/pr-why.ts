@@ -60,6 +60,16 @@
  *  - Two runs can carry one check name on one head (a re-run, a second app).
  *    The latest by `started_at` decides, and `check-carrier-ambiguous` says
  *    the second carrier exists instead of silently picking one.
+ *  - That latest-by-`started_at` verdict is DERIVED; it is not what gates the
+ *    merge. GitHub gates on its own `statusCheckRollup`, which counts the
+ *    latest run of each suite attached to the PR — so a newer PASS published
+ *    in a suite GitHub does not attach (a `workflow_dispatch` of
+ *    `fleet-review.yml`) leaves the older failing carrier counted, the rollup
+ *    FAILURE and the PR BLOCKED (#3076, on #3032). Every required context is
+ *    therefore compared against the rollup, and the two disagreeing is a
+ *    named verdict: `stale-failing-carrier` when GitHub counts a failure the
+ *    derived rule does not see, `rollup-disagrees` for any other split. GitHub's
+ *    side is the one reported as gating; neither is ever silently preferred.
  *  - `fleet/review`'s outcome token (`NO-VERDICT:tree-changed`, …) is NOT in
  *    the check run's `output.title` — the job has no `checks: write`. Where
  *    it IS lives in exactly one place, ci.ts's `reviewOutcomeFromAnnotations`,
@@ -76,8 +86,8 @@ import {
   type BranchRuleset, type CodeOwnerRule, type CodeOwnersResponse,
 } from './board.js'
 import {
-  defaultMissingChecksDeps, diagnosePrHead,
-  type Carrier, type HeadDiagnosis, type MissingChecksDeps,
+  carrierFromCheckRun, carrierFromCommitStatus, defaultMissingChecksDeps, diagnosePrHead, verdictFor,
+  type Carrier, type HeadDiagnosis, type MissingChecksDeps, type RequiredContextDiagnosis, type RequiredVerdict,
 } from './missing-checks.js'
 import { QUEUE_CLEARED_LABEL, REVIEW_JOB, REVIEW_REQUEST_LOGIN, laneIdFromBranch, reviewTriggerLogins, reviewOutcomeFromAnnotations, reviewOutcomeToken, type CheckRunAnnotation, type ReviewOutcomeRead } from './ci.js'
 import { parseQueueBranch } from './queue-sweep.js'
@@ -219,9 +229,39 @@ export interface PrWhyFacts {
   /** The second membership probe: live `merge_group` runs on this PR's
    *  `gh-readonly-queue/<base>/pr-<N>-<sha>` branch. Empty = none live. */
   queueRuns: Observed<LiveQueueRun[]>
+  /** GitHub's own `statusCheckRollup` for the head — the set of carriers the
+   *  merge box actually gates on (#3076). */
+  rollup: Observed<CheckRollup>
   /** The head re-read AFTER every other read. */
   headAfter: Observed<string>
 }
+
+/**
+ * One carrier GitHub's `statusCheckRollup` lists for the head. The rollup is
+ * a DIFFERENT selection from `missing-checks`'s latest-per-app rule: GitHub
+ * counts the latest run of each check SUITE that belongs to the PR, so a run
+ * in a suite it does not attach to the PR (a `workflow_dispatch` of the same
+ * workflow, #3076) is absent here however new it is, and two PR suites of one
+ * app carrying the same name are BOTH counted.
+ */
+export interface RollupCarrier extends Carrier {
+  /** The context name — the rollup lists every name, required or not. */
+  name: string
+  suiteId: number | null
+  workflowRunId: number | null
+  /** The workflow run's triggering event; `null` for a non-Actions carrier. */
+  event: string | null
+}
+
+export interface CheckRollup {
+  /** `SUCCESS` | `FAILURE` | `PENDING` | `ERROR` | `EXPECTED`; `null` when
+   *  GitHub has no rollup for the commit at all (no checks, no statuses). */
+  state: string | null
+  contexts: RollupCarrier[]
+}
+
+/** GitHub's verdict for one required name, from its rollup alone. */
+export type RollupVerdict = 'PASS' | 'FAIL' | 'PENDING' | 'ABSENT'
 
 // ---------------------------------------------------------------------------
 // Verdicts
@@ -230,6 +270,7 @@ export interface PrWhyFacts {
 export const VERDICT_NAMES = [
   'unknown', 'head-moved', 'merged', 'closed', 'conflicted', 'draft',
   'queued-unmergeable', 'queued-ok',
+  'rollup-disagrees', 'stale-failing-carrier',
   'required-check-failing', 'review-verdict-stale-by-tree', 'review-never-requested', 'review-awaits-trust-approval',
   'required-context-absent',
   'changes-requested', 'codeowner-approval-missing', 'codeowner-approval-vacuous', 'approvals-missing', 'behind',
@@ -292,6 +333,35 @@ export function latestReviewRun(runs: readonly ReviewRun[]): ReviewRun | undefin
   return best
 }
 
+/** Pure. GitHub's verdict for one required name from its rollup alone: the
+ *  worst of every carrier it lists under that name — the same worst-of
+ *  ordering `missing-checks` applies to its counted set. */
+export function rollupVerdictFor(rollup: CheckRollup, name: string): RollupVerdict {
+  const listed = rollup.contexts.filter((c) => c.name === name)
+  return listed.length === 0 ? 'ABSENT' : (verdictFor(listed, 0) as 'PASS' | 'FAIL' | 'PENDING')
+}
+
+/** Does `missing-checks`'s derived verdict say the same thing GitHub's
+ *  rollup does? An absent context agrees only with an absent one; whether it
+ *  is still pending or settled is `missing-checks`'s business (#1662), not a
+ *  disagreement — the rollup cannot say whether a run is still able to post. */
+function verdictsAgree(derived: RequiredVerdict, github: RollupVerdict): boolean {
+  if (derived === 'ABSENT_PENDING' || derived === 'ABSENT_SETTLED') return github === 'ABSENT'
+  return derived === github
+}
+
+function renderRollupCarrier(c: RollupCarrier): string {
+  const where = c.suiteId === null ? '' : ` in suite ${c.suiteId}`
+  const run = c.workflowRunId === null ? '' : ` (workflow run ${c.workflowRunId}, ${c.event ?? 'no event'})`
+  return `${c.kind === 'check-run' ? '' : 'status:'}${c.app}=${c.raw}@${c.startedAt === '' ? 'no started_at' : c.startedAt}#${c.id}${where}${run}`
+}
+
+/** The latest carrier by `started_at` (id breaking ties) — the run the
+ *  derived rule picks when one app carries the name more than once. */
+function latestCarrier(carriers: readonly Carrier[]): Carrier | undefined {
+  return [...carriers].sort((a, b) => (a.startedAt === b.startedAt ? b.id - a.id : a.startedAt < b.startedAt ? 1 : -1))[0]
+}
+
 function fleetGuardVerdict(s: PrState): Verdict | undefined {
   if (laneIdFromBranch(s.headRefName) === undefined) return undefined
   if (s.labels.includes(QUEUE_CLEARED_LABEL)) return undefined
@@ -308,13 +378,19 @@ function fleetGuardVerdict(s: PrState): Verdict | undefined {
   }
 }
 
-function carrierNotes(checks: Observed<HeadDiagnosis>): Verdict[] {
+function carrierNotes(checks: Observed<HeadDiagnosis>, rollup: Observed<CheckRollup>): Verdict[] {
   if (!checks.ok) return []
   const out: Verdict[] = []
   for (const ctx of checks.value.contexts) {
     if (ctx.carriers.length < 2) continue
     const counted = ctx.carriers.filter((c) => c.superseded !== true)
-    const latest = [...ctx.carriers].sort((a, b) => (a.startedAt === b.startedAt ? b.id - a.id : a.startedAt < b.startedAt ? 1 : -1))[0]
+    const latest = latestCarrier(ctx.carriers)
+    const gitHubCounts = !rollup.ok
+      ? `GitHub's statusCheckRollup could not be read (${rollup.reason}), so which carrier the merge box counts is unobserved`
+      : (() => {
+        const listed = rollup.value.contexts.filter((c) => c.name === ctx.name)
+        return `GitHub's statusCheckRollup counts ${listed.length === 0 ? '(no carrier)' : listed.map(renderRollupCarrier).join(', ')} → ${rollupVerdictFor(rollup.value, ctx.name)}`
+      })()
     out.push({
       name: 'check-carrier-ambiguous',
       severity: 'note',
@@ -322,11 +398,62 @@ function carrierNotes(checks: Observed<HeadDiagnosis>): Verdict[] {
         `${ctx.carriers.length} runs carry the required name ${ctx.name} on this head: ${ctx.carriers.map(renderCarrierBrief).join(', ')}`,
         `latest by started_at: ${latest === undefined ? '(none)' : renderCarrierBrief(latest)}; ` +
           `the verdict (${ctx.verdict}) is the worst of the ${counted.length} counted carrier(s) — one per app`,
+        gitHubCounts,
       ],
       remedy: 'none on its own — read the counted carrier, not whichever row a UI happened to list first',
     })
   }
   return out
+}
+
+/**
+ * GitHub's rollup and the derived verdict disagree about one required name
+ * (#3076). GitHub's side is what gates the merge, so it is the one reported as
+ * the verdict; the derived side is named beside it so the split is never
+ * silent in either direction.
+ *
+ * `stale-failing-carrier` is the measured case: GitHub counts a FAILING
+ * carrier that the latest-by-`started_at` rule does not pick, almost always
+ * because the newer carrier sits in a suite GitHub never attached to the PR.
+ * Only a run INSIDE the counted carrier's suite replaces it — a re-run in
+ * place — so that is the remedy, never another new suite.
+ */
+function rollupDisagreement(s: PrState, ctx: RequiredContextDiagnosis, rollup: CheckRollup, github: RollupVerdict): Verdict {
+  const listed = rollup.contexts.filter((c) => c.name === ctx.name)
+  const latest = latestCarrier(ctx.carriers)
+  const rollupIds = new Set(listed.filter((c) => c.kind === 'check-run').map((c) => c.id))
+  const outside = ctx.carriers.filter((c) => c.kind === 'check-run' && !rollupIds.has(c.id))
+  const evidence = [
+    `GitHub's statusCheckRollup (state=${rollup.state ?? 'none'}) counts for ${ctx.name}: ` +
+      `${listed.length === 0 ? '(no carrier)' : listed.map(renderRollupCarrier).join(', ')} → ${github} — this is what the merge box gates on`,
+    `pr-why's latest-per-app rule reads ${ctx.verdict} from ${ctx.carriers.length === 0 ? '(no carrier)' : ctx.carriers.map(renderCarrierBrief).join(', ')}` +
+      `${latest === undefined ? '' : `; latest by started_at: ${renderCarrierBrief(latest)}`}`,
+    ...(outside.length > 0
+      ? [`carrier(s) GitHub's rollup does not count: ${outside.map(renderCarrierBrief).join(', ')} — a run in a suite GitHub does not count for this PR (e.g. a workflow_dispatch, #2815) cannot replace the counted one, however new it is`]
+      : []),
+  ]
+  if (github === 'FAIL') {
+    const failing = listed.filter((c) => c.state === 'FAIL')
+    const reruns = [...new Set(failing.flatMap((c) => (c.workflowRunId === null ? [] : [c.workflowRunId])))]
+    const inPlace = reruns.length === 0
+      ? `re-run the app that posted ${failing.map((c) => `#${c.id}`).join(', ')} so it replaces its own carrier`
+      : `${reruns.map((id) => `gh run rerun ${id}`).join(' and ')} re-runs the counted carrier in place — a new attempt inside the SAME suite, which is the only thing that replaces it`
+    const review = ctx.name === REVIEW_JOB
+      ? `; for ${REVIEW_JOB} the usual route is a genuine review_requested event (${requestReviewRemedy(s)}), whose refresh-carrier step re-runs that carrier in place (#2813)`
+      : ''
+    return {
+      name: 'stale-failing-carrier',
+      severity: 'blocker',
+      evidence: [...evidence, `${ctx.name} is FAILING for the merge — do not arm: GitHub will not admit this PR to the queue while the rollup counts it red`],
+      remedy: `refresh the counted carrier IN PLACE, not with a newer suite: ${inPlace}${review}; then re-run pr-why ${s.number}`,
+    }
+  }
+  return {
+    name: 'rollup-disagrees',
+    severity: 'unknown',
+    evidence: [...evidence, `GitHub reads ${ctx.name} as ${github} and pr-why derives ${ctx.verdict} — neither is assumed right on this head`],
+    remedy: `read gh pr checks ${s.number} and the run(s) named above; GitHub's rollup is what gates the merge — teach pr-why the carrier rule that produced the split`,
+  }
 }
 
 /** Pure. Every verdict for one PR, ranked. Total: every path returns at
@@ -358,7 +485,7 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
   const finishWithNotes = (): PrWhyReport => {
     const guard = fleetGuardVerdict(s)
     if (guard !== undefined) v.push(guard)
-    v.push(...carrierNotes(facts.checks))
+    v.push(...carrierNotes(facts.checks, facts.rollup))
     return done()
   }
 
@@ -505,7 +632,7 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
 
   const guard = fleetGuardVerdict(s)
   if (guard !== undefined) v.push(guard)
-  v.push(...carrierNotes(facts.checks))
+  v.push(...carrierNotes(facts.checks, facts.rollup))
 
   const explained = v.some((x) => x.severity === 'blocker' || x.severity === 'unknown')
   if (!explained) {
@@ -513,7 +640,8 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
       name: 'blocked-unexplained',
       severity: 'unknown',
       evidence: [
-        `mergeStateStatus=${s.mergeStateStatus}, yet every required context passes and every review requirement this command models is met`,
+        `mergeStateStatus=${s.mergeStateStatus}, yet every required context passes — by pr-why's latest-per-app rule AND by GitHub's own ` +
+          `statusCheckRollup, which agree on all ${facts.checks.ok ? facts.checks.value.contexts.length : 0} — and every review requirement this command models is met`,
         'something it does not model is owed — last-push approval, conversation resolution, a check pinned to one app, a deployment',
       ],
       remedy: 'open the PR\'s merge box; then teach pr-why the condition you find there',
@@ -575,11 +703,24 @@ function checkVerdicts(facts: PrWhyFacts, s: PrState, v: Verdict[]): void {
     v.push(unknown('the required checks', facts.checks.reason))
     return
   }
+  if (!facts.rollup.ok) {
+    // The derived verdict is not what gates the merge (#3076); without
+    // GitHub's own answer to compare it with, no context may be called
+    // passing — and none may be called failing on the derived rule alone.
+    v.push(unknown(`GitHub's statusCheckRollup for ${s.headRefOid.slice(0, 7)}`, facts.rollup.reason))
+    return
+  }
+  const rollup = facts.rollup.value
   const d = facts.checks.value
   const failing: string[] = []
   const pending: string[] = []
   const absent: string[] = []
   for (const ctx of d.contexts) {
+    const github = rollupVerdictFor(rollup, ctx.name)
+    if (!verdictsAgree(ctx.verdict, github)) {
+      v.push(rollupDisagreement(s, ctx, rollup, github))
+      continue
+    }
     const counted = ctx.carriers.filter((c) => c.superseded !== true)
     if (ctx.verdict === 'FAIL') {
       if (ctx.name === REVIEW_JOB) {
@@ -848,6 +989,8 @@ export interface PrWhyDeps {
   readFiles(pr: number): Promise<string[]>
   /** THROWS on failure. Every `fleet/review` run on `sha`. */
   readReviewRuns(sha: string): Promise<ReviewRun[]>
+  /** THROWS on failure. GitHub's `statusCheckRollup` for `sha`, every page. */
+  readRollup(sha: string): Promise<CheckRollup>
   /** THROWS on failure. EVERY non-terminal `merge_group` run in the repo —
    *  the caller picks out the ones naming the PR. */
   readLiveQueueRuns(): Promise<LiveQueueRun[]>
@@ -887,12 +1030,12 @@ export async function gatherPrWhyFacts(deps: PrWhyDeps, pr: number): Promise<PrW
     return {
       pr, state,
       ruleset: notRead(skipped), codeOwners: notRead(skipped), files: notRead(skipped),
-      checks: notRead(skipped), reviewRuns: notRead(skipped), queueRuns: notRead(skipped), headAfter: notRead(skipped),
+      checks: notRead(skipped), reviewRuns: notRead(skipped), queueRuns: notRead(skipped), rollup: notRead(skipped), headAfter: notRead(skipped),
     }
   }
   const s = state.value
 
-  const [rulesetRead, files, reviewRuns, queueRuns] = await Promise.all([
+  const [rulesetRead, files, reviewRuns, queueRuns, rollup] = await Promise.all([
     observe(async () => {
       const fact = deriveBranchRuleset(s.baseRefName, await deps.checks.fetchBranchRules(s.baseRefName))
       if (!fact.ok) throw new Error(fact.reason)
@@ -901,6 +1044,7 @@ export async function gatherPrWhyFacts(deps: PrWhyDeps, pr: number): Promise<PrW
     observe(() => deps.readFiles(pr)),
     observe(() => deps.readReviewRuns(s.headRefOid)),
     observe(async () => queueRunsNaming(await deps.readLiveQueueRuns(), s.baseRefName, pr)),
+    observe(() => deps.readRollup(s.headRefOid)),
   ])
 
   const codeOwners: Observed<CodeOwnerRule[] | null> = !rulesetRead.ok
@@ -920,7 +1064,7 @@ export async function gatherPrWhyFacts(deps: PrWhyDeps, pr: number): Promise<PrW
   const checks: Observed<HeadDiagnosis> = diagnosis.ok ? { ok: true, value: diagnosis.diagnosis } : { ok: false, reason: diagnosis.reason }
 
   const headAfter = await observe(() => deps.readHead(pr))
-  return { pr, state, ruleset: rulesetRead, codeOwners, files, checks, reviewRuns, queueRuns, headAfter }
+  return { pr, state, ruleset: rulesetRead, codeOwners, files, checks, reviewRuns, queueRuns, rollup, headAfter }
 }
 
 const PR_QUERY = `
@@ -1069,6 +1213,126 @@ export function reviewRunsFrom(raw: unknown): ReviewRun[] {
   return out
 }
 
+/** GitHub's own rollup for one commit — the carriers the merge box gates on
+ *  (#3076). `after` pages the contexts; the first page omits it. */
+const ROLLUP_QUERY = `
+query($owner: String!, $name: String!, $sha: GitObjectID!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    object(oid: $sha) {
+      ... on Commit {
+        statusCheckRollup {
+          state
+          contexts(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              __typename
+              ... on CheckRun {
+                databaseId name status conclusion startedAt
+                checkSuite { databaseId app { slug } workflowRun { databaseId event } }
+              }
+              ... on StatusContext { context state createdAt }
+            }
+          }
+        }
+      }
+    }
+  }
+}`.trim()
+
+/** A page cap, so a cursor GitHub keeps re-issuing cannot loop forever. */
+const ROLLUP_MAX_PAGES = 20
+
+interface GqlRollupNode {
+  __typename?: string
+  databaseId?: number | null
+  name?: string | null
+  status?: string | null
+  conclusion?: string | null
+  startedAt?: string | null
+  checkSuite?: { databaseId?: number | null; app?: { slug?: string | null } | null; workflowRun?: { databaseId?: number | null; event?: string | null } | null } | null
+  context?: string | null
+  state?: string | null
+  createdAt?: string | null
+}
+
+interface GqlRollup {
+  data?: { repository?: { object?: { statusCheckRollup?: {
+    state: string | null
+    contexts: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: GqlRollupNode[] }
+  } | null } | null } | null } | null
+  errors?: unknown
+}
+
+export interface RollupPage { state: string | null; contexts: RollupCarrier[]; nextCursor: string | null }
+
+/** Pure. One ROLLUP_QUERY page → its carriers, normalised through
+ *  `missing-checks`'s own carrier constructors. THROWS on any shape that
+ *  would otherwise be filled in with a guess: a context it cannot attribute
+ *  to a name is a context the comparison would silently lose. */
+export function rollupPageFrom(raw: unknown): RollupPage {
+  const body = raw as GqlRollup
+  if (Array.isArray(body.errors) && body.errors.length > 0) throw new Error(`GraphQL errors: ${JSON.stringify(body.errors).slice(0, 300)}`)
+  const object = body.data?.repository?.object
+  if (object === undefined || object === null) throw new Error('the head commit came back missing from the rollup read')
+  const rollup = object.statusCheckRollup
+  // `null` is GitHub's answer for a commit with no checks and no statuses —
+  // an observation, not a failed read.
+  if (rollup === undefined) throw new Error('the head commit came back without a statusCheckRollup field')
+  if (rollup === null) return { state: null, contexts: [], nextCursor: null }
+  const contexts = rollup.contexts.nodes.flatMap((n): RollupCarrier[] => {
+    if (n.__typename === 'CheckRun') {
+      if (typeof n.databaseId !== 'number' || typeof n.name !== 'string' || typeof n.status !== 'string') {
+        throw new Error('a rollup CheckRun came back without databaseId/name/status')
+      }
+      const carrier = carrierFromCheckRun({
+        id: n.databaseId,
+        name: n.name,
+        status: n.status.toLowerCase(),
+        conclusion: typeof n.conclusion === 'string' ? n.conclusion.toLowerCase() : null,
+        appSlug: n.checkSuite?.app?.slug ?? '(no app)',
+        startedAt: n.startedAt ?? '',
+      })
+      return [{
+        ...carrier,
+        name: n.name,
+        suiteId: n.checkSuite?.databaseId ?? null,
+        workflowRunId: n.checkSuite?.workflowRun?.databaseId ?? null,
+        event: n.checkSuite?.workflowRun?.event ?? null,
+      }]
+    }
+    if (n.__typename === 'StatusContext') {
+      if (typeof n.context !== 'string' || typeof n.state !== 'string') throw new Error('a rollup StatusContext came back without context/state')
+      // EXPECTED is GitHub's placeholder for a required status nobody has
+      // posted: an ABSENT context, not a carrier. Counting it as one would
+      // turn every #1662 absence into a rollup disagreement.
+      if (n.state === 'EXPECTED') return []
+      const carrier = carrierFromCommitStatus({ context: n.context, state: n.state.toLowerCase(), updatedAt: n.createdAt ?? '' })
+      return [{ ...carrier, name: n.context, suiteId: null, workflowRunId: null, event: null }]
+    }
+    throw new Error(`a rollup context of unknown type ${JSON.stringify(n.__typename)}`)
+  })
+  const { hasNextPage, endCursor } = rollup.contexts.pageInfo
+  if (hasNextPage && (endCursor === null || endCursor === '')) throw new Error('the rollup says it has another page but gave no cursor')
+  return { state: rollup.state, contexts, nextCursor: hasNextPage ? endCursor : null }
+}
+
+/** Every page of the rollup, through the injected (read-only) runner. A
+ *  state that changes between pages is a head still settling — refused. */
+export async function readRollupWith(readPage: (after: string | null) => Promise<unknown>): Promise<CheckRollup> {
+  const contexts: RollupCarrier[] = []
+  let state: string | null | undefined
+  let after: string | null = null
+  for (let page = 0; page < ROLLUP_MAX_PAGES; page++) {
+    const p = rollupPageFrom(await readPage(after))
+    if (state !== undefined && p.state !== state) throw new Error(`the rollup state moved from ${String(state)} to ${String(p.state)} between pages`)
+    state = p.state
+    contexts.push(...p.contexts)
+    if (p.nextCursor === null) return { state, contexts }
+    after = p.nextCursor
+  }
+  throw new Error(`the rollup ran past ${ROLLUP_MAX_PAGES} pages — a context on an unread page would be lost`)
+}
+
 interface GhRunsPage {
   total_count?: number
   workflow_runs?: { id?: number; name?: string | null; status?: string | null; head_branch?: string | null }[]
@@ -1112,6 +1376,9 @@ export function defaultPrWhyDeps(): PrWhyDeps {
     },
     readReviewRuns: async (sha) => reviewRunsFrom(JSON.parse(await ghRead([
       'api', 'graphql', '-f', `query=${REVIEW_RUNS_QUERY}`, ...vars, '-f', `sha=${sha}`, '-f', `check=${REVIEW_JOB}`,
+    ]))),
+    readRollup: async (sha) => readRollupWith(async (after) => JSON.parse(await ghRead([
+      'api', 'graphql', '-f', `query=${ROLLUP_QUERY}`, ...vars, '-f', `sha=${sha}`, ...(after === null ? [] : ['-f', `after=${after}`]),
     ]))),
     readLiveQueueRuns: async () => {
       // One read per live status, in lifecycle order (see LIVE_RUN_STATUSES);

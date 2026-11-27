@@ -5,9 +5,10 @@ import { fileURLToPath } from 'node:url'
 import {
   diagnosePrWhy, exitCodeFor, renderPrWhy, renderPrWhyPorcelain, gatherPrWhyFacts, prStateFrom, reviewRunsFrom,
   latestReviewRun, runPrWhy, VERDICT_NAMES, liveQueueRunsFrom, queueRunsNaming, LIVE_RUN_STATUSES,
-  type PrState, type PrWhyFacts, type ReviewRun, type VerdictName, type PrWhyDeps, type LiveQueueRun,
+  rollupPageFrom, readRollupWith, rollupVerdictFor,
+  type PrState, type PrWhyFacts, type ReviewRun, type VerdictName, type PrWhyDeps, type LiveQueueRun, type CheckRollup, type RollupCarrier,
 } from '../../orchestrator/src/pr-why.js'
-import { diagnoseHead, defaultMissingChecksDeps, type HeadCheckRun, type HeadWorkflowRun, type MissingChecksDeps } from '../../orchestrator/src/missing-checks.js'
+import { diagnoseHead, defaultMissingChecksDeps, type HeadCheckRun, type HeadDiagnosis, type HeadWorkflowRun, type MissingChecksDeps } from '../../orchestrator/src/missing-checks.js'
 import type { BranchRuleset, CodeOwnerRule } from '../../orchestrator/src/board.js'
 import { REVIEW_OUTCOME_ANNOTATION, reviewOutcomeFromAnnotations, type CheckRunAnnotation } from '../../orchestrator/src/ci.js'
 
@@ -73,21 +74,36 @@ function prState(over: Partial<PrState> = {}): PrState {
   }
 }
 
+/** A rollup that AGREES with the derived verdict: GitHub counting exactly the
+ *  carriers `missing-checks` counts. Every fixture that is not about the
+ *  rollup gets this one, so it states nothing new; the #3076 suite below
+ *  hands in rollups that disagree. */
+function agreeingRollup(d: HeadDiagnosis): CheckRollup {
+  return {
+    state: null,
+    contexts: d.contexts.flatMap((ctx) => ctx.carriers
+      .filter((c) => c.superseded !== true)
+      .map((c): RollupCarrier => ({ ...c, name: ctx.name, suiteId: null, workflowRunId: null, event: null }))),
+  }
+}
+
 const ARMED = { enabledAt: '2026-11-04T12:00:00Z', mergeMethod: 'SQUASH', enabledBy: 'llamenos-auto' }
 const QUEUED = { state: 'QUEUED', position: 2, enqueuedAt: '2026-11-05T11:00:00Z' }
 
 function facts(over: Partial<Omit<PrWhyFacts, 'state'>> & { state?: Partial<PrState> } = {}): PrWhyFacts {
   const { state, ...rest } = over
   const s = prState(state)
+  const checks = rest.checks ?? { ok: true, value: head(greenRuns()) }
   return {
     pr: 4242,
     state: { ok: true, value: s },
     ruleset: { ok: true, value: RULES },
     codeOwners: { ok: true, value: OWNERS },
     files: { ok: true, value: [OWNED_FILE] },
-    checks: { ok: true, value: head(greenRuns()) },
+    checks,
     reviewRuns: { ok: true, value: [reviewRun()] },
     queueRuns: { ok: true, value: [] },
+    rollup: checks.ok ? { ok: true, value: agreeingRollup(checks.value) } : { ok: false, reason: 'not read in this fixture' },
     headAfter: { ok: true, value: s.headRefOid },
     ...rest,
   }
@@ -529,6 +545,241 @@ describe('head-moved', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// #3076: the derived verdict is not what gates the merge — GitHub's rollup is
+// ---------------------------------------------------------------------------
+
+/** pr-3032-9943400.json — see its `_source`. */
+interface Fixture3032 {
+  headRefOid: string
+  requiredContexts: string[]
+  checkRunsAtIncident: unknown[]
+  checkRunsNow: unknown[]
+  rollupAtIncident: unknown
+  rollupNow: unknown
+}
+const F3032 = fixture('pr-3032-9943400.json') as Fixture3032
+const STALE_FAILING = 140266047267
+const DISPATCH_PASS = 140266957072
+const REFRESHED_PASS = 140348047470
+
+/** #3032's head through the REAL readers: the check-run REST payload through
+ *  missing-checks' own `fetchCheckRuns`, the rollup through `readRollupWith`. */
+function deps3032(moment: 'AtIncident' | 'Now', over: Partial<PrWhyDeps> = {}): PrWhyDeps {
+  const rest = defaultMissingChecksDeps(async () => JSON.stringify([{ check_runs: F3032[`checkRuns${moment}`] }]))
+  const rulesBody = [
+    { type: 'pull_request', parameters: { required_approving_review_count: 0, require_code_owner_review: true } },
+    { type: 'required_status_checks', parameters: { required_status_checks: F3032.requiredContexts.map((context) => ({ context })) } },
+  ]
+  return fakeDeps({
+    readPr: async () => prState({ ...approvedByOwner, number: 3032, headRefOid: F3032.headRefOid, headRefName: 'plan/v2-organisations-spec' }),
+    readHead: async () => F3032.headRefOid,
+    readRollup: async () => readRollupWith(async () => F3032[`rollup${moment}`]),
+    ...over,
+  }, { fetchBranchRules: async () => rulesBody, fetchCheckRuns: rest.fetchCheckRuns })
+}
+
+describe('#3076 — replaying #3032: a stale failing carrier GitHub counts', () => {
+  it('names the stale carrier, NOT blocked-unexplained, and never claims every required context passes', async () => {
+    const r = diagnosePrWhy(await gatherPrWhyFacts(deps3032('AtIncident'), 3032))
+    // Two notes: fleet/review's two carriers, and CodeQL's two apps (both counted, both green).
+    expect(r.verdicts.map((v) => v.name)).toEqual(['stale-failing-carrier', 'check-carrier-ambiguous', 'check-carrier-ambiguous'])
+    const text = renderPrWhy(r)
+    expect(text).not.toContain('blocked-unexplained')
+    expect(text).not.toContain('every required context passes')
+    expect(exitCodeFor(r)).toBe(1)
+  })
+  it('says which carrier GitHub counts, which one latest-by-started_at picks, and why the newer one cannot replace it', async () => {
+    const v = diagnosePrWhy(await gatherPrWhyFacts(deps3032('AtIncident'), 3032)).verdicts[0]
+    const ev = v?.evidence.join('\n') ?? ''
+    expect(ev).toContain(`statusCheckRollup (state=FAILURE) counts for fleet/review: github-actions=failure@2026-11-27T01:58:48Z#${STALE_FAILING} in suite 124249318728 (workflow run 45925593257, pull_request) → FAIL`)
+    expect(ev).toContain(`latest by started_at: github-actions=success@2026-11-27T02:01:34Z#${DISPATCH_PASS}`)
+    expect(ev).toContain(`carrier(s) GitHub's rollup does not count: github-actions=success@2026-11-27T02:01:34Z#${DISPATCH_PASS}`)
+    expect(ev).toContain('do not arm')
+    expect(v?.remedy).toContain('IN PLACE, not with a newer suite')
+    expect(v?.remedy).toContain('gh run rerun 45925593257')
+    expect(v?.remedy).toContain('review_requested')
+  })
+  it('keeps the carrier-ambiguity note, and it now names what GitHub counts', async () => {
+    const note = diagnosePrWhy(await gatherPrWhyFacts(deps3032('AtIncident'), 3032)).verdicts
+      .find((x) => x.name === 'check-carrier-ambiguous' && x.evidence[0]?.includes('fleet/review') === true)
+    expect(note?.evidence[0]).toContain(`#${STALE_FAILING}`)
+    expect(note?.evidence[0]).toContain(`#${DISPATCH_PASS}`)
+    expect(note?.evidence[2]).toContain(`GitHub's statusCheckRollup counts github-actions=failure@2026-11-27T01:58:48Z#${STALE_FAILING}`)
+  })
+  it('missing-checks still finds nothing absent on the same head — a present failing context is not an absent one', async () => {
+    const f = await gatherPrWhyFacts(deps3032('AtIncident'), 3032)
+    expect(f.checks.ok && f.checks.value.absentSettled).toEqual([])
+    expect(names(f)).not.toContain('required-context-absent')
+  })
+  it('flips: once the carrier is refreshed IN PLACE (the head as it reads now) nothing about checks is owed', async () => {
+    const f = await gatherPrWhyFacts(deps3032('Now'), 3032)
+    expect(f.rollup.ok && f.rollup.value.contexts.find((c) => c.name === 'fleet/review')?.id).toBe(REFRESHED_PASS)
+    expect(names(f)).toEqual(['blocked-unexplained', 'check-carrier-ambiguous', 'check-carrier-ambiguous'])
+    expect(renderPrWhy(diagnosePrWhy(f))).toContain('AND by GitHub\'s own statusCheckRollup, which agree on all 5')
+  })
+})
+
+/** A rollup naming exactly `ids` out of `runs`, each in its own PR suite. */
+function rollupOf(runs: HeadCheckRun[], ids: number[], state = 'FAILURE'): Observed3076 {
+  return {
+    ok: true,
+    value: {
+      state,
+      contexts: runs.filter((r) => ids.includes(r.id)).map((r) => {
+        const c = head([r]).contexts.find((x) => x.name === r.name)?.carriers[0]
+        if (c === undefined) throw new Error(`fixture run ${r.id} is not a required name`)
+        return { ...c, name: r.name, suiteId: r.id * 10, workflowRunId: r.id * 100, event: 'pull_request' }
+      }),
+    },
+  }
+}
+type Observed3076 = PrWhyFacts['rollup']
+
+describe('#3076 — the disagreement itself: the reported verdict is GitHub\'s, and the split is surfaced', () => {
+  const OLD = '2026-11-05T09:00:00Z'
+  const NEW = '2026-11-05T10:00:00Z'
+  const ci = (id: number, conclusion: string, startedAt: string) => run({ name: 'ci-status', id, conclusion, startedAt })
+  const review = run({ name: 'fleet/review', id: REVIEW_ID })
+  const factsFor = (runs: HeadCheckRun[], counted: number[]) =>
+    facts({ state: approvedByOwner, checks: { ok: true, value: head(runs) }, rollup: rollupOf(runs, counted) })
+
+  it('two carriers, one name, one app: derived PASS, GitHub FAIL → stale-failing-carrier, a blocker naming both', () => {
+    const runs = [ci(100, 'failure', OLD), ci(101, 'success', NEW), review]
+    const r = expectVerdict(factsFor(runs, [100, REVIEW_ID]), 'stale-failing-carrier')
+    expect(r.verdicts.map((v) => v.name)).toEqual(['stale-failing-carrier', 'check-carrier-ambiguous'])
+    const ev = r.verdicts[0]?.evidence.join('\n') ?? ''
+    expect(ev).toContain('github-actions=failure@2026-11-05T09:00:00Z#100 in suite 1000 (workflow run 10000, pull_request) → FAIL')
+    expect(ev).toContain('pr-why\'s latest-per-app rule reads PASS')
+    expect(ev).toContain('latest by started_at: github-actions=success@2026-11-05T10:00:00Z#101')
+    expect(r.verdicts[0]?.remedy).toContain('gh run rerun 10000')
+    expect(r.verdicts[0]?.remedy).not.toContain('review_requested')
+    expect(exitCodeFor(r)).toBe(1)
+  })
+  it('the same carriers with GitHub counting the newer one → nothing about checks is owed', () => {
+    expect(names(factsFor([ci(100, 'failure', OLD), ci(101, 'success', NEW), review], [101, REVIEW_ID]))).toEqual(['blocked-unexplained', 'check-carrier-ambiguous'])
+  })
+  it('derived FAIL, GitHub PASS → rollup-disagrees, exit 2 — never required-check-failing on the derived rule alone', () => {
+    const r = expectVerdict(factsFor([ci(100, 'success', OLD), ci(101, 'failure', NEW), review], [100, REVIEW_ID]), 'rollup-disagrees')
+    expect(r.verdicts.map((v) => v.name)).toEqual(['rollup-disagrees', 'check-carrier-ambiguous'])
+    expect(r.verdicts[0]?.evidence.join('\n')).toContain('GitHub reads ci-status as PASS and pr-why derives FAIL')
+    expect(exitCodeFor(r)).toBe(2)
+  })
+
+  describe('break it: (a) only failing, (b) only passing, (c) failing newer, (d) passing newer', () => {
+    it('(a) only a failing carrier, GitHub agrees → required-check-failing, not a stale carrier', () => {
+      expect(names(factsFor([ci(100, 'failure', OLD), review], [100, REVIEW_ID]))).toEqual(['required-check-failing'])
+    })
+    it('(b) only a passing carrier → clear of check blockers', () => {
+      expect(names(factsFor([ci(100, 'success', OLD), review], [100, REVIEW_ID]))).toEqual(['blocked-unexplained'])
+    })
+    it('(c) a failing carrier newer than a passing one — re-run in place (GitHub counts the newer) → required-check-failing', () => {
+      expect(names(factsFor([ci(100, 'success', OLD), ci(101, 'failure', NEW), review], [101, REVIEW_ID]))).toEqual(['required-check-failing', 'check-carrier-ambiguous'])
+    })
+    it('(c) …in a suite GitHub does not count → rollup-disagrees, loudly', () => {
+      expect(names(factsFor([ci(100, 'success', OLD), ci(101, 'failure', NEW), review], [100, REVIEW_ID]))[0]).toBe('rollup-disagrees')
+    })
+    it('(d) a passing carrier newer than a failing one, in a suite GitHub does not count → stale-failing-carrier, NOT clear', () => {
+      expect(names(factsFor([ci(100, 'failure', OLD), ci(101, 'success', NEW), review], [100, REVIEW_ID]))[0]).toBe('stale-failing-carrier')
+    })
+    it('(d) …refreshed in place (GitHub counts the newer pass) → clear', () => {
+      expect(names(factsFor([ci(100, 'failure', OLD), ci(101, 'success', NEW), review], [101, REVIEW_ID]))).not.toContain('stale-failing-carrier')
+    })
+    it('two PR suites of one app both counted by GitHub, the older red → stale-failing-carrier', () => {
+      expect(names(factsFor([ci(100, 'failure', OLD), ci(101, 'success', NEW), review], [100, 101, REVIEW_ID]))[0]).toBe('stale-failing-carrier')
+    })
+  })
+
+  it('fleet/review: the remedy routes through a genuine review request, from someone the PR can ask', () => {
+    const runs = [run({ name: 'ci-status', id: 100 }), run({ name: 'fleet/review', id: REVIEW_ID - 1, conclusion: 'failure', startedAt: OLD }), review]
+    const v = diagnosePrWhy(factsFor(runs, [100, REVIEW_ID - 1])).verdicts[0]
+    expect(v?.name).toBe('stale-failing-carrier')
+    expect(v?.remedy).toContain('review_requested')
+    expect(v?.remedy).toContain('rhonda-rodododo')
+    expect(v?.remedy).toContain(`gh run rerun ${(REVIEW_ID - 1) * 100}`)
+  })
+
+  describe('absent stays missing-checks\' condition', () => {
+    it('absent in both → required-context-absent, exactly as before', () => {
+      const runs = [run({ name: 'ci-status', id: 100 })]
+      const f = facts({ state: { ...approvedByOwner, reviewRequests: ['llamenos-auto'] }, checks: { ok: true, value: head(runs) }, rollup: rollupOf(runs, [100]) })
+      expect(names(f)).toEqual(['required-context-absent'])
+    })
+    it('an EXPECTED status in the rollup is GitHub\'s placeholder for an absent context, not a carrier', () => {
+      const page = rollupPageFrom({ data: { repository: { object: { statusCheckRollup: { state: 'PENDING', contexts: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{ __typename: 'StatusContext', context: 'fleet/review', state: 'EXPECTED', createdAt: null }],
+      } } } } } })
+      expect(page.contexts).toEqual([])
+    })
+    it('derived absent but GitHub lists a carrier, or the reverse → rollup-disagrees', () => {
+      const runs = [run({ name: 'ci-status', id: 100 })]
+      const listed = facts({ state: approvedByOwner, checks: { ok: true, value: head(runs) }, rollup: rollupOf([...runs, review], [100, REVIEW_ID]) })
+      expect(names(listed)[0]).toBe('rollup-disagrees')
+      const missing = facts({ state: approvedByOwner, rollup: rollupOf(greenRuns(), [100]) })
+      expect(names(missing)[0]).toBe('rollup-disagrees')
+    })
+  })
+
+  it('an unreadable rollup is unknown — never blocked-unexplained, never a derived pass or fail', () => {
+    const r = diagnosePrWhy(facts({ state: approvedByOwner, rollup: { ok: false, reason: 'HTTP 502: Bad Gateway' } }))
+    expect(r.verdicts.map((v) => v.name)).toEqual(['unknown'])
+    expect(r.verdicts[0]?.evidence[0]).toContain('statusCheckRollup')
+    expect(r.verdicts[0]?.evidence[0]).toContain('HTTP 502')
+    expect(exitCodeFor(r)).toBe(2)
+  })
+  it('a 502 on the rollup read end to end is unknown', async () => {
+    const f = await gatherPrWhyFacts(fakeDeps({ readRollup: async () => { throw Object.assign(new Error('x'), { code: 1, stderr: 'HTTP 502: Bad Gateway' }) } }), 4242)
+    expect(names(f)).toEqual(['unknown'])
+  })
+  it('rollupVerdictFor is the worst of every carrier GitHub lists under the name', () => {
+    const runs = [ci(100, 'success', OLD), ci(101, 'failure', NEW)]
+    const r = rollupOf(runs, [100, 101])
+    if (!r.ok) throw new Error('fixture')
+    expect(rollupVerdictFor(r.value, 'ci-status')).toBe('FAIL')
+    expect(rollupVerdictFor(r.value, 'fleet/review')).toBe('ABSENT')
+  })
+})
+
+describe('rollupPageFrom / readRollupWith', () => {
+  it('parses #3032\'s real rollup: every context, normalised as missing-checks normalises them', async () => {
+    const r = await readRollupWith(async () => F3032.rollupNow)
+    expect(r.state).toBe('SUCCESS')
+    expect(r.contexts).toHaveLength(57)
+    expect(r.contexts.find((c) => c.name === 'fleet/review')).toEqual({
+      kind: 'check-run', app: 'github-actions', raw: 'success', state: 'PASS', unjudged: false,
+      startedAt: '2026-11-27T06:22:45Z', id: REFRESHED_PASS, name: 'fleet/review',
+      suiteId: 124249318728, workflowRunId: 45925593257, event: 'pull_request',
+    })
+    expect(r.contexts.filter((c) => c.name === 'CodeQL').map((c) => c.app).sort()).toEqual(['github-actions', 'github-advanced-security'])
+  })
+  it('a commit with no rollup at all is an observation (no carriers), not a failed read', () => {
+    expect(rollupPageFrom({ data: { repository: { object: { statusCheckRollup: null } } } })).toEqual({ state: null, contexts: [], nextCursor: null })
+  })
+  it('throws on GraphQL errors, a missing commit, a missing field, an unattributable context or an unknown type', () => {
+    expect(() => rollupPageFrom({ errors: [{ message: 'boom' }] })).toThrow('GraphQL errors')
+    expect(() => rollupPageFrom({ data: { repository: { object: null } } })).toThrow('missing')
+    expect(() => rollupPageFrom({ data: { repository: { object: {} } } })).toThrow('without a statusCheckRollup')
+    const one = (node: unknown) => ({ data: { repository: { object: { statusCheckRollup: { state: 'SUCCESS', contexts: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node] } } } } } })
+    expect(() => rollupPageFrom(one({ __typename: 'CheckRun', status: 'COMPLETED' }))).toThrow('databaseId/name/status')
+    expect(() => rollupPageFrom(one({ __typename: 'StatusContext', state: 'SUCCESS' }))).toThrow('context/state')
+    expect(() => rollupPageFrom(one({ __typename: 'Mystery' }))).toThrow('unknown type')
+  })
+  it('reads every page, passing the cursor, and refuses a state that moves between pages or a page with no cursor', async () => {
+    const page = (state: string, id: number, next: string | null) => ({ data: { repository: { object: { statusCheckRollup: { state, contexts: {
+      pageInfo: { hasNextPage: next !== null, endCursor: next },
+      nodes: [{ __typename: 'CheckRun', databaseId: id, name: `c${id}`, status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: 't', checkSuite: null }],
+    } } } } } })
+    const seen: (string | null)[] = []
+    const r = await readRollupWith(async (after) => { seen.push(after); return after === null ? page('SUCCESS', 1, 'CUR') : page('SUCCESS', 2, null) })
+    expect(seen).toEqual([null, 'CUR'])
+    expect(r.contexts.map((c) => c.id)).toEqual([1, 2])
+    await expect(readRollupWith(async (after) => (after === null ? page('SUCCESS', 1, 'CUR') : page('FAILURE', 2, null)))).rejects.toThrow('moved')
+    await expect(readRollupWith(async () => page('SUCCESS', 1, ''))).rejects.toThrow('no cursor')
+    await expect(readRollupWith(async () => page('SUCCESS', 1, 'again'))).rejects.toThrow('past 20 pages')
+  })
+})
+
 describe('the remaining states each have a name', () => {
   it('merged (exit 0) / closed (exit 1)', () => {
     expect(exitCodeFor(expectVerdict(facts({ state: { state: 'MERGED' } }), 'merged'))).toBe(0)
@@ -715,6 +966,7 @@ function fakeDeps(over: Partial<PrWhyDeps> = {}, checks: Partial<MissingChecksDe
     readHead: async () => SHA,
     readFiles: async () => [OWNED_FILE],
     readReviewRuns: async () => [reviewRun()],
+    readRollup: async () => agreeingRollup(head(greenRuns())),
     readCodeOwners: async () => `packages/crypto/ @${OWNER}\n`,
     readLiveQueueRuns: async () => [],
     sleep: async () => {},
