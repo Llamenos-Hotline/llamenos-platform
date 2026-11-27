@@ -451,7 +451,7 @@ keeps its own rustup and cargo home at `~/.ci-rust/<runner name>/{rustup,cargo}`
 (`.github/actions/mac-rust-toolchain`, `scripts/ci/mac-rust-toolchain.sh`).
 
 - **Cost:** about 0.75 GiB per runner on the internal volume (minimal profile, host
-  triple plus the two iOS targets), so ~3.75 GiB across five runners. It is not part of
+  triple plus the two iOS targets), so ~1.5 GiB for the two registered runners (a stale, unregistered directory never runs a job and never gets one). It is not part of
   `_work`, so the disk guard's work-volume sweep never reclaims it.
 - **Cold start:** the first job on a runner (or after deleting its directory) bootstraps
   rustup and downloads the toolchain; every later job finds it warm.
