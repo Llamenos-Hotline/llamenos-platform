@@ -419,6 +419,75 @@ describe('tick: branch mismatch (issue #812)', () => {
   })
 })
 
+// #3098: #2925 was re-dispatched after PR #2934 merged; the worker named that
+// PR, no worktree existed, and the "claimed SUCCESS the fleet could not verify"
+// hand-off asked a person to "review PR 2934 from scratch ... merge or close it"
+// — every cycle, because clearing the label only bought one more dispatch.
+describe('tick: a reported PR that is no longer open (#3098)', () => {
+  const stale = (state: 'MERGED' | 'CLOSED'): TickDeps['dispatch'] =>
+    vi.fn(async (): Promise<DispatchOutcome> => ({
+      outcome: 'SUCCESS', branch: 'fleet/ios/1', worktree: undefined,
+      stalePr: { pr: '2934', state }, note: `pr-not-open:2934 ${state.toLowerCase()} dep:abc`,
+    }))
+  const settled = (d: TickDeps) => (d.settle as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { outcome: string; humanAct?: string }
+
+  it('never verifies, reviews or arms, and never comments on the dead PR', async () => {
+    const d = baseDeps({ dispatch: stale('MERGED') })
+    await tick(d)
+    expect(d.verifyMechanical).not.toHaveBeenCalled()
+    expect(d.secondOpinion).not.toHaveBeenCalled()
+    expect(d.enableAutoMerge).not.toHaveBeenCalled()
+    expect(d.commentOnPr).not.toHaveBeenCalled()
+  })
+
+  it('MERGED: asks for the act that is possible — close the issue or say what remains — never "merge or close it"', async () => {
+    const d = baseDeps({ dispatch: stale('MERGED') })
+    await tick(d)
+    const s = settled(d)
+    expect(s.outcome).toBe('BLOCKED')
+    expect(s.humanAct).toContain('PR 2934 is already merged')
+    expect(s.humanAct).toContain('close issue #1')
+    expect(s.humanAct).not.toMatch(/from scratch|merge or close/i)
+  })
+
+  it('CLOSED: says the PR was closed without merging and offers a fresh dispatch', async () => {
+    const d = baseDeps({ dispatch: stale('CLOSED') })
+    await tick(d)
+    const s = settled(d)
+    expect(s.humanAct).toContain('PR 2934 was closed without merging')
+    expect(s.humanAct).not.toMatch(/from scratch|merge or close/i)
+  })
+
+  it('records the stale PR in the note, spends no attempt, and carries no pr on the row', async () => {
+    const d = baseDeps({ dispatch: stale('MERGED') })
+    await tick(d)
+    const row = (d.record as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as RunRecord).find((r) => r.outcome !== 'DISPATCHED')!
+    expect(row.outcome).toBe('BLOCKED')
+    expect(row.pr).toBeUndefined()
+    expect(row.note).toContain('pr-not-open:2934 merged')
+    expect(failedAttemptsIn([row], '1')).toBe(0)
+  })
+
+  it('an item whose PR is genuinely OPEN and unverifiable still gets the "from scratch" hand-off — that protection is not weakened', async () => {
+    const d = baseDeps({
+      dispatch: vi.fn(async (): Promise<DispatchOutcome> =>
+        ({ outcome: 'SUCCESS', branch: 'fleet/ios/1', pr: '42', worktree: undefined })),
+    })
+    await tick(d)
+    expect(settled(d).humanAct).toMatch(/review PR 42 from scratch/)
+    expect(d.commentOnPr).toHaveBeenCalledWith('42', expect.stringContaining('NO automated verification'))
+  })
+})
+
+describe('tick: a vetoed rejection names the label that vetoed (#3098)', () => {
+  it('logs which veto label holds each vetoed item', async () => {
+    const lines: string[] = []
+    const d = baseDeps({ readLabels: async () => ['agent-dispatchable', 'lane:ios', 'needs-human'], log: (m) => { lines.push(m) } })
+    await tick(d)
+    expect(lines).toContain('vetoed (lane ios): 1 by needs-human')
+  })
+})
+
 // Issues #1755 / #2735: a lane whose worktree is wedged on a salvage branch
 // holding real work is SKIPPED before any worker launches. The wedge is a live
 // fact re-derived every pass, so it is never written to a label — a
