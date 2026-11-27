@@ -579,7 +579,7 @@ final class CaseManagementViewModel {
             }
 
             let apiService = self.apiService
-            let readers = try await RecordReaderSet.creationReaders(
+            let readers = try await RecordReaderSet.existingRecordReaders(
                 author: encryptionPubkey,
                 adminReaders: { try await HubAdminReaders.resolve(apiService: apiService) }
             ) {

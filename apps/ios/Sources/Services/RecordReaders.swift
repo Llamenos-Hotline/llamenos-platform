@@ -89,6 +89,22 @@ enum RecordReaderSet {
         return try compose(serverTiers: tiers, author: author, adminReaders: admins)
     }
 
+    /// Readers of a record that ALREADY exists, for a write that replaces one of its tiers.
+    ///
+    /// Unlike ``creationReaders(author:adminReaders:lookup:)`` a failed lookup is an error, not
+    /// a fallback. A re-seal REPLACES the envelope set, so sealing to the author and the admins
+    /// alone would silently drop every assignee and `editRoles` holder the record already had
+    /// (#1682): the write would succeed and those volunteers could no longer open the case.
+    static func existingRecordReaders(
+        author: String,
+        adminReaders: () async throws -> [String],
+        lookup: () async throws -> EnvelopeRecipientsResponse
+    ) async throws -> RecordReaders {
+        let admins = try await adminReaders()
+        let tiers = try await lookup()
+        return try compose(serverTiers: tiers, author: author, adminReaders: admins)
+    }
+
     /// The hub-scoped request for an EXISTING record's tiers: who may already read it, so a
     /// re-seal (a status change replaces the summary) keeps every co-assignee a reader.
     static func lookupRecordTiers(

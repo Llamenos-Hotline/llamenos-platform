@@ -98,7 +98,7 @@ export async function changeRecordStatus(
   const current = await readTriage(record)
   if (!current) throw new SummaryUnreadableError()
 
-  const readers = await resolveRecordReaders({ recordId: record.id, hubId: record.hubId, authorPubkey })
+  const readers = await resolveRecordReaders({ recordId: record.id, hubId: record.hubId, authorPubkey, failClosed: true })
   const summary = await sealCase('summary', JSON.stringify({ ...current, status }), readers.summary)
   const change = await sealCase(
     'comment',

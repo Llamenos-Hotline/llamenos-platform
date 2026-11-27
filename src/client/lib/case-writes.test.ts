@@ -207,6 +207,13 @@ describe('#2779 — a status change is sealed, never sent', () => {
     expect(JSON.stringify(body)).not.toContain('"open"')
   })
 
+  it('refuses to re-seal to fewer readers when the tier lookup fails', async () => {
+    mocks.getRecordEnvelopeRecipients.mockRejectedValue(new Error('network'))
+    await expect(changeRecordStatus(record, 'closed', AUTHOR)).rejects.toThrow(/refusing to re-seal/)
+    expect(mocks.sealCase).not.toHaveBeenCalled()
+    expect(mocks.updateRecord).not.toHaveBeenCalled()
+  })
+
   it('refuses to overwrite a summary this device cannot open', async () => {
     mocks.readTriage.mockResolvedValue(null)
     await expect(changeRecordStatus(record, 'closed', AUTHOR)).rejects.toBeInstanceOf(SummaryUnreadableError)
