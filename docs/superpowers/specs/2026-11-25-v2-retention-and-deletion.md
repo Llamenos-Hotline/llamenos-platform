@@ -61,6 +61,8 @@ From #2186 (audited @ `22501b41f`) and #3005 (@ `d2bf23b38`), re-checked against
 
 ## 2. R1: retention is part of every definition — decided
 
+**Amended by #3033 (releases §7), effective once #2977 stage 3's full-stack PR (releases) lands.** A new category, `releases`: release, request, pending-approval and acknowledgement documents. A delivered or retracted release becomes a tombstone that follows `audit_log`.
+
 ```jsonc
 "retention": {
   "clock": "closed",          // created | updated | closed  (each needs its E4 plaintext kind)

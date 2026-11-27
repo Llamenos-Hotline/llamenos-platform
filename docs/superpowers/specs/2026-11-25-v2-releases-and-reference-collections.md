@@ -6,9 +6,9 @@
 - connectors (#3021, C1–C11): enrollment, manifests, the SDK, chain following and C8's revocation verdicts;
 - document definitions (#3025, E1–E12): relations (E6), changes (E7), the permission grammar (E3) and `seal_document`/`open_document`;
 - retention (#3026): R1's declarations, R4's deletion routine and R9's checkpoint;
-- organisations (#3032, still a draft), for reference sources shared within an org.
+- organisations (#3032, signed off 2026-11-26), for reference sources shared within an org.
 
-**Status:** DRAFT for operator decisions P1–P10 (releases) and Q1–Q7 (reference collections). Revised after an independent review (§17).
+**Status:** SIGNED OFF by the operator, 2026-11-26: P1–P10 and Q1–Q7 as recommended. Revised after an independent review (§17).
 
 Nothing can leave an instance on purpose today. #2941 proposed human-approved, client-rendered
 releases, and #2945 proposed reference collections that are mirrored, then matched on the client.
@@ -56,7 +56,7 @@ by its own clock. A reference collection only ever adds candidates, which a pers
 
 ---
 
-## 2. P1: the release profile — OPERATOR DECISION
+## 2. P1: the release profile — decided
 
 - **A sealed document** of the meta-type `release_profile`, signed by its editor. It is sealed to `admins`, `perm:integration:manage`, and `perm:doc:<type>:release` and `perm:doc:<type>:approve-release` for each type it covers, so requesters and approvers can read the profile they render under.
 - **Pinned** by `policy {kind: release_profile, profile, version, hash}`. Wire §5.4 requires role management for every `policy` link, and this one also requires `integration:manage`. A client renders only under the pinned version, and refuses an older one.
@@ -79,7 +79,7 @@ holds a partner-specific mapping.
 
 ---
 
-## 3. P2–P4: what can be released — OPERATOR DECISION
+## 3. P2–P4: what can be released — decided
 
 ### 3.1 Field and type classes (a #3025 format addendum)
 Every field declares a `class` from a closed list. **Each releasable class has a closed value shape**, so nothing free can hide in it.
@@ -123,7 +123,7 @@ Free text is never copied from a record.
 
 ---
 
-## 4. P5: location, time and re-identification — OPERATOR DECISION
+## 4. P5: location, time and re-identification — decided
 
 A precise, fresh location also says that one of our people is standing there (#2941).
 
@@ -148,7 +148,7 @@ A precise, fresh location also says that one of our people is standing there (#2
 
 ---
 
-## 5. P6 and P10: approval — OPERATOR DECISION
+## 5. P6 and P10: approval — decided
 
 ### 5.1 The flow
 1. The **requester** (`doc:<type>:release`) picks confirmed records and a pinned profile. Their client renders the projection and descriptor, and shows them.
@@ -177,7 +177,7 @@ The check is one crate function, used by clients, the server and the connector. 
 
 ---
 
-## 6. P7: the connector verifies, so the server can't forge, widen or replay — OPERATOR DECISION
+## 6. P7: the connector verifies, so the server can't forge, widen or replay — decided
 
 The server knows the connector group's public key, so it could seal a projection of its own. The
 connector therefore delivers only what passes all of these:
@@ -195,7 +195,7 @@ The connector needs two read-only routes to follow chains: user sigchains for th
 
 ---
 
-## 7. P8: retraction — OPERATOR DECISION
+## 7. P8: retraction — decided
 
 - **`release_retract {releaseId}`** is signed by a holder of `doc:<type>:release`. The connector adds the id to its retracted set, withdraws the release at the destination if the destination supports withdrawal, and acknowledges.
 - **When a released record is deleted:**
@@ -208,7 +208,7 @@ The connector needs two read-only routes to follow chains: user sigchains for th
 
 ---
 
-## 8. P9: signed audit — OPERATOR DECISION
+## 8. P9: signed audit — decided
 
 - Release, approval, retraction and acknowledgement entries carry `projHash`, the signatures and the acknowledgement `seq`. They can be verified without trusting the server. The rest of today's chain can't (§1).
 - **Omission shows.** The server could drop a signed entry and recompute the unsigned chain. But the connector's acknowledgement `seq` and the release ids in sealed release documents let the admins' client find a gap, and alert on it.
@@ -217,7 +217,7 @@ The connector needs two read-only routes to follow chains: user sigchains for th
 
 ---
 
-## 9. Q1: reference collections are per hub — OPERATOR DECISION
+## 9. Q1: reference collections are per hub — decided
 
 #2945's 2026-11-23 update proposed one `ref:<org>:<source>` group shared by an org's hubs. **This spec recommends per-hub copies instead:**
 - A group's members must be derivable from a chain (wire §5.6). The org chain deliberately says nothing about who is in a hub (#3032 G1).
@@ -233,7 +233,7 @@ The connector needs two read-only routes to follow chains: user sigchains for th
 
 ---
 
-## 10. Q2 and Q3: the reference connector — OPERATOR DECISION
+## 10. Q2 and Q3: the reference connector — decided
 
 ### 10.1 What it is
 - A connector whose manifest core has `references` set, and `ingest` and `releases` empty (#3021 C3's reserved fields). That is what "reference connector" means.
@@ -262,7 +262,7 @@ The connector needs two read-only routes to follow chains: user sigchains for th
 
 ---
 
-## 11. Q4 and Q5: matching and confirmation — OPERATOR DECISION
+## 11. Q4 and Q5: matching and confirmation — decided
 
 ### 11.1 Q4: matching on the client
 - The reviewer's client opens the hub's current collection and matches locally. Badges, plates and units use the `exact` normalisers (#3025 E5). Names use a crate fuzzy matcher, which only ever yields candidates.
@@ -276,7 +276,7 @@ The connector needs two read-only routes to follow chains: user sigchains for th
 
 ---
 
-## 12. Q6: actor-only links, and no owners — OPERATOR DECISION
+## 12. Q6: actor-only links, and no owners — decided
 
 - **`actor` is reserved** for system, template and connector types (§3.1). A hub can't define its own "actor" type and fill it.
 - **The validator refuses:**
@@ -289,7 +289,7 @@ The connector needs two read-only routes to follow chains: user sigchains for th
 
 ---
 
-## 13. Q7: live lookup, as #2977 stage 5 — OPERATOR DECISION
+## 13. Q7: live lookup, as #2977 stage 5 — decided
 
 For a source that won't allow bulk export:
 - **The query is sealed to a lookup connector's `connector` group.** That connector *is* a reader of queries, and its manifest says so. The reply is sealed to the asker's user group.
@@ -387,13 +387,15 @@ All three clients are in each PR, and iOS is verified in the PR (`ssh mac` or CI
 
 ## 16. Sign-off
 
-The operator signs off P1–P10 and Q1–Q7 on #2977. That includes these amendments to signed-off decisions:
+The operator signed off P1–P10 and Q1–Q7 on #2977 on 2026-11-26, every decision as recommended. That includes these amendments to signed-off decisions, each marked at its source with an "Amended by #3033" pointer (#3034):
 - C11 (co-hosting, §10.2);
 - C1's routes (§6);
 - C4's permission name (§5.3);
 - E3's action list, E7's class-change rule and the class addendum (§3);
 - R1's `releases` category (§7);
 - Q1 replacing #2945's org-shared group.
+
+Build briefs are on #2977. Live lookup (Q7) is filed as #2977 stage 5.
 
 ---
 
