@@ -99,7 +99,7 @@ Every field declares a `class` from a closed list. **Each releasable class has a
 allowed only for `provider: system | template | connector` types** (§12). `person`, `contact`,
 `note`, `comment`, `call` and `conversation` types never release anything, even through a relation.
 
-**Class changes (an E7 addendum):** once any document exists, a change from a non-releasable class to a releasable one is refused, the same rule as E7's sealed → plaintext. Otherwise text stored under `free_text` could later be relabelled `category`.
+**Class changes (an E7 addendum, amends E7):** once any document exists, a change from a non-releasable class to a releasable one is refused, the same rule as E7's sealed → plaintext. Otherwise text stored under `free_text` could later be relabelled `category`.
 
 ### 3.2 Enforced three times
 1. **The validator** refuses a releasable class in the PII tier. It refuses a profile listing a non-releasable field or type, and an `actor` class on a hub-defined type.
@@ -170,8 +170,8 @@ A release is refused for any of:
 The check is one crate function, used by clients, the server and the connector. There is a vector for every missing-configuration case (#2941 update).
 
 ### 5.3 P10: permissions
-- `doc:<type>:release` is E3's stage 3 addition. `approve-release` is added to E3's action list here, and both get `doc:*:` wildcards.
-- These supersede C4's `records:release` wording.
+- `doc:<type>:release` is E3's stage 3 addition. `approve-release` is added to E3's action list here (amends E3), and both get `doc:*:` wildcards.
+- These supersede C4's `records:release` wording (amends C4).
 - `integration:manage` edits profiles.
 - Admins get them by default. Other roles get them only by deliberate grant.
 
@@ -187,7 +187,7 @@ connector therefore delivers only what passes all of these:
 - **Content:** the descriptor and value checks (§3.2), the inclusion proofs (§3.3), and `projHash`.
 - **Then the delay hold** (§4).
 
-The connector needs two read-only routes to follow chains: user sigchains for the signers, and the hub chain. They are added to C1's connector route list.
+The connector needs two read-only routes to follow chains: user sigchains for the signers, and the hub chain. They are added to C1's connector route list (amends C1).
 
 **Acknowledgements** carry `{releaseId, seq, delivered | refused(reason), partnerRef?}`, signed by the connector and sealed to `admins`. `seq` rises by one per acknowledgement, so the admins' client sees a gap if the server drops one.
 
@@ -204,7 +204,7 @@ The connector needs two read-only routes to follow chains: user sigchains for th
   - **The record's deletion waits for that job, in the same way R9's checkpoint waits.** A shred under the emergency override proceeds, and records that retractions are pending.
 - **Unconfirming a reference edge** (§11.2) retracts every release that carried it.
 - **Beyond the first hop it is best effort.** The dialog states the partner's `relays` statement in words: "this partner says it doesn't relay onward", "says it does", or "hasn't said". It also says that data already received elsewhere can't be recalled, and that we can't verify the partner's statement.
-- **Retention (an R1 addendum):** release, request, pending-approval and acknowledgement documents get category `releases`. A delivered or retracted release becomes a tombstone holding `projHash` and the signatures, which follows `audit_log`.
+- **Retention (an R1 addendum, amends R1):** release, request, pending-approval and acknowledgement documents get category `releases`. A delivered or retracted release becomes a tombstone holding `projHash` and the signatures, which follows `audit_log`.
 
 ---
 
@@ -388,11 +388,11 @@ All three clients are in each PR, and iOS is verified in the PR (`ssh mac` or CI
 ## 16. Sign-off
 
 The operator signed off P1–P10 and Q1–Q7 on #2977 on 2026-11-26, every decision as recommended. That includes these amendments to signed-off decisions, each marked at its source with an "Amended by #3033" pointer (#3034):
-- C11 (co-hosting, §10.2);
-- C1's routes (§6);
-- C4's permission name (§5.3);
-- E3's action list, E7's class-change rule and the class addendum (§3);
-- R1's `releases` category (§7);
+- amends C11 (co-hosting, §10.2);
+- amends C1 (its routes, §6);
+- amends C4 (its permission name, §5.3);
+- amends E3 (its action list, §5.3) and amends E7 (its class-change rule and the class addendum, §3.1);
+- amends R1 (its `releases` category, §7);
 - Q1 replacing #2945's org-shared group.
 
 Build briefs are on #2977. Live lookup (Q7) is filed as #2977 stage 5.

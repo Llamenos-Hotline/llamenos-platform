@@ -3622,6 +3622,16 @@ jobs:
       - name: Check test resource names are unique across parallel workers
         run: bun scripts/check-unique-test-names.ts
 
+      # A v2 spec that says "amends <ID>" must find a "Amended by #<pr> ...,
+      # effective once <condition>" pointer under <ID>'s own heading in the spec
+      # that defines it, so a signed-off spec never reads as current once another
+      # one has changed it (#3034). Tests first (fixtures that must fail), then
+      # the real specs. Node built-ins only, so no `bun install`.
+      - name: Check every spec amendment has its pointer back
+        run: |
+          bun test ./scripts/check-amendment-pointers.test.ts
+          bun scripts/check-amendment-pointers.ts
+
       # Every job that can land on the self-hosted Mac must give `bun install`
       # a per-runner BUN_TMPDIR before its first bun step, or two concurrent
       # installs collide in /private/tmp and eject a merge group (#1916).
