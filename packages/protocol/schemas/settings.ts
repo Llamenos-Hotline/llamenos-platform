@@ -105,17 +105,26 @@ export type ReportTypeResponse = z.infer<typeof reportTypeResponseSchema>
 
 // --- Input schemas ---
 
+/**
+ * One field of a PUT /settings/custom-fields body: the subset of a stored
+ * `customFieldDefinitionSchema` row an admin writes. Named (rather than inline
+ * in `customFieldsBodySchema`) so codegen emits it as `CustomFieldsBodyField`
+ * whatever else holds a `fields` array — the iOS admin editor imports that name.
+ */
+export const customFieldsBodyFieldSchema = z.object({
+  name: z.string().min(1).max(200),
+  label: z.string().min(1).max(200),
+  type: z.enum(['text', 'number', 'select', 'checkbox', 'textarea', 'file', 'location']),
+  required: z.boolean().optional(),
+  options: z.array(z.string().max(200)).optional(),
+  order: z.number().int().optional(),
+  context: z.string().optional(),
+  visibleToUsers: z.boolean().optional(),
+})
+export type CustomFieldsBodyField = z.input<typeof customFieldsBodyFieldSchema>
+
 export const customFieldsBodySchema = z.object({
-  fields: z.array(z.object({
-    name: z.string().min(1).max(200),
-    label: z.string().min(1).max(200),
-    type: z.enum(['text', 'number', 'select', 'checkbox', 'textarea', 'file', 'location']),
-    required: z.boolean().optional(),
-    options: z.array(z.string().max(200)).optional(),
-    order: z.number().int().optional(),
-    context: z.string().optional(),
-    visibleToUsers: z.boolean().optional(),
-  })),
+  fields: z.array(customFieldsBodyFieldSchema),
 })
 
 export const createReportTypeBodySchema = z.object({

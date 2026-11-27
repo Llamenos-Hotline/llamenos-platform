@@ -226,6 +226,18 @@ const REFERENCED_BY_NAME = new Set([
   // one unrelated schema away from being renamed under the mobile clients.
   'BanLookup',
   'BanScopeEvaluation',
+  // #878 — custom field definitions are held by the custom-field list AND by report types
+  // (`fields` on their create/update bodies and responses). Deduplicated, the copy was named
+  // after whichever holder sorted first (`SharedCreateReportTypeBodyField`), renaming the
+  // list item out from under the iOS/Android note screens. It is `CustomFieldDefinition` —
+  // its own schema's name — wherever it appears (Swift: `ProtocolCustomFieldDefinition`).
+  'CustomFieldDefinition',
+  // #878 — the spam settings response holds the over-limit action inline beside the
+  // settings and PATCH schemas; deduplicated it became `SharedOverLimitAction`.
+  'OverLimitAction',
+  // #878 — once the custom-field list item became a `$ref`, the PUT body's `fields` item was
+  // the only inline `fields` item left and quicktype dropped its parent prefix (`Field`).
+  'CustomFieldsBodyField',
 ])
 
 /**
@@ -358,9 +370,29 @@ function deduplicateAnonymousSchemas(
   const extractedSchemas: Array<{ name: string; schema: string }> = []
   const usedDefNames = new Set(existingNames)
 
+  // Inline copies of an opted-in schema that Phase 3 replaces by a named reference.
+  // A shape nested inside one still counts as an occurrence (it is on the wire there),
+  // but it must not NAME the extracted type: the copy is about to become `$ref` to the
+  // schema that owns the shape. Left voting, adding one more holder of an opted-in
+  // schema renamed its nested types after whichever holder sorted first — report types
+  // gaining `fields: CustomFieldDefinition[]` turned `SharedCustomFieldDefinitionType`
+  // into `SharedCreateReportTypeBodyType` under the iOS/Android custom-field screens.
+  const replacedByName: InlineRef[] = []
+  for (const [canon, refs] of [...inlinesByHash, ...unionInlinesByHash]) {
+    if (!optedInCanonicals.has(canon)) continue
+    replacedByName.push(...refs)
+  }
+  const insideReplacedCopy = (ref: InlineRef): boolean =>
+    replacedByName.some(copy =>
+      copy.schemaIdx === ref.schemaIdx
+      && copy.path.length < ref.path.length
+      && copy.path.every((seg, i) => ref.path[i] === seg))
+
   for (const [, refs] of sortedGroups) {
-    // Sort refs by parent schema name for deterministic naming on collision
-    const sortedRefs = [...refs].sort((a, b) =>
+    // Name from the occurrences outside a replaced copy; sort them by parent schema
+    // name for deterministic naming on collision.
+    const namingRefs = refs.filter(r => !insideReplacedCopy(r))
+    const sortedRefs = [...(namingRefs.length > 0 ? namingRefs : refs)].sort((a, b) =>
       schemas[a.schemaIdx].name.localeCompare(schemas[b.schemaIdx].name),
     )
 
@@ -946,6 +978,21 @@ function stripSwiftConvenienceExtensions(lines: string[]): string {
 
   // Note: CaseInteraction and EvidenceListResponse are NOT renamed — the iOS app
   // uses the generated types directly (custom duplicates removed from CaseRecord.swift).
+
+  // A wire `required` property. `required` is a Swift declaration modifier, so quicktype
+  // escapes it with a name derived from the type and from every other name it has
+  // allocated — `fieldRequired`, `sharedFielRequired`, `customFieldDefinitioRequired` —
+  // and the same type's property is renamed whenever an unrelated schema shifts that
+  // allocation (#878: `CustomFieldsBodyField.fieldRequired` became
+  // `customFieldsBodyFieldRequired`). It is `fieldRequired` on every type. The escaped
+  // name only ever appears as its own CodingKey case and declaration, so the rename is
+  // keyed on the `= "required"` mapping and confined to identifiers it names.
+  const escapedRequired = new Set(
+    [...output.matchAll(/^\s+case (\w+) = "required"$/gm)].map(m => m[1]).filter(n => n !== 'fieldRequired'),
+  )
+  for (const name of escapedRequired) {
+    output = output.replace(new RegExp(`\\b${name}\\b`, 'g'), 'fieldRequired')
+  }
 
   // Clean up consecutive blank lines
   output = output.replace(/\n{3,}/g, '\n\n')
