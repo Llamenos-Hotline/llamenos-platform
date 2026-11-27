@@ -501,6 +501,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "This backup doesn't contain this device's post-quantum encryption key, so it can't restore the device. Use account recovery to set up a new device instead.",
     "invalidKey": "Invalid secret key",
     "login": "Log in",
     "loginDescription": "Enter your secret key to access the hotline",

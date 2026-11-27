@@ -134,11 +134,7 @@ describe('Native Crypto IPC', () => {
         const stillLockedAfterWrongPin = !(await invoke('is_crypto_unlocked') as boolean)
 
         // Correct PIN unlocks and returns the public device state.
-        // unlock_with_pin returns `{ state, upgradedKeys }`; a freshly generated
-        // device already holds an X-Wing key, so nothing is upgraded.
-        const unlocked = await invoke('unlock_with_pin', { data: encrypted, pin }) as { state: DeviceKeyState; upgradedKeys: unknown }
-        const deviceState = unlocked.state
-        if (unlocked.upgradedKeys !== null) return { success: false as const, error: 'a new device was re-keyed on unlock' }
+        const deviceState = await invoke('unlock_with_pin', { data: encrypted, pin }) as DeviceKeyState
         const unlockedAfterCorrectPin = await invoke('is_crypto_unlocked') as boolean
 
         return {

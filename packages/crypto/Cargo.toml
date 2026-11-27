@@ -25,7 +25,7 @@ hpke = { version = "0.13", default-features = false, features = ["x25519", "allo
 
 # X-Wing KEM (draft-connolly-cfrg-xwing-kem-06: ML-KEM-768 + X25519), the KEM suite
 # of crypto_format 2 (wire spec D16). Device encryption keys under format 2 are
-# X-Wing keys (`device_keys`, `sigchain` `device_kem`). Pure Rust, no C dependency.
+# X-Wing keys (`device_keys`, `sigchain` `user_init` / `device_add`). Pure Rust, no C dependency.
 x-wing = { version = "0.1.1", features = ["zeroize"] }
 
 # AES-256-GCM (standalone symmetric operations — PIN encryption, items_key)

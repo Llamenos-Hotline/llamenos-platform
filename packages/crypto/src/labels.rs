@@ -477,7 +477,7 @@ pub const LABEL_HUB_KEY_ROTATION: &str = "llamenos:hub-key-rotation:v1";
 
 // --- Device key binding (#2496) ---
 
-/// Possession signature on a user-sigchain `device_add` or `device_kem` link
+/// Possession signature on a user-sigchain `user_init` or `device_add` link
 /// (spec 2026-11-25-v2-device-linking-and-recovery §6): the device's own
 /// Ed25519 key signs `L_DEVICE_POP ‖ 0x00 ‖ H(lp(utf8(user)) ‖ lp(signingPk) ‖
 /// lp(encryptionPk) ‖ u16be(format))`, binding its encryption key to it and to
@@ -677,7 +677,7 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_OFFLINE_QUEUE, // 110
     // 111: Hub key rotation statement (PROTOCOL.md §2.7)
     LABEL_HUB_KEY_ROTATION, // 111
-    // 112: Device possession signature on device_add / device_kem (#2496)
+    // 112: Device possession signature on user_init / device_add (#2496)
     LABEL_DEVICE_POP, // 112
 ];
 

@@ -9,7 +9,8 @@
  * The cross-platform vectors (`packages/crypto/tests/fixtures/v2/device-binding.json`)
  * go through the server's production append path, `CryptoKeysService
  * .appendSigchainLink`, link by link:
- *   - every positive chain is accepted, device_kem and pop-carrying device_add included;
+ *   - every positive chain is accepted: a genesis naming its X-Wing key with a
+ *     pop, and a pop-carrying device_add;
  *   - every negative is refused at its last link, with the server's code for it.
  * Then the registration half: `IdentityService.registerDevice` refuses a key
  * another user holds and writes no row, and a migration-shaped backfill is not
@@ -35,7 +36,12 @@ import { sigchainVerify } from '@llamenos/crypto/ffi'
 import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js'
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
-import { createSigchainLinkMock, deviceKemPayloadMock } from '../../../../tests/mocks/sigchain-mock'
+import {
+  DEVICE_KEM_FORMAT,
+  createSigchainLinkMock,
+  signDevicePopMock,
+  userInitPayloadMock,
+} from '../../../../tests/mocks/sigchain-mock'
 
 const db = createDatabase(requireDatabaseUrl())
 const keys = new CryptoKeysService(db)
@@ -52,18 +58,19 @@ const fixture = JSON.parse(
 
 /**
  * What the server answers for each negative vector's last link: its HTTP status
- * and `code`. A shape the protocol schema already refuses (no pop; a device_kem
- * whose signer is not the device it names) is a plain 400 before the crate is
- * consulted; a chain the crate refuses carries the crate's code; a key another
- * user holds is the claim's 409.
+ * and `code`. A shape the protocol schema already refuses (a genesis naming an
+ * X25519 key or no X-Wing key at all; a device_add with no pop) is a plain 400
+ * before the crate is consulted; a chain the crate refuses carries the crate's
+ * code; a key another user holds is the claim's 409.
  */
 const SERVER_REFUSAL: Record<string, { status: number; code?: string }> = {
-  device_kem_bad_pop: { status: 400, code: 'chain_device_pop' },
-  device_kem_pop_for_another_user: { status: 400, code: 'chain_device_pop' },
+  user_init_with_x25519_key: { status: 400 },
+  user_init_without_xwing_key: { status: 400 },
+  user_init_bad_pop: { status: 400, code: 'chain_device_pop' },
   device_add_bad_pop: { status: 400, code: 'chain_device_pop' },
+  device_add_pop_for_another_user: { status: 400, code: 'chain_device_pop' },
   device_add_without_pop: { status: 400 },
   device_add_twice: { status: 400, code: 'chain_key_reused' },
-  device_kem_signed_by_another_device: { status: 400 },
   reused_key_within_a_chain: { status: 400, code: 'chain_key_reused' },
   reused_key_across_users: { status: 409, code: 'key_reused' },
 }
@@ -77,7 +84,6 @@ function positive(name: string): Case {
 const LINK_TYPE: Record<string, SigchainLinkType> = {
   user_init: 'genesis',
   device_add: 'device_add',
-  device_kem: 'device_kem',
 }
 
 function body(link: SigchainLink): AppendSigchainLinkBody {
@@ -230,7 +236,7 @@ describe('device registration is bound to one user (#2496)', () => {
   })
 
   it('binds a registration to the user\'s sigchain once it has one', async () => {
-    const c = positive('device_kem')
+    const c = positive('user_init_with_xwing_key_and_pop')
     await appendAll(c)
     const user = c.chains[0][0].signerPubkey
     const genesis = JSON.parse(c.chains[0][0].payloadJson) as { devicePubkey: string; deviceEncryptionPubkey: string }
@@ -254,7 +260,7 @@ describe('device registration is bound to one user (#2496)', () => {
   })
 
   it('refuses registering a key another user\'s sigchain names', async () => {
-    const c = positive('device_kem')
+    const c = positive('user_init_with_xwing_key_and_pop')
     await appendAll(c)
     const genesis = JSON.parse(c.chains[0][0].payloadJson) as { deviceEncryptionPubkey: string }
     let refused: unknown = null
@@ -267,20 +273,52 @@ describe('device registration is bound to one user (#2496)', () => {
   })
 })
 
-describe('the desktop test mock publishes what the real crate accepts', () => {
-  // Playwright's IPC mock appends real device_kem links to a real server. If its
+/** A random device: Ed25519 seed, X25519 and X-Wing public keys. */
+function randomDevice(): { seed: Uint8Array; pubkey: string; x25519: string; kem: string } {
+  const seed = crypto.getRandomValues(new Uint8Array(32))
+  return {
+    seed,
+    pubkey: bytesToHex(ed25519.getPublicKey(seed)),
+    x25519: bytesToHex(x25519.getPublicKey(crypto.getRandomValues(new Uint8Array(32)))),
+    kem: bytesToHex(ml_kem768_x25519.keygen(crypto.getRandomValues(new Uint8Array(32))).publicKey),
+  }
+}
+
+describe('the desktop test mock builds the genesis the real crate accepts', () => {
+  // Playwright's IPC mock appends real genesis links to a real server. If its
   // X-Wing key or pop were not what the crate verifies, every desktop E2E user
-  // would fail to publish (and the console guard would fail the run).
-  it('a mock-built device_kem verifies through ffi_sigchain_verify', () => {
-    const seed = crypto.getRandomValues(new Uint8Array(32))
-    const user = bytesToHex(ed25519.getPublicKey(seed))
-    const genesis = createSigchainLinkMock(seed, 'g', 'mock-dev', 1, null, '2026-11-26T00:00:00Z', JSON.stringify({
-      type: 'user_init', deviceId: 'mock-dev', devicePubkey: user,
-      deviceEncryptionPubkey: bytesToHex(x25519.getPublicKey(crypto.getRandomValues(new Uint8Array(32)))),
-    }))
-    const kem = bytesToHex(ml_kem768_x25519.keygen(crypto.getRandomValues(new Uint8Array(32))).publicKey)
-    const link = createSigchainLinkMock(seed, 'k', 'mock-dev', 2, genesis.entryHash, '2026-11-26T00:01:00Z', deviceKemPayloadMock(seed, kem, user))
-    const state = sigchainVerify([genesis, link])
-    expect(state.deviceKemKeys).toEqual([{ devicePubkey: user, kemPubkey: kem, format: 2 }])
+  // would fail onboarding (and the console guard would fail the run).
+  it('a mock-built user_init verifies through ffi_sigchain_verify and names its X-Wing key', () => {
+    const d = randomDevice()
+    const genesis = createSigchainLinkMock(d.seed, 'g', 'mock-dev', 1, null, '2026-11-26T00:00:00Z',
+      userInitPayloadMock(d.seed, 'mock-dev', d.x25519, d.kem))
+    const state = sigchainVerify([genesis])
+    expect(state.activeDeviceKeys).toEqual([{ devicePubkey: d.pubkey, encryptionPubkey: d.kem, format: 2 }])
+  })
+})
+
+describe('ffi_sigchain_verify sizes its output from the chain', () => {
+  // The verified state repeats every active device's 2432-hex X-Wing key (in
+  // activeDeviceKeys and again in namedKeys), so it outgrows the input. A fixed
+  // input + 4 KiB buffer refused a legitimate multi-device chain.
+  it('verifies a chain of six X-Wing devices', () => {
+    const primary = randomDevice()
+    const user = primary.pubkey
+    const links = [createSigchainLinkMock(primary.seed, 'g', 'p', 1, null, '2026-11-26T00:00:00Z',
+      userInitPayloadMock(primary.seed, 'p', primary.x25519, primary.kem))]
+    const added = Array.from({ length: 5 }, () => randomDevice())
+    for (const [i, d] of added.entries()) {
+      const payload = {
+        type: 'device_add', deviceId: `d${i}`, devicePubkey: d.pubkey, deviceEncryptionPubkey: d.x25519,
+        encryptionPubkey: d.kem, format: DEVICE_KEM_FORMAT, pop: signDevicePopMock(d.seed, user, d.kem, DEVICE_KEM_FORMAT),
+      }
+      const prev = links[links.length - 1]
+      links.push(createSigchainLinkMock(primary.seed, `l${i}`, 'p', prev.seq + 1, prev.entryHash, `2026-11-26T00:0${i + 1}:00Z`, JSON.stringify(payload)))
+    }
+    const state = sigchainVerify(links)
+    expect(state.activeDeviceKeys.map(k => k.encryptionPubkey)).toEqual([primary.kem, ...added.map(d => d.kem)])
+    expect(new TextEncoder().encode(JSON.stringify(state)).length).toBeGreaterThan(
+      new TextEncoder().encode(JSON.stringify(links)).length + 4096,
+    )
   })
 })

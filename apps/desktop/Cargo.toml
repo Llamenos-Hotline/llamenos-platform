@@ -72,6 +72,10 @@ rustls-webpki = "0.103"
 webpki-root-certs = "1"
 
 [dev-dependencies]
+# Test-only: the backup round trip (#3053) encapsulates to the device's X-Wing
+# key before the backup and decapsulates with the restored seed. Same version
+# llamenos-core already links, so the lockfile gains no package.
+x-wing = { version = "0.1.1", features = ["zeroize"] }
 # Test-only self-signed certificate generation + TLS server acceptor for
 # cert_pin.rs's pinning tests (#775) — never compiled into the shipped app.
 rcgen = "0.14"

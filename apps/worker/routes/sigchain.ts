@@ -71,7 +71,7 @@ sigchainRoutes.post('/',
   describeRoute({
     tags: ['Sigchain'],
     summary: 'Append a signed sigchain link',
-    description: 'Users may only append to their own sigchain. The server validates link semantics (genesis only at seq 1, payload.type matches linkType), hash-chain continuity (seqNo, prevHash), the recomputed entry hash and the Ed25519 signature before persisting. A device_add or device_kem is verified with the whole chain by packages/crypto (possession signature, signer active, a device added once), and every device key a link names is claimed for this user: one another user holds is refused (#2496).',
+    description: 'Users may only append to their own sigchain. The server validates link semantics (genesis only at seq 1, payload.type matches linkType), hash-chain continuity (seqNo, prevHash), the recomputed entry hash and the Ed25519 signature before persisting. A genesis or device_add is verified with the whole chain by packages/crypto (the X-Wing key and its possession signature, a device added once), and every device key a link names is claimed for this user: one another user holds is refused (#2496).',
     responses: {
       201: {
         description: 'Link appended',
@@ -106,8 +106,8 @@ sigchainRoutes.post('/',
       return c.json(link, 201)
     } catch (err) {
       if (err instanceof CryptoKeyError) {
-        // `code`: the crate's closed rejection code for a refused device_add /
-        // device_kem (`chain_device_pop`, …), or `key_reused` for a key another
+        // `code`: the crate's closed rejection code for a refused genesis /
+        // device_add (`chain_device_pop`, …), or `key_reused` for a key another
         // user holds (#2496).
         return c.json({ error: err.message, ...(err.code && { code: err.code }) }, err.status)
       }

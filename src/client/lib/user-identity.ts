@@ -8,21 +8,22 @@
  * every later key-management feature assumes exists
  * (docs/protocol/PROTOCOL.md §2.11 "Identity initialisation"):
  *
- *   1. seq 1 `genesis` link (payload `user_init`) naming this device's
- *      Ed25519 + X25519 keys, signed by this device.
+ *   1. seq 1 `genesis` link (payload `user_init`, built in Rust) naming this
+ *      device's Ed25519, X25519 and X-Wing keys with the possession signature
+ *      over the X-Wing key, signed by this device (spec
+ *      2026-11-25-v2-device-linking-and-recovery §5 as revised 2026-11-26). No
+ *      `device_add` can name the first device, so this is where its X-Wing key
+ *      enters the chain; the key is fixed for the device's life.
  *   2. PUK generation 1: seed created in Rust CryptoState, HPKE-sealed to this
  *      device (LABEL_PUK_WRAP_TO_DEVICE, AAD `<label>:<deviceId>`), stored at
  *      POST /api/puk/envelopes. The envelope is stored BEFORE the chain claims
  *      the PUK, so a chain never names a PUK whose seed was lost.
  *   3. seq 2 `puk_epoch` link binding the PUK's public keys into the chain.
- *   4. A `device_kem` link publishing this device's X-Wing key, signed by the
- *      device with its possession signature (spec
- *      2026-11-25-v2-device-linking-and-recovery §5). A device without one is
- *      left out of its hubs' migration genesis.
- *   5. The chain as the server now stores it is re-verified with
+ *   4. The chain as the server now stores it is re-verified with
  *      packages/crypto `verify_sigchain`, so any client/server disagreement on
  *      the canonical form fails onboarding instead of shipping a chain no
- *      device can verify.
+ *      device can verify — and the verified chain must name the X-Wing key
+ *      this device holds.
  *
  * Every step is keyed off the server's current chain, so a retry after a
  * partial failure resumes where the previous attempt stopped.
@@ -32,20 +33,19 @@ import {
   sigchainGenesisPayloadSchema,
   type SigchainGenesisPayload,
   type SigchainLinkRecord,
-  type SigchainDeviceKemPayload,
   type SigchainLinkType,
   type SigchainPukEpochPayload,
 } from '@protocol/schemas'
 import { appendSigchainLink, distributePukEnvelopes, getSigchain } from './api/identity'
 import { ApiError } from './api/client'
 import {
-  deviceKemPayloadFromState,
   getDevicePubkeys,
   getVerifiedSigchainHead,
   setVerifiedSigchainHead,
   pukCreateFromState,
   sigchainCreateLinkFromState,
   sigchainVerify,
+  userInitPayloadFromState,
   type SigchainLink,
   type SigchainVerifiedState,
 } from './platform'
@@ -103,7 +103,7 @@ export function toCryptoSigchainLink(record: SigchainLinkRecord): SigchainLink {
 async function appendSignedLink(
   userPubkey: string,
   linkType: SigchainLinkType,
-  payload: SigchainGenesisPayload | SigchainPukEpochPayload | SigchainDeviceKemPayload,
+  payload: SigchainGenesisPayload | SigchainPukEpochPayload,
   head: SigchainLinkRecord | null,
 ): Promise<SigchainLinkRecord> {
   const seqNo = head ? head.seqNo + 1 : SIGCHAIN_GENESIS_SEQ
@@ -149,12 +149,7 @@ async function initializeUserIdentityNow(userPubkey: string): Promise<SigchainVe
   let { links } = await getSigchain(userPubkey)
 
   if (links.length === 0) {
-    const genesis: SigchainGenesisPayload = {
-      type: 'user_init',
-      deviceId: device.deviceId,
-      devicePubkey: device.signingPubkeyHex,
-      deviceEncryptionPubkey: device.encryptionPubkeyHex,
-    }
+    const genesis = sigchainGenesisPayloadSchema.parse(JSON.parse(await userInitPayloadFromState()))
     links = [await appendSignedLink(userPubkey, 'genesis', genesis, null)]
   }
 
@@ -177,52 +172,34 @@ async function initializeUserIdentityNow(userPubkey: string): Promise<SigchainVe
     links = [...links, await appendSignedLink(userPubkey, 'puk_epoch', epoch, links[links.length - 1])]
   }
 
-  return ensureDeviceKemNow(userPubkey)
+  return verifyDeviceIdentityNow(userPubkey)
 }
 
 /**
- * Publish this device's X-Wing key in the user's chain, if the chain does not
- * already name it (spec 2026-11-25-v2-device-linking-and-recovery §5, L4).
- * Runs on every start: a pilot device created before X-Wing keys existed got
- * its key at unlock (`unlockWithPin`), and publishes it here, before its hubs'
- * migration genesis. Idempotent: a chain already naming this device's current
- * key gets only the verification.
+ * Verify the user's chain as the server stores it, and that it authorises this
+ * device under the X-Wing key this device holds. The key is never redrawn and
+ * never republished: a chain naming another key for this device (a device
+ * restored from a backup without its X-Wing seed, or a clone of another
+ * device's identity) is reported, not repaired — re-keying a device is
+ * removing it and linking it again (spec L6).
  *
- * The link is signed by this device itself, valid only while the device is
- * active, and carries the possession signature made in Rust. A key the chain
- * names for this device that is NOT the key this device holds (a backup
- * restore, or a device that was given a new key) is replaced by this one.
- *
- * @returns the verified chain state, which names this device's key.
+ * @returns the verified chain state.
  */
-export function ensureDeviceKem(userPubkey: string): Promise<SigchainVerifiedState> {
-  return serialised(() => ensureDeviceKemNow(userPubkey))
-}
-
-async function ensureDeviceKemNow(userPubkey: string): Promise<SigchainVerifiedState> {
+async function verifyDeviceIdentityNow(userPubkey: string): Promise<SigchainVerifiedState> {
   const device = await getDevicePubkeys()
   if (!device) throw new Error('Device keys are not unlocked')
-  if (!device.kemPubkeyHex) throw new Error('This device has no X-Wing key; unlock it again to create one')
 
-  let { links } = await getSigchain(userPubkey)
+  const { links } = await getSigchain(userPubkey)
   await assertExtendsVerifiedHead(userPubkey, links)
-  let verified = await sigchainVerify(links.map(toCryptoSigchainLink))
+  const verified = await sigchainVerify(links.map(toCryptoSigchainLink))
   if (verified.userPubkey !== userPubkey || !verified.activeDevicePubkeys.includes(device.signingPubkeyHex)) {
     throw new Error('Verified sigchain does not authorise this device')
   }
   await recordVerifiedHead(verified)
-  const published = verified.deviceKemKeys.find(k => k.devicePubkey === device.signingPubkeyHex)
-  if (published?.kemPubkey === device.kemPubkeyHex) return verified
-
-  const payload = JSON.parse(await deviceKemPayloadFromState(userPubkey)) as SigchainDeviceKemPayload
-  await appendSignedLink(userPubkey, 'device_kem', payload, links[links.length - 1])
-
-  links = (await getSigchain(userPubkey)).links
-  verified = await sigchainVerify(links.map(toCryptoSigchainLink))
-  if (verified.deviceKemKeys.find(k => k.devicePubkey === device.signingPubkeyHex)?.kemPubkey !== device.kemPubkeyHex) {
-    throw new Error('Verified sigchain does not name this device\'s X-Wing key')
+  const named = verified.activeDeviceKeys.find(k => k.devicePubkey === device.signingPubkeyHex)
+  if (named?.encryptionPubkey !== device.kemPubkeyHex) {
+    throw new Error('The verified sigchain names a different X-Wing key for this device than the one it holds')
   }
-  await recordVerifiedHead(verified)
   return verified
 }
 
@@ -249,15 +226,16 @@ async function recordVerifiedHead(verified: SigchainVerifiedState): Promise<void
 /**
  * Bring a signed-in device's identity up to date, on every start: the user's
  * genesis and first PUK if this is the user's identity device and its chain is
- * still empty (a user created before identity initialisation existed), then the
- * device's `device_kem`. A device that is not the user's identity device and
- * finds no chain cannot create one; it reports that rather than skipping.
+ * still empty (a user created before identity initialisation existed), then
+ * verification that the chain authorises this device under the X-Wing key it
+ * holds. A device that is not the user's identity device and finds no chain
+ * cannot create one; it reports that rather than skipping.
  */
 export function ensureDeviceIdentity(userPubkey: string): Promise<SigchainVerifiedState> {
   return serialised(async () => {
     const { links } = await getSigchain(userPubkey)
     await assertExtendsVerifiedHead(userPubkey, links)
     if (links.length === 0) return initializeUserIdentityNow(userPubkey)
-    return ensureDeviceKemNow(userPubkey)
+    return verifyDeviceIdentityNow(userPubkey)
   })
 }

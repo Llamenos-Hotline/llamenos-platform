@@ -160,12 +160,16 @@ function LoginPage() {
   // --- Backup file restore ---
   async function processFile(file: File) {
     setSelectedFileName(file.name)
-    const backup = await readBackupFile(file)
-    if (!backup) {
+    const read = await readBackupFile(file)
+    if (read.kind === 'missing-xwing-seed') {
+      setValidationError(t('auth.backupMissingXwingSeed'))
+      return
+    }
+    if (read.kind !== 'backup') {
       setValidationError(t('auth.invalidBackup'))
       return
     }
-    setBackupFile(backup)
+    setBackupFile(read.backup)
     setRecoveryStep('decrypt')
     setValidationError('')
   }

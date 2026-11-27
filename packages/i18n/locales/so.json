@@ -182,6 +182,7 @@
     "decryptFailed": "Waa lagu guul dareeystay furitaanka kaydka",
     "dropOrChoose": "Soo dhig ama dooro faylka kaydka",
     "invalidBackup": "Faylka kaydku waa khalad",
+    "backupMissingXwingSeed": "Kaydkan ma laha furaha sirta ah ee post-quantum ee qalabkan, sidaa darteed ma soo celin karo qalabka. Taa beddelkeeda isticmaal soo celinta akoonka si aad u dejiso qalab cusub.",
     "invalidKey": "Furaha sirta ah waa khalad",
     "login": "Soo gal",
     "loginDescription": "Geli furaha sirta ah si aad u gasho khadka taleefanka",

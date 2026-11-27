@@ -326,7 +326,7 @@ mod tests {
             device_id: "d".into(),
             signing_pubkey_hex: "ed".repeat(32),
             encryption_pubkey_hex: device_pk.clone(),
-            kem_pubkey_hex: None,
+            kem_pubkey_hex: "4b".repeat(crate::device_keys::XWING_PUBLIC_KEY_LEN),
         };
         let sealed = seal_as_device(
             ShiftFieldPurpose::AvailabilityReason,

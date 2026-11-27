@@ -95,7 +95,8 @@ export const EXPECTED_CONSOLE_ERRORS: readonly ExpectedConsoleError[] = [
     // is not the chain head with a 409 (`appendValidatedSigchainLink`): another
     // window of the same user appended first. `retryOnChainConflict`
     // (src/client/lib/user-identity.ts) re-reads the chain and either finds the
-    // link already there or appends after it (#2496 device_kem on every start).
+    // link already there or appends after it (#2496: two windows of a user with
+    // no chain yet both running the genesis / first-PUK steps).
     message: /^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
     source: /\/api\/users\/[0-9a-f]{64}\/sigchain$/,
     reason: 'losing the sigchain append race is a 409 by contract; the identity step re-reads the chain and retries',

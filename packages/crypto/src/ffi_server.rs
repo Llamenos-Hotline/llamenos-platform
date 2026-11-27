@@ -1153,7 +1153,7 @@ pub extern "C" fn ffi_recovery_liveness_verify(
 // ── User sigchain (`crate::sigchain`) ──────────────────────────────────
 
 /// Verify a whole user sigchain (`crate::sigchain::verify_sigchain`): hash
-/// chain, signatures, the device set, `device_add` / `device_kem` possession
+/// chain, signatures, the device set, `user_init` / `device_add` possession
 /// signatures (#2496) and in-chain key reuse. The server runs it over the
 /// stored chain plus a candidate link before appending, so the server accepts
 /// exactly the chains every client verifier accepts.

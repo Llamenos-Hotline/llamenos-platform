@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "Sovgad sa a pa gen kle chifreman pòs-kantik aparèy sa a, kidonk li pa ka restore aparèy la. Sèvi ak rekiperasyon kont pou w konfigire yon nouvo aparèy pito.",
     "invalidKey": "Kle sekrè envalid",
     "login": "Konekte",
     "loginDescription": "Antre kle sekrè ou pou aksede liy asistans lan",

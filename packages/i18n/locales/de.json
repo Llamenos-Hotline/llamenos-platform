@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "Diese Sicherung enthält nicht den Post-Quanten-Verschlüsselungsschlüssel dieses Geräts und kann das Gerät daher nicht wiederherstellen. Richte stattdessen über die Kontowiederherstellung ein neues Gerät ein.",
     "invalidKey": "Ungültiger geheimer Schlüssel",
     "login": "Anmelden",
     "loginDescription": "Geben Sie Ihren geheimen Schlüssel ein, um auf die Hotline zuzugreifen",

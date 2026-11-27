@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "В этой резервной копии нет постквантового ключа шифрования этого устройства, поэтому она не может его восстановить. Вместо этого настройте новое устройство через восстановление учётной записи.",
     "invalidKey": "Неверный секретный ключ",
     "login": "Войти",
     "loginDescription": "Введите секретный ключ для доступа к горячей линии",

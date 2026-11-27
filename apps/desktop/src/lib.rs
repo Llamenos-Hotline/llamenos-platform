@@ -223,8 +223,7 @@ pub fn run() {
             crypto::sigchain_create_link_from_state,
             crypto::sigchain_verify,
             crypto::sigchain_verify_users,
-            crypto::sigchain_genesis_device_set,
-            crypto::device_kem_payload_from_state,
+            crypto::user_init_payload_from_state,
             crypto::sigchain_verify_link,
             // SFrame key derivation
             crypto::sframe_derive_key,

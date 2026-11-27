@@ -2852,6 +2852,7 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "webpki-root-certs",
+ "x-wing",
  "x25519-dalek 2.0.1",
  "zeroize",
 ]

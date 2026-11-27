@@ -8,7 +8,8 @@
  * Every client produces the same state when a user is created
  * (docs/protocol/PROTOCOL.md §2.11 "Identity initialisation"):
  *
- *   seq 1  genesis    payload sigchainGenesisPayload   (signed by the first device)
+ *   seq 1  genesis    payload sigchainGenesisPayload   (signed by the first device;
+ *                      names its X25519 and X-Wing keys + possession signature)
  *          PUK gen 1 envelope sealed to that device    (POST /api/puk/envelopes)
  *   seq 2  puk_epoch  payload sigchainPukEpochPayload  (binds the PUK public keys)
  *
@@ -30,13 +31,13 @@ const xwingHexSchema = z
   .string()
   .regex(new RegExp(`^[0-9a-f]{${XWING_PUBLIC_KEY_BYTES * 2}}$`), 'Must be a 1216-byte X-Wing public key in lowercase hex')
 const ed25519SignatureHexSchema = z.string().regex(/^[0-9a-f]{128}$/, 'Must be a 64-byte Ed25519 signature in lowercase hex')
-/** The crypto_format a device's X-Wing key belongs to (D16). */
+/** The crypto_format a device's X-Wing key belongs to (D16). Named by `user_init` and `device_add`. */
 export const DEVICE_KEM_FORMAT = 2
 /**
  * Exactly `DEVICE_KEM_FORMAT`. A bounded integer, not `z.literal(2)`: a numeric
  * literal becomes a numeric enum that the Swift/Kotlin codegen cannot name.
  */
-const deviceKemFormatSchema = z.number().int().min(DEVICE_KEM_FORMAT).max(DEVICE_KEM_FORMAT)
+const deviceKeyFormatSchema = z.number().int().min(DEVICE_KEM_FORMAT).max(DEVICE_KEM_FORMAT)
 
 /**
  * Sequence number of the genesis link. Matches packages/crypto
@@ -45,7 +46,7 @@ const deviceKemFormatSchema = z.number().int().min(DEVICE_KEM_FORMAT).max(DEVICE
 export const SIGCHAIN_GENESIS_SEQ = 1
 
 /** Link types the generic append route accepts (recovery links use their own route). */
-export const sigchainLinkTypeSchema = z.enum(['genesis', 'device_add', 'device_remove', 'key_rotate', 'puk_epoch', 'device_kem'])
+export const sigchainLinkTypeSchema = z.enum(['genesis', 'device_add', 'device_remove', 'key_rotate', 'puk_epoch'])
 export type SigchainLinkType = z.infer<typeof sigchainLinkTypeSchema>
 
 /**
@@ -58,20 +59,30 @@ export const SIGCHAIN_PAYLOAD_TYPE_FOR_LINK: Record<SigchainLinkType, string> = 
   device_remove: 'device_remove',
   key_rotate: 'key_rotate',
   puk_epoch: 'puk_epoch',
-  device_kem: 'device_kem',
 }
 
 // --- Link payloads (hashed + signed; see packages/crypto/src/sigchain.rs) ---
 
-/** Genesis (seq 1): the user's first device, self-signed. */
+/**
+ * Genesis (seq 1): the user's first device, self-signed. It names the device's
+ * X-Wing key with `format: 2` and the possession signature — the same fields and
+ * the same `L_DEVICE_POP` construction as `device_add` — because no `device_add`
+ * can name the first device (spec 2026-11-25-v2-device-linking-and-recovery §5
+ * as revised 2026-11-26; wire spec §1.4). Built in Rust (`sigchain::user_init_payload`).
+ */
 export const sigchainGenesisPayloadSchema = z.object({
   type: z.literal('user_init'),
   /** Client-generated device ID (DeviceKeyState.deviceId) — also the PUK envelope address. */
   deviceId: z.string().min(1),
   /** The device's Ed25519 signing key — equals the link's signerPubkey and the user's pubkey. */
   devicePubkey: ed25519HexSchema,
-  /** The device's X25519 key — the HPKE recipient for this device's PUK envelope. */
+  /** The device's X25519 key — the HPKE recipient for this device's PUK envelope (format-1 data). */
   deviceEncryptionPubkey: x25519HexSchema,
+  /** The device's X-Wing key: what format-2 grants and headers are sealed to. Fixed for the device's life. */
+  encryptionPubkey: xwingHexSchema,
+  format: deviceKeyFormatSchema,
+  /** Ed25519 by `devicePubkey` over L_DEVICE_POP ‖ 0x00 ‖ H(lp(user) ‖ lp(devicePubkey) ‖ lp(encryptionPubkey) ‖ u16be(format)). */
+  pop: ed25519SignatureHexSchema,
 })
 export type SigchainGenesisPayload = z.infer<typeof sigchainGenesisPayloadSchema>
 
@@ -79,7 +90,8 @@ export type SigchainGenesisPayload = z.infer<typeof sigchainGenesisPayloadSchema
  * device_add: an already-authorised device authorises a new one. Carries the new
  * device's X-Wing key and its possession signature `pop`, made by the NEW device
  * (spec 2026-11-25-v2-device-linking-and-recovery §6; `sigchain::sign_device_pop`).
- * A device is added once: re-adding an active or removed device is refused.
+ * A device is added once: re-adding an active or removed device is refused. A
+ * device's keys are fixed for its life — rotating one is remove-and-relink (L6).
  */
 export const sigchainDeviceAddPayloadSchema = z.object({
   type: z.literal('device_add'),
@@ -89,27 +101,11 @@ export const sigchainDeviceAddPayloadSchema = z.object({
   deviceEncryptionPubkey: x25519HexSchema,
   /** The device's X-Wing key: what format-2 grants and headers are sealed to. */
   encryptionPubkey: xwingHexSchema,
-  format: deviceKemFormatSchema,
+  format: deviceKeyFormatSchema,
   /** Ed25519 by `devicePubkey` over L_DEVICE_POP ‖ 0x00 ‖ H(lp(user) ‖ lp(devicePubkey) ‖ lp(encryptionPubkey) ‖ u16be(format)). */
   pop: ed25519SignatureHexSchema,
 })
 export type SigchainDeviceAddPayload = z.infer<typeof sigchainDeviceAddPayloadSchema>
-
-/**
- * device_kem: a device publishes its X-Wing key (spec §5, L4). Signed by the
- * device itself (the link's signer IS `devicePubkey`), valid only while that
- * device is active. A pilot device appends it on its first start after K-A; a
- * device without one is left out of its hub's migration genesis device set.
- */
-export const sigchainDeviceKemPayloadSchema = z.object({
-  type: z.literal('device_kem'),
-  devicePubkey: ed25519HexSchema,
-  format: deviceKemFormatSchema,
-  encryptionPubkey: xwingHexSchema,
-  /** Ed25519 by `devicePubkey` over L_DEVICE_POP ‖ 0x00 ‖ H(lp(user) ‖ lp(devicePubkey) ‖ lp(encryptionPubkey) ‖ u16be(format)). */
-  pop: ed25519SignatureHexSchema,
-})
-export type SigchainDeviceKemPayload = z.infer<typeof sigchainDeviceKemPayloadSchema>
 
 /** device_remove: de-authorise a device (triggers PUK rotation). */
 export const sigchainDeviceRemovePayloadSchema = z.object({

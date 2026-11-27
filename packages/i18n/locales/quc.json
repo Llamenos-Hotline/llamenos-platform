@@ -182,6 +182,7 @@
     "decryptFailed": "Man xtikir ta xjaqax ri yakb'al",
     "dropOrChoose": "Takuqub'a' o tacha' jun yakb'al wuj",
     "invalidBackup": "Man okel ta ri yakb'al wuj",
+    "backupMissingXwingSeed": "Ri yakb'al wuj ri' maj ri ulaweb'al post-quantum re ri chokoy re', rumal ri' man kakwin taj kutzalij ri chokoy. Chakojo ri ukolik ri ab'i' re kab'an jun k'ak' chokoy.",
     "invalidKey": "Man okel ta ri ewan etal",
     "login": "Tok",
     "loginDescription": "Tatz'ib'aj ri awetal ewan tzij rech yatok pa ri oyonem tzij",

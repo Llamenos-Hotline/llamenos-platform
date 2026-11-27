@@ -476,8 +476,9 @@ pub fn compute_provisioning_sas(
 ///      long-term encryption key
 ///   6. SAS from shared_secret (for re-verification against the confirmed code)
 ///
-/// Returns both device seeds as a [`DeviceSecrets`] plus the SAS code. The
-/// caller MUST use both seeds as returned; re-deriving either from the other
+/// Returns both transported seeds, plus this device's own freshly drawn X-Wing
+/// seed, as a [`DeviceSecrets`], and the SAS code. The caller MUST use the
+/// seeds as returned; re-deriving either transported seed from the other
 /// produces a device that cannot decrypt anything wrapped to the primary.
 ///
 /// Structural errors (short/long bundle, unknown bundle version, identity
@@ -532,12 +533,12 @@ pub fn decrypt_provisioned_bundle(
         )));
     }
 
-    // DeviceSecrets zeroizes both seeds on drop — including on the rejection
+    // DeviceSecrets zeroizes its seeds on drop — including on the rejection
     // paths below; `plaintext` is Zeroizing.
     let mut secrets = DeviceSecrets {
         signing_seed: [0u8; 32],
         encryption_seed: [0u8; 32],
-        kem_seed: None,
+        kem_seed: [0u8; 32],
     };
     secrets.signing_seed.copy_from_slice(&plaintext[1..33]);
     secrets
@@ -560,6 +561,17 @@ pub fn decrypt_provisioned_bundle(
         ));
     }
 
+    // This device's own X-Wing seed, drawn here, once, as the device is created
+    // (spec 2026-11-25-v2-device-linking-and-recovery §5 as revised 2026-11-26).
+    // It is never in the bundle — no private key travels in a provisioning
+    // payload — and it is never redrawn: unlocking only reads it back.
+    //
+    // While this path transports the primary's identity (seed transport, #3054),
+    // the chain names the primary's X-Wing key for that identity, so this key is
+    // not named for it; K-E (#2975) gives a linked device its own identity, whose
+    // `device_add` names this key from the device's claim.
+    getrandom::getrandom(&mut secrets.kem_seed).expect("getrandom failed");
+
     // Test-only observability hook: record where the two seeds live, so the
     // zeroization test can read those exact slots after this frame is
     // abandoned (the same raw-pointer pattern as device_keys.rs's
@@ -580,7 +592,7 @@ pub fn decrypt_provisioned_bundle(
         secrets: DeviceSecrets {
             signing_seed: secrets.signing_seed,
             encryption_seed: secrets.encryption_seed,
-            kem_seed: None,
+            kem_seed: secrets.kem_seed,
         },
         sas_code,
     })
@@ -1231,7 +1243,7 @@ mod tests {
         let primary = DeviceSecrets {
             signing_seed: seq(0x21),
             encryption_seed: seq(0x01),
-            kem_seed: None,
+            kem_seed: seq(0x41),
         };
         let new_device_sk = seq(0x65);
         let primary_ephemeral = X25519StaticSecret::from(seq(0xa1));

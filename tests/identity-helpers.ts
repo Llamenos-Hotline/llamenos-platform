@@ -19,7 +19,6 @@ import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
 import {
   SIGCHAIN_GENESIS_SEQ,
   sigchainGenesisPayloadSchema,
-  sigchainDeviceKemPayloadSchema,
   sigchainPukEpochPayloadSchema,
   type AppendSigchainLinkBody,
   type SigchainLinkRecord,
@@ -33,8 +32,8 @@ import {
   DEVICE_KEM_FORMAT,
   createInitialPukMock,
   createSigchainLinkMock,
-  deviceKemPayloadMock,
   signDevicePopMock,
+  userInitPayloadMock,
   verifySigchainMock,
   type MockPukState,
   type MockSigchainLink,
@@ -114,13 +113,14 @@ export function buildSigchainLink(
   }
 }
 
+/**
+ * `device`'s genesis `user_init`, as the crate builds it (`sigchain::user_init_payload`):
+ * its Ed25519, X25519 and X-Wing keys, `format: 2` and its possession signature.
+ */
 export function genesisPayload(device: TestDevice): Record<string, unknown> {
-  return {
-    type: 'user_init',
-    deviceId: device.deviceId,
-    devicePubkey: device.signingPubkeyHex,
-    deviceEncryptionPubkey: device.encryptionPubkeyHex,
-  }
+  return JSON.parse(userInitPayloadMock(
+    hexToBytes(device.signingSeedHex), device.deviceId, device.encryptionPubkeyHex, device.kemPubkeyHex,
+  )) as Record<string, unknown>
 }
 
 /**
@@ -139,10 +139,6 @@ export function deviceAddPayload(device: TestDevice, userPubkey: string): Record
   }
 }
 
-/** `device`'s own `device_kem` in `userPubkey`'s chain (spec §5); sign it with `device`. */
-export function deviceKemPayload(device: TestDevice, userPubkey: string): Record<string, unknown> {
-  return JSON.parse(deviceKemPayloadMock(hexToBytes(device.signingSeedHex), device.kemPubkeyHex, userPubkey)) as Record<string, unknown>
-}
 
 /** Server sigchain record → packages/crypto `SigchainLink` (mirrors toCryptoSigchainLink in user-identity.ts). */
 export function toMockSigchainLink(record: SigchainLinkRecord): MockSigchainLink {
@@ -223,6 +219,8 @@ export async function initializeIdentityViaApi(
 export interface PageIdentity {
   pubkey: string
   deviceId: string
+  /** The X-Wing key this device's CryptoState holds. */
+  kemPubkeyHex: string
   links: SigchainLinkRecord[]
   /** Latest PUK envelope addressed to this device, or null if none. */
   pukEnvelope: { generation: number; envelope: KeyEnvelope } | null
@@ -268,34 +266,40 @@ export async function readIdentityFromPage(page: Page): Promise<PageIdentity> {
         pukEnvelopeOpens = false
       }
     }
-    return { pubkey: device.signingPubkeyHex, deviceId: device.deviceId, links, pukEnvelope, pukEnvelopeOpens }
+    return {
+      pubkey: device.signingPubkeyHex,
+      deviceId: device.deviceId,
+      kemPubkeyHex: device.kemPubkeyHex,
+      links,
+      pukEnvelope,
+      pukEnvelopeOpens,
+    }
   })
 }
 
 /**
  * Assert the desktop client in `page` initialised its user's identity
- * (PROTOCOL.md §2.11): the stored chain is exactly genesis + puk_epoch +
- * device_kem, it
+ * (PROTOCOL.md §2.11): the stored chain is exactly genesis + puk_epoch, it
  * verifies under the packages/crypto `verify_sigchain` rules, it authorises
- * this device and only this device, the genesis names this device's keys, and
- * this device's CryptoState opens its generation-1 PUK envelope.
+ * this device and only this device, the genesis names this device's keys —
+ * the X-Wing key this device holds included — and this device's CryptoState
+ * opens its generation-1 PUK envelope.
  */
 export async function expectInitialisedIdentity(page: Page): Promise<PageIdentity> {
   const identity = await readIdentityFromPage(page)
 
-  expect(identity.links.map(l => `${l.seqNo}:${l.linkType}`)).toEqual(['1:genesis', '2:puk_epoch', '3:device_kem'])
+  expect(identity.links.map(l => `${l.seqNo}:${l.linkType}`)).toEqual(['1:genesis', '2:puk_epoch'])
   const verified = verifySigchainMock(identity.links.map(toMockSigchainLink))
   expect(verified.activeDevicePubkeys).toEqual([identity.pubkey])
-  expect(verified.headHash).toBe(identity.links[2].hash)
-  // The device published its own X-Wing key (spec 2026-11-25 §5, #2496), so it
-  // is in its hubs' migration genesis device set.
-  const kem = sigchainDeviceKemPayloadSchema.parse(identity.links[2].payload)
-  expect(kem.devicePubkey).toBe(identity.pubkey)
-  expect(verified.deviceKemKeys).toEqual([{ devicePubkey: identity.pubkey, kemPubkey: kem.encryptionPubkey, format: 2 }])
+  expect(verified.headHash).toBe(identity.links[1].hash)
 
+  // The genesis names this device's X-Wing key — the one it holds (spec
+  // 2026-11-25 §5 as revised; #2496). No later link replaces it.
   const genesis = sigchainGenesisPayloadSchema.parse(identity.links[0].payload)
   expect(genesis.deviceId).toBe(identity.deviceId)
   expect(genesis.devicePubkey).toBe(identity.pubkey)
+  expect(genesis.encryptionPubkey).toBe(identity.kemPubkeyHex)
+  expect(verified.activeDeviceKeys).toEqual([{ devicePubkey: identity.pubkey, encryptionPubkey: identity.kemPubkeyHex, format: 2 }])
   const epoch = sigchainPukEpochPayloadSchema.parse(identity.links[1].payload)
   expect(epoch.generation).toBe(1)
 

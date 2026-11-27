@@ -21,13 +21,6 @@ type Invoke = <T = unknown>(cmd: string, args?: Record<string, unknown>) => Prom
 
 const PIN = '12345678'
 
-/**
- * What `unlock_with_pin` resolves with (apps/desktop/src/crypto.rs): the device
- * state, plus the re-encrypted blob when unlocking gave a pilot blob its X-Wing
- * key (#2496) — `platform.ts` persists that; these tests only need the state.
- */
-type UnlockResult = { state: { signingPubkeyHex: string }; upgradedKeys: unknown }
-
 /** Fresh modules: a cold start of the webview and of the Rust CryptoState. */
 async function coldStart() {
   vi.resetModules()
@@ -83,7 +76,7 @@ describe('offline queue across a restart, with no hub key', () => {
     expect(second.offlineQueue.pendingCount).toBe(0)
 
     // Unlock with the PIN; the singleton opens the persisted queue on unlock.
-    const { state } = await second.invoke<UnlockResult>(
+    const state = await second.invoke<{ signingPubkeyHex: string }>(
       'unlock_with_pin', { data: encrypted, pin: PIN },
     )
     second.keyManager.markUnlocked(state.signingPubkeyHex)
@@ -148,7 +141,7 @@ describe('offline queue across a change of device identity (#2948)', () => {
 
     // ── A returns (same device key): A's write is still there, B's is not ──
     const third = await coldStart()
-    const { state: restoredA } = await third.invoke<UnlockResult>(
+    const restoredA = await third.invoke<{ signingPubkeyHex: string }>(
       'unlock_with_pin', { data: a, pin: PIN },
     )
     third.keyManager.markUnlocked(restoredA.signingPubkeyHex)
@@ -211,7 +204,7 @@ describe('offline queue persisted before storage was scoped to an identity (#294
     const { a, aId, scopedKey } = await legacyBlobSealedByA()
 
     const upgraded = await coldStart()
-    const { state } = await upgraded.invoke<UnlockResult>('unlock_with_pin', { data: a, pin: PIN })
+    const state = await upgraded.invoke<{ signingPubkeyHex: string }>('unlock_with_pin', { data: a, pin: PIN })
     upgraded.keyManager.markUnlocked(state.signingPubkeyHex)
 
     await vi.waitFor(() => expect(upgraded.offlineQueue.hydrated).toBe(true))
@@ -251,7 +244,7 @@ describe('offline queue persisted before storage was scoped to an identity (#294
 
     // ── The identity that sealed it returns: nothing was lost meanwhile ──
     const owner = await coldStart()
-    const { state } = await owner.invoke<UnlockResult>('unlock_with_pin', { data: a, pin: PIN })
+    const state = await owner.invoke<{ signingPubkeyHex: string }>('unlock_with_pin', { data: a, pin: PIN })
     owner.keyManager.markUnlocked(state.signingPubkeyHex)
     await vi.waitFor(() => expect(owner.offlineQueue.hydrated).toBe(true))
     expect(owner.offlineQueue.getQueue().map(op => op.id)).toEqual([aId])

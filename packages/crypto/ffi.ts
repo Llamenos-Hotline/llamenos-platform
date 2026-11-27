@@ -533,10 +533,10 @@ export interface SigchainLink {
   payloadJson: string
 }
 
-/** A device's current format-2 (X-Wing) encryption key, per its `device_kem` / `device_add`. */
-export interface DeviceKemKey {
+/** An active device's format-2 (X-Wing) encryption key, as its `user_init` / `device_add` names it. */
+export interface ActiveDeviceKey {
   devicePubkey: string
-  kemPubkey: string
+  encryptionPubkey: string
   format: number
 }
 
@@ -547,22 +547,36 @@ export interface SigchainVerifiedState {
   headSeq: number
   headHash: string
   activeDevicePubkeys: string[]
-  deviceKemKeys: DeviceKemKey[]
+  activeDeviceKeys: ActiveDeviceKey[]
   namedKeys: string[]
 }
 
+/** `check_output_size!` in ffi_server.rs: the buffer was too small; the message names the size needed. */
+const OUTPUT_TOO_SMALL = -2
+
 /**
  * Verify a whole user sigchain through `packages/crypto` `verify_sigchain` —
- * hash chain, signatures, device set, the `device_add` / `device_kem`
+ * hash chain, signatures, device set, the `user_init` / `device_add`
  * possession signatures and in-chain key reuse (#2496). A refusal throws a
  * `CryptoError` whose `reason` is the closed rejection code
  * (`chain_device_pop`, `chain_key_reused`, `chain_unauthorised_signer`, …).
  */
 export function sigchainVerify(links: readonly SigchainLink[]): SigchainVerifiedState {
   const input = new TextEncoder().encode(JSON.stringify(links))
-  // The state carries only keys and hashes taken from the links themselves.
-  const out = new Uint8Array(input.length + 4096)
-  const written = lib.symbols.ffi_sigchain_verify(ptr(input), input.length, ptr(out), out.length)
+  // The state repeats keys the links name (each active device's 2432-hex X-Wing
+  // key appears in `activeDeviceKeys` and again in `namedKeys`), so no fixed
+  // multiple of the input is a safe size. Start at the input's size; when the
+  // crate reports the buffer too small, it names the exact size, and the
+  // (deterministic) verification runs once more into a buffer of that size.
+  let out = new Uint8Array(input.length + 4096)
+  let written = lib.symbols.ffi_sigchain_verify(ptr(input), input.length, ptr(out), out.length)
+  if (written === OUTPUT_TOO_SMALL) {
+    const message = getLastError()
+    const need = /need (\d+)/.exec(message)
+    if (!need) throw new CryptoError(written, message)
+    out = new Uint8Array(Number(need[1]))
+    written = lib.symbols.ffi_sigchain_verify(ptr(input), input.length, ptr(out), out.length)
+  }
   if (written < 0) checkResult(written)
   return JSON.parse(new TextDecoder().decode(out.subarray(0, written))) as SigchainVerifiedState
 }

@@ -200,12 +200,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // this is failing will not be readable on this device.
       console.error('[auth] device encryption key registration failed', err)
     })
-    // Publish this device's X-Wing key (spec 2026-11-25 §5). Loud, not fatal: a
-    // device without it is listed by its hubs' migration genesis and left out
-    // of the genesis device set until it publishes.
+    // Verify this device's identity in the user's chain (genesis for a user
+    // with no chain yet). Loud, not fatal: a chain that does not authorise this
+    // device under the X-Wing key it holds is reported, never re-keyed (#2496).
     ensureDeviceIdentity(state.publicKey).catch((err) => {
       if (cancelled) return
-      console.error('[auth] publishing the device X-Wing key (device_kem) failed', err)
+      console.error('[auth] device identity verification failed', err)
     })
     return () => { cancelled = true }
   }, [state.publicKey, state.isKeyUnlocked])

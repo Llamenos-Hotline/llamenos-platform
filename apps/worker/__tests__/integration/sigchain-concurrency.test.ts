@@ -53,6 +53,8 @@ import { ed25519Sign, ed25519PubkeyFromSeed } from '../mocks/llamenos-crypto-ffi
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import type { SigchainLinkType } from '@protocol/schemas/sigchain'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js'
+import { userInitPayloadMock } from '../../../../tests/mocks/sigchain-mock'
 
 const DATABASE_URL = requireDatabaseUrl()
 
@@ -183,9 +185,16 @@ interface LinkInput {
   timestamp: string
 }
 
-/** A genesis payload naming the sigchain owner's own device (the server validates its shape). */
+/** The owner's device X-Wing key (crypto_format 2), from a random seed. */
+const KEM_PUBKEY = bytesToHex(ml_kem768_x25519.keygen(crypto.getRandomValues(new Uint8Array(32))).publicKey)
+
+/**
+ * A genesis payload naming the sigchain owner's own device: its X25519 key, its
+ * X-Wing key and the possession signature over it, as the crate builds one
+ * (`sigchain::user_init_payload`). The server verifies it with the chain.
+ */
 function genesisPayload(deviceId = 'dev-1'): Record<string, unknown> {
-  return { type: 'user_init', deviceId, devicePubkey: USER_PUBKEY, deviceEncryptionPubkey: 'bb'.repeat(32) }
+  return JSON.parse(userInitPayloadMock(identitySeed, deviceId, 'bb'.repeat(32), KEM_PUBKEY)) as Record<string, unknown>
 }
 
 /**

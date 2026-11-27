@@ -182,6 +182,7 @@
     "decryptFailed": "Yedek dosyası çözülemedi",
     "dropOrChoose": "Yedek dosyasını sürükleyin veya seçin",
     "invalidBackup": "Geçersiz yedek dosyası",
+    "backupMissingXwingSeed": "Bu yedek, bu cihazın kuantum sonrası şifreleme anahtarını içermiyor, bu yüzden cihazı geri yükleyemez. Bunun yerine yeni bir cihaz kurmak için hesap kurtarmayı kullanın.",
     "invalidKey": "Geçersiz gizli anahtar",
     "login": "Giriş yap",
     "loginDescription": "Hat hattına erişmek için gizli anahtarınızı girin",
