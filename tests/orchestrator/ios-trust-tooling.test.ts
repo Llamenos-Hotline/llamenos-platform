@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, normalize } from 'node:path'
@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import { TRUST_ANCHOR_FILES } from '../../orchestrator/src/config.js'
 import { TRUST_TOOLING_FILES, classifyIosGateFile, iosIsolationFor, type IosIsolationReads } from '../../orchestrator/src/ios-isolation.js'
 import { SNAPSHOT_PATH } from '../../packages/protocol/tools/trust-snapshot'
+import { trackedFiles } from './codeowners.js'
 
 /**
  * #3108 — the trust snapshot tooling shares `packages/protocol/` with the
@@ -41,6 +42,7 @@ const PR = { baseRefName: 'main', headRefOid: '2'.repeat(40) }
  *  codegen.ts, plus every `resolve(__dirname, ...)` path it names), repo-relative. */
 function codegenInputs(): Set<string> {
   const seen = new Set<string>()
+  const tracked = new Set(trackedFiles(ROOT))
   const pending = ['packages/protocol/tools/codegen.ts']
   const resolveImport = (from: string, spec: string): string | undefined => {
     const base = normalize(join(dirname(from), spec))
@@ -59,14 +61,19 @@ function codegenInputs(): Set<string> {
     }
     for (const m of text.matchAll(/resolve\(__dirname,\s*'([^']+)'\)/g)) {
       const p = normalize(join(dirname(f), m[1] as string))
-      if (existsSync(join(ROOT, p))) seen.add(p)
+      // Tracked, not merely present: `codegen.ts` also names its own OUTPUT directory
+      // (`GENERATED_DIR`), which exists only once codegen has run — so an `existsSync`
+      // test made this set, and the assertions over it, depend on build state.
+      if (tracked.has(p)) seen.add(p)
     }
   }
   return seen
 }
 
-const trackedProtocolFiles = (): string[] =>
-  execFileSync('git', ['ls-files', 'packages/protocol'], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter((l) => l !== '')
+// `trackedFiles`, never a bare `git ls-files`: under `fleet/verify` this suite runs
+// inside a `git archive` export of the commit under judgement, which has no `.git`,
+// so a raw git call throws at collection time and the whole suite fails to load.
+const trackedProtocolFiles = (): string[] => trackedFiles(ROOT).filter((f) => f.startsWith('packages/protocol/'))
 
 describe('TRUST_TOOLING_FILES is a list a reader can check, bound to the trust control itself', () => {
   it('names five files and every one of them exists', () => {
