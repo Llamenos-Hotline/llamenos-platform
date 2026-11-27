@@ -464,7 +464,7 @@
     "micDenied": "O acesso ao microfone é necessário para a entrada por voz. Ative-o em Ajustes > Privacidade e Segurança > Microfone.",
     "speechDenied": "A permissão de reconhecimento de fala é necessária para a entrada por voz. Ative-a em Ajustes > Privacidade e Segurança > Reconhecimento de Fala.",
     "unavailable": "O reconhecimento de fala não está disponível neste dispositivo",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
+    "onDeviceUnavailable": "A entrada de voz precisa de reconhecimento de fala no dispositivo, que não está disponível para o seu idioma neste dispositivo. O áudio nunca é enviado para um serviço na nuvem."
   },
   "auditLog": {
     "actor": "Ator",
@@ -4511,7 +4511,7 @@
     "transcriptionStopped": "Transcricao parada",
     "initializationFailed": "Initialization failed",
     "microphoneAccessDenied": "Microphone access denied",
-    "onDeviceUnavailable": "Call transcription needs on-device speech recognition, which isn't available for this language on this device. Audio is never sent to a cloud service."
+    "onDeviceUnavailable": "A transcrição de chamadas precisa de reconhecimento de fala no dispositivo, que não está disponível para este idioma neste dispositivo. O áudio nunca é enviado para um serviço na nuvem."
   },
   "triage": {
     "caseCreated": "Caso criado e vinculado",

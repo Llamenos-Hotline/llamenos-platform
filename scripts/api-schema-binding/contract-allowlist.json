@@ -159,6 +159,14 @@
       "path": "endpoint",
       "category": "unresolved",
       "reason": "Crash reports are POSTed to the operator-configured Sentry/GlitchTip DSN (parseSentryDsn), an external error-tracking host. It is not a route of this server, so there is no mounted route to match."
+    },
+    {
+      "client": "desktop",
+      "file": "src/client/lib/transcription/transcription-worker.ts",
+      "method": "*",
+      "path": "url",
+      "category": "unresolved",
+      "reason": "The transcription worker's fetchLocal reads Whisper model and ONNX runtime files from the app's own bundled origin (public/models/, #2951) so loadVerifiedModel/verifyRuntime can check each against its pinned SHA-256 (model-manifest.json) before transformers.js sees it. The URLs are same-origin static asset paths built from the manifest, never an API route and never a remote host (remote models are disabled in configureOfflineEnv). There is no mounted route to match."
     }
   ]
 }

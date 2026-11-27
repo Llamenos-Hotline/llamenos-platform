@@ -464,7 +464,7 @@
     "micDenied": "वॉइस इनपुट के लिए माइक्रोफ़ोन की अनुमति आवश्यक है। इसे सेटिंग्स > गोपनीयता और सुरक्षा > माइक्रोफ़ोन में चालू करें।",
     "speechDenied": "वॉइस इनपुट के लिए वाक् पहचान की अनुमति आवश्यक है। इसे सेटिंग्स > गोपनीयता और सुरक्षा > वाक् पहचान में चालू करें।",
     "unavailable": "इस डिवाइस पर वाक् पहचान उपलब्ध नहीं है",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
+    "onDeviceUnavailable": "वॉइस इनपुट के लिए डिवाइस पर ही चलने वाली स्पीच रिकग्निशन ज़रूरी है, जो इस डिवाइस पर आपकी भाषा के लिए उपलब्ध नहीं है। ऑडियो कभी भी किसी क्लाउड सेवा को नहीं भेजा जाता।"
   },
   "auditLog": {
     "actor": "कर्ता",
@@ -4511,7 +4511,7 @@
     "transcriptionStopped": "ट्रांसक्रिप्शन रुका",
     "initializationFailed": "Initialization failed",
     "microphoneAccessDenied": "Microphone access denied",
-    "onDeviceUnavailable": "Call transcription needs on-device speech recognition, which isn't available for this language on this device. Audio is never sent to a cloud service."
+    "onDeviceUnavailable": "कॉल ट्रांसक्रिप्शन के लिए डिवाइस पर ही चलने वाली स्पीच रिकग्निशन ज़रूरी है, जो इस डिवाइस पर इस भाषा के लिए उपलब्ध नहीं है। ऑडियो कभी भी किसी क्लाउड सेवा को नहीं भेजा जाता।"
   },
   "triage": {
     "caseCreated": "मामला बनाया और जोड़ा",

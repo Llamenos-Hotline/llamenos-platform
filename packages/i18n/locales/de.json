@@ -464,7 +464,7 @@
     "micDenied": "Microphone access is required for voice input. Enable it in Settings > Privacy & Security > Microphone.",
     "speechDenied": "Speech recognition permission is required for voice input. Enable it in Settings > Privacy & Security > Speech Recognition.",
     "unavailable": "Speech recognition is not available on this device",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
+    "onDeviceUnavailable": "Die Spracheingabe benötigt Spracherkennung auf dem Gerät, die für Ihre Sprache auf diesem Gerät nicht verfügbar ist. Audio wird niemals an einen Cloud-Dienst gesendet."
   },
   "auditLog": {
     "actor": "Akteur",
@@ -4511,7 +4511,7 @@
     "transcriptionStopped": "Transkription gestoppt",
     "initializationFailed": "Initialization failed",
     "microphoneAccessDenied": "Microphone access denied",
-    "onDeviceUnavailable": "Call transcription needs on-device speech recognition, which isn't available for this language on this device. Audio is never sent to a cloud service."
+    "onDeviceUnavailable": "Die Anruftranskription benötigt Spracherkennung auf dem Gerät, die für diese Sprache auf diesem Gerät nicht verfügbar ist. Audio wird niemals an einen Cloud-Dienst gesendet."
   },
   "triage": {
     "caseCreated": "Fall erstellt und verknüpft",

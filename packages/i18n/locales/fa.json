@@ -1859,7 +1859,7 @@
     "transcriptionStopped": "Transcription stopped",
     "initializationFailed": "Initialization failed",
     "microphoneAccessDenied": "Microphone access denied",
-    "onDeviceUnavailable": "Call transcription needs on-device speech recognition, which isn't available for this language on this device. Audio is never sent to a cloud service."
+    "onDeviceUnavailable": "رونویسی تماس به تشخیص گفتار روی خود دستگاه نیاز دارد که برای این زبان در این دستگاه در دسترس نیست. صدا هرگز به هیچ سرویس ابری ارسال نمی‌شود."
   },
   "userProfile": {
     "activity": "فعالیت",
@@ -4556,7 +4556,7 @@
     "micDenied": "برای ورودی صوتی به دسترسی میکروفون نیاز است. آن را در تنظیمات > حریم خصوصی و امنیت > میکروفون فعال کنید.",
     "speechDenied": "برای ورودی صوتی به مجوز تشخیص گفتار نیاز است. آن را در تنظیمات > حریم خصوصی و امنیت > تشخیص گفتار فعال کنید.",
     "unavailable": "تشخیص گفتار در این دستگاه در دسترس نیست",
-    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to a cloud service."
+    "onDeviceUnavailable": "ورودی صوتی به تشخیص گفتار روی خود دستگاه نیاز دارد که برای زبان شما در این دستگاه در دسترس نیست. صدا هرگز به هیچ سرویس ابری ارسال نمی‌شود."
   },
   "biometric": {
     "cancel": "Use PIN",
