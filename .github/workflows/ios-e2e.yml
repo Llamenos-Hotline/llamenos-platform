@@ -533,10 +533,12 @@ jobs:
 
       # Needed on every run: the server crypto library (below) is built here
       # even when the XCFramework comes from cache.
+      # This runner's OWN rustup/cargo home, never the shared asdf one: two iOS
+      # jobs adding targets to one toolchain lost a rename race and ejected a
+      # green PR from the merge queue (#3115). See the action for the why.
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        uses: ./.github/actions/mac-rust-toolchain
         with:
-          toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Rust cache

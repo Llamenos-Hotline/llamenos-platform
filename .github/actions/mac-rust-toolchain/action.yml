@@ -1,0 +1,31 @@
+name: 'Rust toolchain for a self-hosted Mac runner'
+description: >-
+  Installs the stable Rust toolchain plus the given targets into a rustup/cargo
+  home owned by THIS runner, never the shared asdf installation. Two iOS jobs on
+  different runners therefore cannot race on one toolchain directory (#3115).
+  Use it in place of dtolnay/rust-toolchain in every job that runs on the Mac.
+  Needs the repository checked out first.
+
+inputs:
+  targets:
+    description: 'Comma-separated rustup targets that must be installed'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Isolate this runner's rustup and cargo homes
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/../../../scripts/ci/mac-rust-toolchain.sh" setup
+
+    - name: Install Rust stable
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+      with:
+        toolchain: stable
+        targets: ${{ inputs.targets }}
+
+    - name: Verify the toolchain is this runner's own
+      shell: bash
+      env:
+        TARGETS: ${{ inputs.targets }}
+      run: bash "$GITHUB_ACTION_PATH/../../../scripts/ci/mac-rust-toolchain.sh" verify "$TARGETS"

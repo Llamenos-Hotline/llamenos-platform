@@ -2944,11 +2944,13 @@ jobs:
             ${{ github.workspace }}/packages/crypto/dist/ios/LlamenosCore.swift
           key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
 
+      # This runner's OWN rustup/cargo home, never the shared asdf one: two iOS
+      # jobs adding targets to one toolchain lost a rename race and ejected a
+      # green PR from the merge queue (#3115). See the action for the why.
       - name: Install Rust stable (for crypto xcframework)
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        uses: ./.github/actions/mac-rust-toolchain
         with:
-          toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Rust cache
@@ -3187,11 +3189,13 @@ jobs:
             ${{ github.workspace }}/packages/crypto/dist/ios/LlamenosCore.swift
           key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
 
+      # This runner's OWN rustup/cargo home, never the shared asdf one: two iOS
+      # jobs adding targets to one toolchain lost a rename race and ejected a
+      # green PR from the merge queue (#3115). See the action for the why.
       - name: Install Rust stable (for crypto xcframework)
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        uses: ./.github/actions/mac-rust-toolchain
         with:
-          toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Rust cache

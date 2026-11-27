@@ -441,3 +441,21 @@ Check with `gh api repos/Llamenos-Hotline/llamenos-platform/actions/runners --jq
 '.runners[]|[.name,.status,.busy]|@tsv'` against each directory's `.runner`. Removing the
 stale three is the operator's call. If anyone does, measure the space it frees with
 `df`, not `du`.
+
+## Per-runner Rust toolchains (`~/.ci-rust/<runner name>`, #3115)
+
+iOS jobs no longer install Rust into the asdf toolchain (`~/.asdf/installs/rust/...`)
+that every runner used to share: two jobs adding targets at once lost a rename race
+and failed "Install Rust stable" on a PR with nothing wrong in it. Each runner now
+keeps its own rustup and cargo home at `~/.ci-rust/<runner name>/{rustup,cargo}`
+(`.github/actions/mac-rust-toolchain`, `scripts/ci/mac-rust-toolchain.sh`).
+
+- **Cost:** about 0.75 GiB per runner on the internal volume (minimal profile, host
+  triple plus the two iOS targets), so ~3.75 GiB across five runners. It is not part of
+  `_work`, so the disk guard's work-volume sweep never reclaims it.
+- **Cold start:** the first job on a runner (or after deleting its directory) bootstraps
+  rustup and downloads the toolchain; every later job finds it warm.
+- **Reclaiming space:** `rm -rf ~/.ci-rust/<runner name>` when that runner is idle is safe;
+  the next job rebuilds it. Never delete a directory whose runner has a job in flight.
+- The asdf Rust install is still there for interactive use (`scripts/ios-build.sh` over
+  ssh). CI no longer reads or writes it.
