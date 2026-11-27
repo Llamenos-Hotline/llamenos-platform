@@ -52,7 +52,29 @@ SHARED_DEPS_RE='^(packages/crypto/|packages/protocol/|packages/shared/|packages/
 # everything — a named list, never a prefix, so a new suite fails toward
 # running. guards.test.ts binds this to ci.yml: every `--config vitest.*` a job
 # passes, and each of that config's setupFiles, must run that job alone.
-SHARED_DEPS_EXCLUDE_RE='^vitest\.(unit|integration|desktop|orchestrator)\.(config|setup)\.ts$'
+#
+# ALSO carved out (#3108): the five files of the TRUST SNAPSHOT TOOLING under
+# packages/protocol/ — the extractor and its CLI, the two suites that break it on
+# purpose, and the committed extraction (trust.snapshot.json). They sit beside
+# the schemas, so the `packages/protocol/` prefix used to schedule every
+# platform's build and the FULL iOS tier (326 tests, two serial Mac waves) for a
+# diff that cannot change a Swift type: none of them is read by codegen, none is
+# listed in project.yml, none is compiled into anything. Their only reader is
+# repo-tests (`bun test`), which gates on `docs_only`, not on a platform flag, so
+# it still runs. IOS_FULL_RE and IOS_COMPILE_RE below enumerate the protocol
+# paths that DO reach the app instead of using the prefix, because arm-batch.sh
+# lifts those assignments verbatim and has no way to apply a second exclusion
+# list. The enumeration fails toward NOT running for a file added later, so
+# tests/orchestrator/ios-trust-tooling.test.ts requires every tracked file under
+# packages/protocol/ to be either matched by IOS_FULL_RE or named as trust
+# tooling: a new file fails CI until somebody has classified it.
+#
+# Not a way to hide a trust change: a diff that moves a pinned value does so in
+# apps/ios/, apps/android/ or apps/desktop/ (iOS and crypto files are FULL on
+# their own; the other two never reached the iOS gate). The snapshot's own
+# release gate (`trust:release-check`) is a separate rail that this flag does
+# not feed.
+SHARED_DEPS_EXCLUDE_RE='^(vitest\.(unit|integration|desktop|orchestrator)\.(config|setup)\.ts|packages/protocol/(trust\.snapshot\.json|tools/(trust-snapshot|trust-snapshot-cli|trust-snapshot\.test|trust-release\.test)\.ts))$'
 
 IOS_RE='^apps/ios/'
 # Which iOS TIER a diff earns (see apps/ios/Tests/UI/ci-smoke.txt for the full
@@ -64,7 +86,7 @@ IOS_RE='^apps/ios/'
 # (crypto -> UniFFI XCFramework, protocol -> Swift types, i18n -> .strings),
 # and the CI wiring that decides any of this. Everything else runs the smoke
 # tier: still a real iOS gate, 2 runners instead of 4.
-IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
+IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/(schemas/|templates/|generated/|(README\.md|crypto-format\.ts|crypto-formats\.json|crypto-labels\.json|package\.json|template-types\.ts)$|tools/(codegen|schema-registry)\.ts$)|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 # `ios_compile` is the NARROW iOS question: "can this diff change what
 # `ios-compile-check` compiles?" It exists because `ios` is a blast-radius flag
 # (every SHARED_DEPS_RE hit sets it — `scripts/`, `packages/shared/`, the vitest
@@ -88,7 +110,7 @@ IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.gi
 # `scripts/`. `package.json`, `bun.lock` and `tsconfig*.json` ARE here: the job
 # runs `bun install --frozen-lockfile` and then codegen, so a dependency bump
 # can change the generated Swift.
-IOS_COMPILE_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|package\.json$|bun\.lock|tsconfig[^/]*\.json$|scripts/ci/mac-runner-disk-guard(-wait)?\.sh$|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
+IOS_COMPILE_RE='^(apps/ios/|packages/crypto/|packages/protocol/(schemas/|templates/|generated/|(README\.md|crypto-format\.ts|crypto-formats\.json|crypto-labels\.json|package\.json|template-types\.ts)$|tools/(codegen|schema-registry)\.ts$)|packages/i18n/|package\.json$|bun\.lock|tsconfig[^/]*\.json$|scripts/ci/mac-runner-disk-guard(-wait)?\.sh$|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
 # No `.github/workflows/desktop-e2e\.yml$` term: that workflow no longer
 # exists. Its chromium tier is ci.yml's `desktop-e2e` job, and ci.yml is in

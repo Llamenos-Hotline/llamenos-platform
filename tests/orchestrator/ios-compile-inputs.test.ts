@@ -389,7 +389,11 @@ describe('break-it: the guard FAILS when a dependency is dropped from the filter
   // Each term is one thing the build depends on. Strike it from the real
   // classifier and the derived check must name the input that fell out.
   it.each<[needle: string, mustReport: string]>([
-    ['packages/protocol/|', 'packages/protocol/generated/swift'],
+    // #3108: protocol is enumerated (the trust snapshot tooling beside it reaches
+    // no build), so the term is the whole group, and each part is struck alone.
+    ['packages/protocol/(schemas/|templates/|generated/|(README\\.md|crypto-format\\.ts|crypto-formats\\.json|crypto-labels\\.json|package\\.json|template-types\\.ts)$|tools/(codegen|schema-registry)\\.ts$)|', 'packages/protocol/generated/swift'],
+    ['generated/|', 'packages/protocol/generated/swift'],
+    ['|tools/(codegen|schema-registry)\\.ts$', 'packages/protocol/tools/codegen.ts'],
     ['packages/i18n/|', 'packages/i18n/tools/i18n-codegen.ts'],
     ['packages/crypto/|', 'packages/crypto/scripts/build-mobile.sh'],
     ['|bun\\.lock', 'bun.lock'],
