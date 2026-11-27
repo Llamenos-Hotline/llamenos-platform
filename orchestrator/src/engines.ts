@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { DISPATCH_SCRIPT } from './paths.js'
 import { checkDispatchDependency, gitFactsFor } from './dependency.js'
 import { fleetRuntimeRoot } from './provenance.js'
+import { normalizePrReference } from './gh.js'
 import { ghLoginResolver, workerIdentityRefusal } from './identity.js'
 import { classifyTmuxOwner, dispatchGuard, isolatedLaunch, probeTmuxGlobalEnv, probeTmuxOwnership } from './tmux-isolation.js'
 import { fleetBranchFor } from './ci.js'
@@ -666,11 +667,16 @@ export function resolveLaunchOutcome(input: LaunchOutcomeInput): DispatchResult 
     }
   }
 
+  // The worker's status template allows `pr:` as a number OR a URL, and both
+  // have been observed. The ledger (and every downstream read of it) stores
+  // the normalised number — see `normalizePrReference` (gh.ts) for the
+  // 2026-11-26 arm failure a URL-form value caused at the one GraphQL call
+  // that needs an Int.
   const pr = input.status?.['pr']
   return {
     outcome,
     branch: input.status?.['branch'] ?? input.seed?.['branch'],
-    pr: pr !== undefined && pr !== 'none' ? pr : undefined,
+    pr: pr !== undefined && pr !== 'none' ? normalizePrReference(pr) : undefined,
     note,
     worktree: input.status?.['worktree'] ?? input.seed?.['worktree'],
     quotaResetHint,

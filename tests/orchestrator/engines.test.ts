@@ -464,7 +464,43 @@ describe('resolveLaunchOutcome (issue #870)', () => {
     // already wrote. Mutation check — replace this fix with "launchError
     // !== undefined ? FAILED : statusToOutcome(...)" and this fails.
     expect(result.outcome).toBe('SUCCESS')
-    expect(result.pr).toBe('https://github.com/rhonda-rodododo/llamenos-platform/pull/860')
+    // The URL form is preserved in the fixture (that is what the worker really
+    // wrote) but the outcome carries the NORMALISED number — see
+    // `normalizePrReference` (gh.ts): a URL-form value reached the arming
+    // point's GraphQL Int! as NaN on 2026-11-26 and left a verified PR unarmed.
+    expect(result.pr).toBe('860')
+  })
+
+  it('normalises the worker-reported pr: bare number passes through, URL collapses to the number', () => {
+    const withUrl = resolveLaunchOutcome({
+      launchError: undefined,
+      status: parseStatusFile('status: SUCCESS\npr: https://github.com/Llamenos-Hotline/llamenos-platform/pull/3066\n'),
+      seed: undefined, depCommit: 'abc', rtCommit: 'def', workerLog: undefined,
+    })
+    expect(withUrl.pr).toBe('3066')
+
+    const withNumber = resolveLaunchOutcome({
+      launchError: undefined,
+      status: parseStatusFile('status: SUCCESS\npr: 3066\n'),
+      seed: undefined, depCommit: 'abc', rtCommit: 'def', workerLog: undefined,
+    })
+    expect(withNumber.pr).toBe('3066')
+
+    const withNone = resolveLaunchOutcome({
+      launchError: undefined,
+      status: parseStatusFile('status: SUCCESS\npr: none\n'),
+      seed: undefined, depCommit: 'abc', rtCommit: 'def', workerLog: undefined,
+    })
+    expect(withNone.pr).toBeUndefined()
+
+    // An unrecognised form is kept verbatim (never silently dropped) — it may
+    // still resolve at the gh CLI, and a downstream Int read fails closed on it.
+    const withGarbage = resolveLaunchOutcome({
+      launchError: undefined,
+      status: parseStatusFile('status: SUCCESS\npr: see the PR\n'),
+      seed: undefined, depCommit: 'abc', rtCommit: 'def', workerLog: undefined,
+    })
+    expect(withGarbage.pr).toBe('see the PR')
   })
 
   it('still records FAILED when the launch call errored AND no status file ever appeared', () => {
