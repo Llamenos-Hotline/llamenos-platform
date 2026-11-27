@@ -132,8 +132,11 @@
       "apps/ios/Sources/Services/CertificatePinning.swift": {
         "challengeHandlers": 0,
         "other": {
-          "SecPolicyw*": 1,
-          "SecTrustw*": 4
+          "SecPolicyCreateSSL": 1,
+          "SecTrust": 1,
+          "SecTrustCopyCertificateChain": 1,
+          "SecTrustEvaluateWithError": 1,
+          "SecTrustSetPolicies": 1
         },
         "sessions": [],
         "sharedSessionUses": 0,

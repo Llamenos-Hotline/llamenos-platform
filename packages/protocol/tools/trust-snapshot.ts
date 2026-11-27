@@ -474,33 +474,85 @@ interface XmlNode {
   text: string
 }
 
+const XML_ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" }
+
+/** Character data with its references resolved: the five predefined entities and numeric
+ *  character references. Any other entity can only come from a DTD, which is refused. */
+function xmlText(raw: string, at: number): string {
+  return raw.replace(/&([^;&\s<]*);?/g, (ref, name: string, off: number) => {
+    const hex = /^#x([0-9A-Fa-f]+)$/.exec(name)
+    const dec = /^#([0-9]+)$/.exec(name)
+    const code = hex !== null ? Number.parseInt(hex[1] as string, 16) : dec !== null ? Number(dec[1]) : undefined
+    if (ref.endsWith(';') && code !== undefined && code <= 0x10ffff) return String.fromCodePoint(code)
+    const known = XML_ENTITIES[name]
+    if (ref.endsWith(';') && known !== undefined) return known
+    throw new TrustExtractionError(`unreadable XML entity reference "${ref}" at offset ${at + off}`)
+  })
+}
+
+const XML_TAG = /<(\/?)([A-Za-z_][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"<]*"|'[^'<]*'))*)\s*(\/?)>/y
+
 /** A small, strict XML reader for the files that carry trust settings.
- *  Anything it cannot read is an error, never a silent skip. */
+ *  Anything it cannot read is an error, never a silent skip.
+ *
+ *  One left-to-right pass, the way an XML parser reads: at each `<` the construct that STARTS
+ *  there decides where it ends. Comments, PIs and the DOCTYPE are therefore never found by
+ *  searching ahead, so a `<!--` inside a PI (or an attribute) cannot swallow the real markup
+ *  between it and a later `-->` (#3074). What XML forbids — `--` in a comment, `<` in an
+ *  attribute value, a duplicate attribute, an unterminated construct — is refused, and so is
+ *  an internal DTD subset: an entity it declares would expand to markup this reader cannot see. */
 export function parseXml(src: string): XmlNode {
-  const clean = src
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<\?[\s\S]*?\?>/g, '')
-    .replace(/<!DOCTYPE[^>]*>/gi, '')
   const root: XmlNode = { tag: '#root', attrs: {}, children: [], text: '' }
   const stack: XmlNode[] = [root]
-  const re = /<(\/?)([A-Za-z_][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)|(<[\s\S])/g
-  for (const m of clean.matchAll(re)) {
-    if (m[6] !== undefined) throw new TrustExtractionError(`unreadable XML near "${m[6]}${clean.slice(m.index + 2, m.index + 40)}"`)
+  const fail = (at: number, why: string): never => {
+    throw new TrustExtractionError(`${why} at offset ${at}, near "${src.slice(at, at + 40)}"`)
+  }
+  const closeOf = (at: number, open: string, close: string, what: string): number => {
+    const end = src.indexOf(close, at + open.length)
+    return end < 0 ? fail(at, `unterminated ${what}`) : end
+  }
+  let i = 0
+  while (i < src.length) {
     const top = stack[stack.length - 1] as XmlNode
-    if (m[5] !== undefined) {
-      top.text += m[5]
-      continue
+    if (src[i] !== '<') {
+      const lt = src.indexOf('<', i)
+      const end = lt < 0 ? src.length : lt
+      top.text += xmlText(src.slice(i, end), i)
+      i = end
+    } else if (src.startsWith('<!--', i)) {
+      const end = closeOf(i, '<!--', '-->', 'comment')
+      const body = src.slice(i + 4, end)
+      if (body.includes('--') || body.endsWith('-')) fail(i, 'a comment holding "--", which XML does not allow,')
+      i = end + 3
+    } else if (src.startsWith('<![CDATA[', i)) {
+      const end = closeOf(i, '<![CDATA[', ']]>', 'CDATA section')
+      top.text += src.slice(i + 9, end)
+      i = end + 3
+    } else if (src.startsWith('<?', i)) {
+      i = closeOf(i, '<?', '?>', 'processing instruction') + 2
+    } else if (src.startsWith('<!DOCTYPE', i)) {
+      const end = closeOf(i, '<!DOCTYPE', '>', 'DOCTYPE')
+      if (src.slice(i, end).includes('[')) fail(i, 'an internal DTD subset, whose entities this reader does not expand,')
+      i = end + 1
+    } else {
+      XML_TAG.lastIndex = i
+      const m = XML_TAG.exec(src) ?? fail(i, 'unreadable XML')
+      i += m[0].length
+      if (m[1] === '/') {
+        if (stack.length < 2 || top.tag !== m[2]) fail(m.index, `mismatched </${m[2]}>`)
+        stack.pop()
+        continue
+      }
+      const attrs: Record<string, string> = {}
+      for (const a of (m[3] ?? '').matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+        const name = a[1] as string
+        if (Object.hasOwn(attrs, name)) fail(m.index, `duplicate attribute ${name}`)
+        attrs[name] = xmlText((a[2] ?? a[3]) as string, m.index)
+      }
+      const node: XmlNode = { tag: m[2] as string, attrs, children: [], text: '' }
+      top.children.push(node)
+      if (m[4] !== '/') stack.push(node)
     }
-    if (m[1] === '/') {
-      if (stack.length < 2 || top.tag !== m[2]) throw new TrustExtractionError(`mismatched </${m[2]}>`)
-      stack.pop()
-      continue
-    }
-    const attrs: Record<string, string> = {}
-    for (const a of (m[3] ?? '').matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[a[1] as string] = (a[2] ?? a[3]) as string
-    const node: XmlNode = { tag: m[2] as string, attrs, children: [], text: '' }
-    top.children.push(node)
-    if (m[4] !== '/') stack.push(node)
   }
   if (stack.length !== 1) throw new TrustExtractionError(`unclosed <${(stack[stack.length - 1] as XmlNode).tag}>`)
   return root
@@ -609,10 +661,13 @@ function androidShipped(path: string): boolean {
   return !ANDROID_NON_SHIPPING.has(path.slice(ANDROID_SRC.length).split('/')[0] ?? '')
 }
 
-/** Transport APIs, beyond the pinned clients, through which a connection could be opened. */
+/** Transport APIs, beyond the pinned clients, through which a connection could be opened.
+ *  Each entry is the START of an identifier, searched for anywhere (a search, so unanchored on
+ *  purpose): `Socket` finds `Socket(…)` after `import java.net.*`, `java.net.Socket` and
+ *  `SocketFactory` alike. `countApis` counts every hit under the whole identifier it begins. */
 const OTHER_TRANSPORT_APIS: Record<Lang, readonly string[]> = {
   kotlin: [
-    'HttpURLConnection', 'HttpsURLConnection', 'openConnection', 'java\\.net\\.Socket', 'SSLSocketFactory', 'SSLContext',
+    'HttpURLConnection', 'HttpsURLConnection', 'openConnection', 'Socket', 'SSLSocket', 'SSLContext',
     'X509\\w*TrustManager', 'TrustManagerFactory', 'HostnameVerifier', 'hostnameVerifier', 'Cronet', 'Retrofit', 'HttpClient',
     'DatagramSocket', 'WebView', 'DownloadManager',
   ],
@@ -627,16 +682,20 @@ const OTHER_TRANSPORT_APIS: Record<Lang, readonly string[]> = {
   ],
 }
 
-/** A readable label for a transport-API pattern (`\\.dangerous\\(\\)` → `.dangerous()`). */
-const apiLabel = (api: string): string => api.replace(/\\(.)/g, '$1')
-
+/**
+ * Each transport identifier a pattern begins, with how often it occurs. The key is the
+ * identifier as written (`SecTrustEvaluateWithError`, `SocketFactory`), never the pattern: one
+ * count per pattern would lump `SocketTimeoutException` with `Socket`, so removing one and
+ * adding the other would leave the count, and the snapshot, where they were (#3074).
+ */
 function countApis(code: string, apis: readonly string[]): Record<string, number> {
   const out: Record<string, number> = {}
   for (const api of apis) {
-    const n = [...code.matchAll(new RegExp(api.startsWith('\\.') ? api : `\\b${api}`, 'g'))].length
-    if (n > 0) out[apiLabel(api)] = n
+    for (const m of code.matchAll(new RegExp(`${api.startsWith('\\.') ? '' : '\\b'}${api}\\w*`, 'g'))) {
+      out[m[0]] = (out[m[0]] ?? 0) + 1
+    }
   }
-  return out
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
 }
 
 const LOOPBACK_RE = /localhost|127\.0\.0\.1|::1|10\.0\.2\.2|loopback|CertificatePinner\.DEFAULT/i

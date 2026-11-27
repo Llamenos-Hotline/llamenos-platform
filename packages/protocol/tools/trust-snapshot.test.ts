@@ -446,6 +446,73 @@ describe('break it — each class of trust defect moves the snapshot', () => {
     })
   })
 
+  // #3074 CodeQL js/incomplete-multi-character-sanitization: the XML reader used to strip comments,
+  // then PIs, each as its own pass. A PI holding "<!--" paired with a later "-->" made the comment pass
+  // eat the real markup between them — content an XML parser (aapt2, expat) reads and the snapshot never saw.
+  describe('a weakening hidden in what the XML reader skips', () => {
+    const SYSTEM_ANCHOR = '<certificates src="system" />'
+    test('user CAs as trust anchors, concealed between a PI that opens "<!--" and one that closes it', () => {
+      expectMoves(
+        edited({ [NSC]: swap(SYSTEM_ANCHOR, `${SYSTEM_ANCHOR}<?x <!-- ?><certificates src="user" /><?y --> ?>`) }),
+        /trustAnchors\[\]: "certificates:user"/,
+      )
+    })
+    test('an extra pin in the <pin-set>, concealed the same way', () => {
+      const pinSetOpen = '<pin-set expiration="2028-01-01">'
+      expectMoves(
+        edited({ [NSC]: swap(pinSetOpen, `${pinSetOpen}<?x <!-- ?><pin digest="SHA-256">${FLIP(X1)}</pin><?y --> ?>`) }),
+        new RegExp(`pins\\.android\\.osPinSets\\[\\]: "${FLIP(X1).replace(/[+/]/g, '\\$&')}"`),
+      )
+    })
+    test('a whole unpinned domain-config inside an unterminated-looking PI', () => {
+      expectMoves(
+        edited({ [NSC]: swap('</network-security-config>', '<?x <!-- ?><domain-config><domain>evil.example</domain></domain-config><?y --> ?></network-security-config>') }),
+        /evil\.example/,
+      )
+    })
+    test('a DTD internal subset whose entity expands to user CAs is refused, not read as an empty <trust-anchors>', () => {
+      const tree = edited({
+        [NSC]: (t) =>
+          swap(SYSTEM_ANCHOR, `${SYSTEM_ANCHOR}&ua;`)(t).replace('<network-security-config>', '<!DOCTYPE network-security-config [ <!ENTITY ua \'<certificates src="user" />\'> ]>\n<network-security-config>'),
+      })
+      expect(() => extractTrustSnapshot(tree)).toThrow(/internal DTD subset/)
+    })
+    test('an unterminated comment, PI or CDATA section is refused', () => {
+      for (const tail of ['<!-- never closed', '<?x never closed', '<![CDATA[ never closed']) {
+        expect(() => extractTrustSnapshot(edited({ [NSC]: (t) => `${t}\n${tail}` }))).toThrow(TrustExtractionError)
+      }
+    })
+    test('markup inside an attribute value is refused — the old reader stripped a "comment" that began inside one', () => {
+      expect(() =>
+        extractTrustSnapshot(edited({ [NSC]: swap('<domain-config>', '<domain-config x="<!--"><certificates src="user" /><y z="-->">') })),
+      ).toThrow(TrustExtractionError)
+    })
+  })
+
+  // #3074 CodeQL js/regex/missing-regexp-anchor flagged `java\.net\.Socket`. An unanchored SEARCH is right
+  // for detection, so the anchor it asked for is not the fix — but the pattern was wrong: it matched only the
+  // fully-qualified name, so a socket opened after `import java.net.*` was invisible, and its open end
+  // counted `SocketTimeoutException` as the same API, so swapping one for the other moved nothing.
+  describe('a transport opened in a form the API patterns used to miss', () => {
+    const SOCK = 'apps/android/app/src/main/java/org/llamenos/hotline/api/Sock.kt'
+    test('Android: a raw socket after a wildcard import', () => {
+      expectMoves(edited({}, { [SOCK]: 'package x\nimport java.net.*\nfun f() = Socket("relay.example", 443)\n' }), /Sock\.kt.*Socket/)
+    })
+    test('Android: a socket factory after a wildcard import', () => {
+      expectMoves(edited({}, { [SOCK]: 'package x\nimport javax.net.*\nfun f() = SocketFactory.getDefault().createSocket("relay.example", 443)\n' }), /Sock\.kt.*SocketFactory/)
+    })
+    test('Android: a socket swapped in for a lookalike identifier the old count lumped with it', () => {
+      const before = extractTrustSnapshot(edited({}, { [SOCK]: 'package x\nfun f(e: Throwable) = e is java.net.SocketTimeoutException\n' }))
+      const after = extractTrustSnapshot(edited({}, { [SOCK]: 'package x\nfun f() = java.net.Socket("relay.example", 443)\n' }))
+      expect(diffSnapshots(before, after).join('\n')).toMatch(/Sock\.kt\.other\.Socket\b/)
+    })
+    test('iOS: a second trust-evaluation call of a different name is counted under its own name', () => {
+      const before = extractTrustSnapshot(edited({ [IOS_PINNING]: (t) => `${t}\nfunc a(_ t: SecTrust) { _ = SecTrustCopyKey(t) }\n` }))
+      const after = extractTrustSnapshot(edited({ [IOS_PINNING]: (t) => `${t}\nfunc a(_ t: SecTrust) { _ = SecTrustSetExceptions(t, nil) }\n` }))
+      expect(diffSnapshots(before, after).join('\n')).toMatch(/SecTrustSetExceptions/)
+    })
+  })
+
   test('the walker reads a pin hidden in a comment as no pin at all', () => {
     // A commented-out pin is not a pin: adding one must not move the snapshot, and removing the real one must.
     expectUnchanged(edited({ [IOS_PINNING]: (t) => `${t}\n// static let isrgRootBogus = "${FLIP(X1)}"\n` }))
@@ -668,6 +735,13 @@ describe('helpers', () => {
   test('parseXml reads attributes, nesting and self-closing tags; parsePlist reads dicts', () => {
     const x = parseXml('<a x="1"><b y=\'2\'/><c>t</c></a>')
     expect(x.children[0]?.children.map((c) => c.tag)).toEqual(['b', 'c'])
+    // Comments, PIs and an external DOCTYPE are skipped as XML defines them; CDATA and entities are text.
+    const y = parseXml('<?xml version="1.0"?><!DOCTYPE a PUBLIC "-//X//EN" "x.dtd"><a><!-- <b/> --><?p <c/> ?><d>&lt;&#x41;&amp;<![CDATA[<e/>]]></d></a>')
+    expect(y.children[0]?.children.map((c) => c.tag)).toEqual(['d'])
+    expect(y.children[0]?.children[0]?.text).toBe('<A&<e/>')
+    expect(() => parseXml('<a>&bogus;</a>')).toThrow(/entity/)
+    expect(() => parseXml('<a><!-- a -- b --></a>')).toThrow(/comment/)
+    expect(() => parseXml('<a x="1" x="2"/>')).toThrow(/duplicate/)
     expect(parsePlist('<plist><dict><key>K</key><dict><key>B</key><false/></dict></dict></plist>')).toEqual({ K: { B: false } })
   })
   test('diffSnapshots treats arrays of scalars as sets', () => {
