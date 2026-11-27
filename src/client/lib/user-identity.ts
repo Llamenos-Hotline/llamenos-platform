@@ -152,6 +152,9 @@ async function initializeUserIdentityNow(userPubkey: string): Promise<SigchainVe
   }
 
   let { links } = await getSigchain(userPubkey)
+  // Guard the chain this step signs over, not an earlier read of it: a server
+  // that rolls the chain back between reads must not get a second genesis.
+  await assertExtendsVerifiedHead(userPubkey, links)
 
   if (links.length === 0) {
     const genesis = sigchainGenesisPayloadSchema.parse(JSON.parse(await userInitPayloadFromState()))

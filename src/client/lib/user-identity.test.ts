@@ -118,7 +118,7 @@ vi.mock('./platform', async importOriginal => {
 })
 
 const { ensureDeviceIdentity, initializeUserIdentity, toCryptoSigchainLink } = await import('./user-identity')
-const { distributePukEnvelopes, appendSigchainLink } = await import('./api/identity')
+const { distributePukEnvelopes, appendSigchainLink, getSigchain } = await import('./api/identity')
 
 /** Stop an initialisation after its genesis: the PUK envelope POST fails. */
 async function strandAfterGenesis(user: string): Promise<void> {
@@ -191,6 +191,28 @@ describe('ensureDeviceIdentity resumes a genesis-only chain (#3051)', () => {
     expectCompleteChain(device)
   })
 
+  it('a chain rolled back between the guard and the initialisation is refused, and nothing is signed', async () => {
+    const device = newDevice('device-identity')
+    local.device = device
+    await strandAfterGenesis(device.keys.signingPubkeyHex)
+    local.head = { userPubkey: device.keys.signingPubkeyHex, seq: 1, hash: server.links[0].hash }
+    const genesis = server.links[0]
+    vi.mocked(appendSigchainLink).mockClear()
+    // The first read serves the chain this device verified; the read the
+    // initialisation acts on serves it empty, inviting a second genesis.
+    vi.mocked(getSigchain)
+      .mockResolvedValueOnce({ links: [genesis], integrityBreak: null })
+      .mockImplementationOnce(async () => { server.links = []; return { links: [], integrityBreak: null } })
+
+    await expect(ensureDeviceIdentity(device.keys.signingPubkeyHex)).rejects.toThrow(
+      'does not extend the head this device verified',
+    )
+
+    expect(vi.mocked(appendSigchainLink)).not.toHaveBeenCalled()
+    expect(server.links).toEqual([])
+    expect(server.envelopes).toEqual([])
+  })
+
   it('a served genesis that does not verify is not extended, and no PUK is created for it', async () => {
     const device = newDevice('device-identity')
     local.device = device
@@ -220,5 +242,25 @@ describe('ensureDeviceIdentity resumes a genesis-only chain (#3051)', () => {
 
     expect(server.links).toEqual([genesis])
     expect(server.envelopes).toEqual([])
+  })
+})
+
+describe('initializeUserIdentity keeps the rollback guard (#3051)', () => {
+  it('refuses to sign a genesis over an empty chain when this device verified a head', async () => {
+    const device = newDevice('device-identity')
+    local.device = device
+    await initializeUserIdentity(device.keys.signingPubkeyHex)
+    expectCompleteChain(device)
+    // The server rolls the chain back; the device kept its head (a re-import of
+    // the same identity keeps it, platform.ts persistAndUnlockDeviceKeys).
+    server.links = []
+    vi.mocked(appendSigchainLink).mockClear()
+
+    await expect(initializeUserIdentity(device.keys.signingPubkeyHex)).rejects.toThrow(
+      'does not extend the head this device verified',
+    )
+
+    expect(vi.mocked(appendSigchainLink)).not.toHaveBeenCalled()
+    expect(server.links).toEqual([])
   })
 })
