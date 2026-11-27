@@ -56,14 +56,20 @@ final class TranscriptionService {
         set { UserDefaults.standard.set(newValue, forKey: "transcription_language") }
     }
 
-    /// Whether speech recognition is available on this device.
+    /// Whether on-device speech recognition is available for the selected language (or the
+    /// device locale when none is selected). False when only Apple's servers could recognise
+    /// it — transcription never uses them (#2951).
     var isAvailable: Bool {
-        SFSpeechRecognizer()?.isAvailable ?? false
+        let locale = selectedLanguage.isEmpty ? Locale.current : Locale(identifier: selectedLanguage)
+        guard let recognizer = SFSpeechRecognizer(locale: locale) else { return false }
+        return recognizer.isAvailable && recognizer.supportsOnDeviceRecognition
     }
 
-    /// Supported locale identifiers for speech recognition.
+    /// Locales that can be recognised on this device without the network.
     var supportedLocales: [Locale] {
-        Array(SFSpeechRecognizer.supportedLocales()).sorted { $0.identifier < $1.identifier }
+        SFSpeechRecognizer.supportedLocales()
+            .filter { OnDeviceSpeech.isAvailable(for: $0) }
+            .sorted { $0.identifier < $1.identifier }
     }
 
     // MARK: - Private
@@ -138,23 +144,21 @@ final class TranscriptionService {
             return
         }
 
-        // Require on-device recognition for privacy
-        if #available(iOS 13, *) {
-            recognizer.supportsOnDeviceRecognition = true
+        // On-device only (#2951). The request is built through `OnDeviceSpeech`, which refuses a
+        // locale with no local model rather than letting Apple's servers transcribe the call.
+        // (The recognizer's `supportsOnDeviceRecognition` is read, never assigned: forcing it
+        // true would only make the check lie.)
+        let request: SFSpeechAudioBufferRecognitionRequest
+        do {
+            request = try OnDeviceSpeech.makeRequest(for: recognizer)
+        } catch {
+            state = .error(NSLocalizedString("transcription_on_device_unavailable", comment: ""))
+            return
         }
 
         speechRecognizer = recognizer
         liveTranscript = ""
         finalTranscript = ""
-
-        // Create recognition request configured for on-device only
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-
-        if #available(iOS 13, *) {
-            request.requiresOnDeviceRecognition = true
-        }
-
         recognitionRequest = request
 
         // Configure audio session

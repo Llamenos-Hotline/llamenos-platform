@@ -1858,7 +1858,8 @@
     "transcriptionError": "Transcription error",
     "transcriptionStopped": "Transcription stopped",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Call transcription needs on-device speech recognition, which isn't available for this language on this device. Audio is never sent to a cloud service."
   },
   "userProfile": {
     "activity": "Активність",
@@ -4554,7 +4555,8 @@
     "stop": "Stop recording",
     "micDenied": "Для голосового введення потрібен доступ до мікрофона. Увімкніть його в Параметри > Приватність і безпека > Мікрофон.",
     "speechDenied": "Для голосового введення потрібен дозвіл на розпізнавання мовлення. Увімкніть його в Параметри > Приватність і безпека > Розпізнавання мовлення.",
-    "unavailable": "Розпізнавання мовлення недоступне на цьому пристрої"
+    "unavailable": "Розпізнавання мовлення недоступне на цьому пристрої",
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
   },
   "biometric": {
     "cancel": "Use PIN",

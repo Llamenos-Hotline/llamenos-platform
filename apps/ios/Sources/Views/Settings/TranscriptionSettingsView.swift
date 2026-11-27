@@ -40,7 +40,7 @@ struct TranscriptionSettingsView: View {
         .navigationTitle(NSLocalizedString("transcription_title", comment: "Transcription"))
         .navigationBarTitleDisplayMode(.inline)
         .alert(
-            NSLocalizedString("transcription_speech_recognition_unavailable", comment: ""),
+            NSLocalizedString("transcription_on_device_unavailable", comment: ""),
             isPresented: $showUnavailableAlert
         ) {
             Button(NSLocalizedString("action_done", comment: "OK")) {}

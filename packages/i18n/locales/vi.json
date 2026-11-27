@@ -463,7 +463,8 @@
     "stop": "Dừng ghi âm",
     "micDenied": "Cần quyền truy cập micrô để nhập bằng giọng nói. Hãy bật trong Cài đặt > Quyền riêng tư & Bảo mật > Micrô.",
     "speechDenied": "Cần quyền nhận dạng giọng nói để nhập bằng giọng nói. Hãy bật trong Cài đặt > Quyền riêng tư & Bảo mật > Nhận dạng giọng nói.",
-    "unavailable": "Nhận dạng giọng nói không khả dụng trên thiết bị này"
+    "unavailable": "Nhận dạng giọng nói không khả dụng trên thiết bị này",
+    "onDeviceUnavailable": "Voice input needs on-device speech recognition, which isn't available for your language on this device. Audio is never sent to Apple's servers."
   },
   "auditLog": {
     "actor": "Người thực hiện",
@@ -4509,7 +4510,8 @@
     "transcriptionError": "Loi phien am",
     "transcriptionStopped": "Da dung phien am",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Call transcription needs on-device speech recognition, which isn't available for this language on this device. Audio is never sent to a cloud service."
   },
   "triage": {
     "caseCreated": "Hồ sơ đã tạo và liên kết",
