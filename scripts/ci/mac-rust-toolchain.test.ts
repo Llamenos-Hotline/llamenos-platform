@@ -127,7 +127,7 @@ describe('verify', () => {
   })
 
   test('FAILS when rustup still points at the shared asdf installation', () => {
-    const r = verify({ reportedHome: '/Users/rhonda/.asdf/installs/rust/1.93.1' })
+    const r = verify({ reportedHome: '/opt/shared-asdf/installs/rust/1.93.1' })
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('still sharing a toolchain')
   })

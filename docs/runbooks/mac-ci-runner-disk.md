@@ -44,7 +44,7 @@ Measured 2026-11-05 and again **2026-11-14**:
 
 1. **macOS TCC "Removable Volumes" blocks the runner service.** The user TCC
    database has a `kTCCServiceSystemPolicyRemovableVolumes` row for
-   `/Users/rhonda/actions-runner-ios-1/externals/node20/bin/node` with
+   `$HOME/actions-runner-ios-1/externals/node20/bin/node` (the runner account's home) with
    `auth_value 0` (**denied**). A process started by launchd
    (`launchctl submit`, the same kind of context the runner's `runsvc.sh`
    LaunchAgent gives its children) gets `Operation not permitted` from `ls` and
