@@ -339,6 +339,27 @@ jobs:
           fi
           echo "release_only=$RELEASE_ONLY" >> "$GITHUB_OUTPUT"
 
+          # ci.yml's own diff is classified by CONTENT (#3131): the script
+          # compares the two parsed workflows, so it needs the file at both
+          # ends of the SAME range the file list came from — the merge base
+          # on `pull_request` (the three-dot diff above), $BASE otherwise.
+          # Anything unresolvable (FALLBACK_ALL, an added or deleted ci.yml, a
+          # failed `git show`) leaves the variables unset, and the script then
+          # treats ci.yml exactly as before: FULL.
+          CI_YML=.github/workflows/ci.yml
+          if [[ "$FALLBACK_ALL" == "false" ]] && grep -qxF "$CI_YML" <<< "$CHANGED"; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              CI_YML_BASE_REV=$(git merge-base "$BASE" "$HEAD" 2>/dev/null || true)
+            else
+              CI_YML_BASE_REV="$BASE"
+            fi
+            if [[ -n "$CI_YML_BASE_REV" ]] \
+               && git show "$CI_YML_BASE_REV:$CI_YML" > "$RUNNER_TEMP/ci-yml.base" 2>/dev/null \
+               && git show "$HEAD:$CI_YML" > "$RUNNER_TEMP/ci-yml.head" 2>/dev/null; then
+              export CI_YML_BASE_FILE="$RUNNER_TEMP/ci-yml.base" CI_YML_HEAD_FILE="$RUNNER_TEMP/ci-yml.head"
+            fi
+          fi
+
           printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
 
   # ─── Guard: No Generated Files In Git ────────────────────

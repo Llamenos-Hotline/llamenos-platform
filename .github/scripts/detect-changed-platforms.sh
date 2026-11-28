@@ -251,6 +251,307 @@ E2E_INFRA_ANDROID_RE='^(packages/test-specs/features/platform/mobile/|\.github/a
 PLAYWRIGHT_CONFIG_RE='^playwright\.config\.ts$'
 DOCS_ONLY_EXEMPT_RE='\.md$|^site/'
 
+# ── ci.yml is classified by its CONTENT, not its name (#3131) ──────────────
+# `.github/workflows/ci.yml` is ONE file holding every job in the repo, and it
+# is named in SHARED_DEPS_RE, IOS_FULL_RE and IOS_COMPILE_RE because a diff to
+# it can change what any gate does — including make its own changes skip the
+# gates. Keyed on the file name alone, that also charged the FULL iOS tier
+# (326 tests, two serial waves on the two self-hosted Macs) to a diff that
+# could not change any job: #3120's whole ci.yml diff is five added YAML
+# comment lines, and #3089's is one step appended to `docs-guard`, a job on a
+# hosted Linux VM that neither feeds nor reads any iOS job.
+#
+# The narrowing is DERIVED from the two parsed workflows, never declared by
+# the diff's author, and every path it cannot finish ends in `ios` (= today's
+# behaviour: all three regexes apply). The classes:
+#
+#   inert        The two files parse to the IDENTICAL YAML node graph — same
+#                tags, same scalar values AND styles, same key order, aliases
+#                expanded. Comments and layout are discarded by every YAML
+#                parser, so no job can observe the change. A `#` line inside
+#                a `run: |` block is NOT a YAML comment — it is part of that
+#                string, so it changes the graph and is never inert. The file
+#                then sets no platform flag. It does set `orchestrator`:
+#                tests/orchestrator/ reads ci.yml's raw TEXT (job-block
+#                slicing, pinned `if:` strings), and those rails must still see
+#                the edit.
+#   outside_ios  Nothing outside `jobs:` changed (`on`, `env`, `defaults`,
+#                `concurrency`, `permissions`, `name`, top-level anchors, ...),
+#                the job ids are the same names in the same order (an added,
+#                removed, renamed or reordered job is `ios`), and EVERY job
+#                whose subtree changed is, on BOTH sides:
+#                  - on a GitHub-hosted Linux VM: `runs-on` is one literal
+#                    `ubuntu-*` label and there is no `uses:`. Anything else —
+#                    the self-hosted Macs, a matrix expression, a
+#                    reusable-workflow call like `ios-e2e` — is an "executor"
+#                    that may be the iOS gate;
+#                  - not a reader of the flags this narrowing changes
+#                    (`ios_tier`, `ios_compile`, `ios_full`) nor of outputs by
+#                    an indirect accessor (`outputs[...]`, `toJSON(needs…)`,
+#                    `needs.*`, `needs[...]`) — such a job would run differently
+#                    under the narrowed flags, so its own edit would go
+#                    unverified;
+#                  - not needed, transitively, by an executor or a flag reader
+#                    (it cannot feed them an output or a result) — this is what
+#                    keeps `changes`, the path-filter wiring, FULL;
+#                  - not needing, transitively, an executor (it cannot read an
+#                    iOS verdict) — this is what keeps `ci-status` and
+#                    `platform-suite-coverage` FULL;
+#                  - without a job-level `concurrency` (a group can cancel or
+#                    hold another job) and with unchanged `permissions`.
+#                Every `needs` edge is read from both sides, so an edge added
+#                or removed toward an iOS job is caught on the side that has
+#                it. Because aliases are expanded before comparing, an anchor
+#                edited in one job and consumed by an iOS job shows up as a
+#                change to the iOS job. A merge key (`<<:`) at the workflow,
+#                `jobs:` or job level, a duplicate key, a recursive alias or an
+#                alias expansion past the node budget is unclassifiable.
+#                Result: the file still sets every platform flag, `ios`
+#                included (the smoke tier still runs), but not `ios_full` and
+#                not `ios_compile`.
+#   ios          Anything else, and every failure to decide: no base/head
+#                content supplied, either side unreadable or absent (an added
+#                or deleted ci.yml), not exactly one YAML mapping document,
+#                python3 or PyYAML missing, or a crash. All three regexes apply.
+#
+# The classification is over the WHOLE file, never per hunk: a comment edit
+# riding along with one changed step in an iOS job is `ios`.
+#
+# INPUTS: `CI_YML_BASE_FILE` and `CI_YML_HEAD_FILE`, paths to ci.yml's text at
+# the diff's base and head. The caller resolves them, because only it knows the
+# base: ci.yml's `changes` job writes them from the same BASE/HEAD it diffs
+# (the merge base on `pull_request`, the queue target on `merge_group`). A
+# caller that supplies neither — the orchestrator's queue-feed, the tests that
+# pipe a bare file list, the operator's `arm-batch.sh`, which lifts the regex
+# assignments out of this file — gets `ios` for ci.yml, i.e. it over-reports
+# in the expensive direction and never misses a gate. A consumer that wants the
+# narrowing must run THIS script with those two variables; re-implementing the
+# classification elsewhere is the drift #664 exists to prevent.
+CI_YML_PATH='.github/workflows/ci.yml'
+
+# Prints one line: `<class>\t<reason>`. Exits 0 whenever it printed a verdict.
+classify_ci_yml() {
+  python3 - "$1" "$2" <<'PY'
+import re
+import sys
+
+
+def verdict(cls, why):
+    print(f"{cls}\t{why}")
+    sys.exit(0)
+
+
+try:
+    import yaml
+    from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+except Exception as e:  # noqa: BLE001 — any import failure is "cannot decide"
+    verdict("error", f"PyYAML is not importable ({type(e).__name__}), so the workflow cannot be parsed")
+
+
+class Unclassifiable(Exception):
+    pass
+
+
+# Node visits allowed per side. ci.yml is a few tens of thousands of nodes;
+# an alias bomb is millions.
+BUDGET = 2_000_000
+HOSTED_LINUX = re.compile(r"ubuntu-[0-9a-z.]+\Z")
+# The flags THIS narrowing changes, plus indirect output accessors that could
+# reach them without naming them.
+FLAG_READ = re.compile(r"ios_tier|ios_compile|ios_full|outputs\s*\[|tojson\s*\(\s*needs|needs\s*(\.\s*\*|\[)", re.I)
+
+
+class Canon:
+    """Canonical form of a composed node: tags, scalar values and styles, key
+    order; aliases expanded (so an anchor's consumers see its edits)."""
+
+    def __init__(self):
+        self.left = BUDGET
+
+    def __call__(self, node, stack=()):
+        self.left -= 1
+        if self.left < 0:
+            raise Unclassifiable("expands past the node budget (an alias bomb?)")
+        if isinstance(node, ScalarNode):
+            return ("s", node.tag, node.style, node.value)
+        if id(node) in stack:
+            raise Unclassifiable("contains a recursive alias")
+        stack = stack + (id(node),)
+        if isinstance(node, SequenceNode):
+            return ("q", node.tag, tuple(self(c, stack) for c in node.value))
+        if isinstance(node, MappingNode):
+            return ("m", node.tag, tuple((self(k, stack), self(v, stack)) for k, v in node.value))
+        raise Unclassifiable(f"has an unknown node kind {type(node).__name__}")
+
+
+def scalars(c):
+    if c[0] == "s":
+        yield c[3]
+    elif c[0] == "q":
+        for x in c[2]:
+            yield from scalars(x)
+    else:
+        for k, v in c[2]:
+            yield from scalars(k)
+            yield from scalars(v)
+
+
+def entries(node, what):
+    if not isinstance(node, MappingNode):
+        raise Unclassifiable(f"{what} is not a mapping")
+    order, out = [], {}
+    for k, v in node.value:
+        if not isinstance(k, ScalarNode) or k.value == "<<":
+            raise Unclassifiable(f"{what} has a key that is not a plain name (a merge key or a complex key)")
+        if k.value in out:
+            raise Unclassifiable(f'{what} has the key "{k.value}" twice')
+        order.append(k.value)
+        out[k.value] = (k, v)
+    return order, out
+
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        docs = list(yaml.compose_all(f.read(), Loader=yaml.SafeLoader))
+    if len(docs) != 1 or not isinstance(docs[0], MappingNode):
+        raise Unclassifiable(f"{path} is not exactly one YAML mapping document")
+    return docs[0]
+
+
+def model(root, canon):
+    order, top = entries(root, "the workflow")
+    if "jobs" not in top:
+        raise Unclassifiable("has no jobs: mapping")
+    rest = tuple(
+        (canon(top[n][0]), ("jobs", top[n][1].tag) if n == "jobs" else canon(top[n][1])) for n in order
+    )
+    job_order, jobs = entries(top["jobs"][1], "jobs:")
+    out = {}
+    for name in job_order:
+        key, node = jobs[name]
+        _, fields = entries(node, f'job "{name}"')
+        c = canon(node)
+        needs = []
+        if "needs" in fields:
+            n = fields["needs"][1]
+            if isinstance(n, ScalarNode):
+                needs = [n.value]
+            elif isinstance(n, SequenceNode) and all(isinstance(x, ScalarNode) for x in n.value):
+                needs = [x.value for x in n.value]
+            else:
+                raise Unclassifiable(f'job "{name}" has a needs: that is not a job id or a list of them')
+        ro = fields.get("runs-on")
+        hosted_linux = (
+            "uses" not in fields
+            and ro is not None
+            and isinstance(ro[1], ScalarNode)
+            and HOSTED_LINUX.match(ro[1].value) is not None
+        )
+        out[name] = {
+            "canon": (canon(key), c),
+            "needs": needs,
+            "executor": not hosted_linux,
+            "flag_reader": any(FLAG_READ.search(s) for s in scalars(c)),
+            "concurrency": "concurrency" in fields,
+            "permissions": canon(fields["permissions"][1]) if "permissions" in fields else None,
+        }
+    for name, job in out.items():
+        for n in job["needs"]:
+            if n not in out:
+                raise Unclassifiable(f'job "{name}" needs "{n}", which is not a job')
+    return rest, job_order, out
+
+
+def ancestors(jobs, name):
+    seen, todo = set(), list(jobs[name]["needs"])
+    while todo:
+        n = todo.pop()
+        if n not in seen:
+            seen.add(n)
+            todo.extend(jobs[n]["needs"])
+    return seen
+
+
+def risks(name, side, jobs):
+    job = jobs[name]
+    why = []
+    if job["executor"]:
+        why.append(f"is not provably on a GitHub-hosted Linux VM ({side})")
+    if job["flag_reader"]:
+        why.append(f"reads the iOS tier/compile flags or an output indirectly ({side})")
+    if job["concurrency"]:
+        why.append(f"declares a job-level concurrency group ({side})")
+    read = sorted(a for a in ancestors(jobs, name) if jobs[a]["executor"])
+    if read:
+        why.append(f"needs {', '.join(read)} ({side})")
+    fed = sorted(j for j in jobs if name in ancestors(jobs, j) and (jobs[j]["executor"] or jobs[j]["flag_reader"]))
+    if fed:
+        why.append(f"is needed by {', '.join(fed)} ({side})")
+    return why
+
+
+def classify(base_path, head_path):
+    b_root, h_root = load(base_path), load(head_path)
+    bc, hc = Canon(), Canon()
+    if bc(b_root) == hc(h_root):
+        return "inert", "parses to the identical workflow — the diff changes only comments or layout"
+    b_rest, b_order, b_jobs = model(b_root, bc)
+    h_rest, h_order, h_jobs = model(h_root, hc)
+    if b_rest != h_rest:
+        return "ios", "changes workflow-level configuration outside jobs: (on, env, defaults, concurrency, permissions, ...)"
+    if b_order != h_order:
+        return "ios", "adds, removes, renames or reorders a job"
+    changed = [n for n in b_order if b_jobs[n]["canon"] != h_jobs[n]["canon"]]
+    if not changed:
+        return "ios", "differs in a way no single job accounts for"
+    found = []
+    for name in changed:
+        why = risks(name, "base", b_jobs) + risks(name, "head", h_jobs)
+        if b_jobs[name]["permissions"] != h_jobs[name]["permissions"]:
+            why.append("changes its permissions")
+        if why:
+            found.append(f"{name} {'; '.join(why)}")
+    if found:
+        return "ios", "changes a job that can reach the iOS gate: " + " | ".join(found)
+    return "outside_ios", f"changes only job(s) {', '.join(changed)}, none of which is, feeds or reads an iOS gate job"
+
+
+try:
+    verdict(*classify(sys.argv[1], sys.argv[2]))
+except Unclassifiable as e:
+    verdict("ios", f"cannot be classified: {e}")
+except SystemExit:
+    raise
+except BaseException as e:  # noqa: BLE001 — every failure is "cannot decide"
+    verdict("error", f"the classifier failed ({type(e).__name__}: {e})")
+PY
+}
+
+ci_yml_class=ios
+if grep -qxF "$CI_YML_PATH" <<< "$CHANGED_FILES"; then
+  if [[ -n "${CI_YML_BASE_FILE:-}" && -n "${CI_YML_HEAD_FILE:-}" \
+        && -f "$CI_YML_BASE_FILE" && -r "$CI_YML_BASE_FILE" \
+        && -f "$CI_YML_HEAD_FILE" && -r "$CI_YML_HEAD_FILE" ]]; then
+    ci_yml_verdict=$(classify_ci_yml "$CI_YML_BASE_FILE" "$CI_YML_HEAD_FILE") \
+      || ci_yml_verdict=$'error\tthe classifier exited non-zero (python3 missing?)'
+  else
+    ci_yml_verdict=$'ios\tno base/head content was supplied (CI_YML_BASE_FILE / CI_YML_HEAD_FILE), or one side is unreadable'
+  fi
+  ci_yml_class=${ci_yml_verdict%%$'\t'*}
+  ci_yml_why=${ci_yml_verdict#*$'\t'}
+  case "$ci_yml_class" in
+    inert|outside_ios|ios|error) ;;
+    *) ci_yml_why="the classifier printed no verdict (${ci_yml_verdict:0:200})"; ci_yml_class=error ;;
+  esac
+  if [[ "$ci_yml_class" == error ]]; then
+    # Fail closed, but VISIBLY: content was supplied and the tool could not
+    # read it, so the narrowing silently stopped applying. Say so in the run.
+    ci_yml_class=ios
+    echo "::warning title=ci.yml content classification unavailable::$ci_yml_why — ci.yml is treated as FULL" >&2
+  fi
+  echo "ci.yml classified as $ci_yml_class: $ci_yml_why" >&2
+fi
+
 docs_only=true
 ios=false
 ios_full=false
@@ -270,15 +571,27 @@ while IFS= read -r file; do
     docs_only=false
   fi
 
-  if echo "$file" | grep -qE "$SHARED_DEPS_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE"; then
+  # ci.yml's content class (above) narrows what its NAME would earn: `inert`
+  # takes it out of all three regexes, `outside_ios` out of the two iOS-tier
+  # ones. `ios` — every undecided case — narrows nothing.
+  narrow_shared=false; narrow_ios=false
+  if [[ "$file" == "$CI_YML_PATH" ]]; then
+    case "$ci_yml_class" in
+      inert) narrow_shared=true; narrow_ios=true; orchestrator=true
+             echo "ci.yml changed only comments/layout — its text-reading rails (orchestrator) still run" >&2 ;;
+      outside_ios) narrow_ios=true ;;
+    esac
+  fi
+
+  if [[ "$narrow_shared" == false ]] && echo "$file" | grep -qE "$SHARED_DEPS_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE"; then
     ios=true; android=true; desktop=true; backend=true; crypto=true
     echo "Shared-dependency file changed: $file" >&2
   fi
 
   echo "$file" | grep -qE "$IOS_RE" && { ios=true; echo "iOS file changed: $file" >&2; }
-  echo "$file" | grep -qE "$IOS_FULL_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE" \
+  [[ "$narrow_ios" == false ]] && echo "$file" | grep -qE "$IOS_FULL_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE" \
     && { ios=true; ios_full=true; echo "iOS full-tier file changed: $file" >&2; }
-  echo "$file" | grep -qE "$IOS_COMPILE_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE" \
+  [[ "$narrow_ios" == false ]] && echo "$file" | grep -qE "$IOS_COMPILE_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE" \
     && { ios=true; ios_compile=true; echo "iOS compile input changed: $file" >&2; }
   echo "$file" | grep -qE "$ANDROID_RE" && { android=true; echo "Android file changed: $file" >&2; }
   echo "$file" | grep -qE "$DESKTOP_RE" && ! echo "$file" | grep -qE "$DESKTOP_EXCLUDE_RE" \
