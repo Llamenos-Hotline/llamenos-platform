@@ -31,8 +31,8 @@ vi.mock('./platform', async importOriginal => ({
   ...(await importOriginal<typeof import('./platform')>()),
   getHubChainAnchor: vi.fn(async (hub: string) => mocks.anchors.get(hub) ?? null),
   setHubChainAnchor: vi.fn(async (hub: string, head: { seq: number; hash: string }) => { mocks.anchors.set(hub, head) }),
-  hubChainCall: vi.fn(async (_op: string, req: unknown) => mocks.verify(req)),
-  hubChainSignLink: vi.fn(),
+  hubChainCall: vi.fn(async (op: string, req: unknown) => op === 'usersNamed' ? { users: [] } : mocks.verify(req)),
+  hubChainSign: vi.fn(),
   getDevicePubkeys: vi.fn(),
 }))
 vi.mock('./user-identity', () => ({ assertExtendsVerifiedHead: vi.fn(), initializeUserIdentity: vi.fn(), recordVerifiedHead: vi.fn(), toCryptoSigchainLink: (l: unknown) => l }))

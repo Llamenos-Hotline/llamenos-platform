@@ -17,11 +17,11 @@ import { bytesToHex, bytesToUtf8, hexToBytes, utf8ToBytes } from '@shared/encodi
 import type { AdminHpkeRecipient } from './admin-recipient'
 import type {
   CrateSigchainLink,
-  HubChainLink,
   HubChainOps,
+  LinkIntentRequest,
+  SignedIntent,
   RecoveryApproval,
   SigchainVerifiedState,
-  UnsignedHubLink,
   UnsignedRecoveryApproval,
 } from '@protocol/schemas/hub-chain'
 import type { KeyEnvelope, RelayEventKey } from '@protocol/schemas'
@@ -79,7 +79,7 @@ export type TauriIpcCommand =
   | 'user_init_payload_from_state'
   | 'sigchain_verify_link'
   | 'hub_chain_call'
-  | 'hub_chain_sign_link_from_state'
+  | 'hub_chain_sign_from_state'
   | 'recovery_approval_sign_from_state'
   | 'sframe_derive_key'
   | 'hpke_unwrap_and_set_hub_key'
@@ -545,10 +545,14 @@ export async function hubChainCall<Op extends keyof HubChainOps>(
   return JSON.parse(answer) as HubChainOps[Op]['answer']
 }
 
-/** Sign an unsigned hub-chain link with this device's key, held in Rust. */
-export async function hubChainSignLink(unsigned: UnsignedHubLink): Promise<HubChainLink> {
-  const signed = await tauriInvoke<string>('hub_chain_sign_link_from_state', { unsignedJson: JSON.stringify(unsigned) })
-  return JSON.parse(signed) as HubChainLink
+/**
+ * Build and sign one hub-chain link from an intent with this device's key,
+ * held in Rust. The crate derives every signed field; the answer is the link
+ * and the head it makes (#3133).
+ */
+export async function hubChainSign(request: LinkIntentRequest): Promise<SignedIntent> {
+  const signed = await tauriInvoke<string>('hub_chain_sign_from_state', { requestJson: JSON.stringify(request) })
+  return JSON.parse(signed) as SignedIntent
 }
 
 /** Sign a recovery approval with this holder device's key, held in Rust (D14). */

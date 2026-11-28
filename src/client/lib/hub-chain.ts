@@ -26,10 +26,12 @@ import type {
   HubChainLink,
   HubChainState,
   HubChainVerified,
-  UnsignedHubLink,
+  LinkIntent,
+  SignedIntent,
 } from '@protocol/schemas/hub-chain'
 import { appendHubChainLink, createHub, getHubChainPage, getHubFounding, getSigchain } from './api'
-import { getDevicePubkeys, getHubChainAnchor, hubChainCall, hubChainSignLink, setHubChainAnchor } from './platform'
+import { getDevicePubkeys, getHubChainAnchor, hubChainCall, hubChainSign, setHubChainAnchor } from './platform'
+import { ApiError } from './api/client'
 import { assertExtendsVerifiedHead, initializeUserIdentity, recordVerifiedHead, toCryptoSigchainLink } from './user-identity'
 import type { Hub } from '@shared/types'
 
@@ -69,17 +71,6 @@ function record(hubId: string, status: HubChainStatus): HubChainStatus {
   return status
 }
 
-/** Every user a verifier of `links` needs the chain of: each signer, and each recovery holder. */
-function usersNamedBy(links: readonly HubChainLink[]): string[] {
-  const named = new Set<string>()
-  for (const l of links) {
-    named.add(l.signerUser)
-    const holders = l.body.type === 'recovery_group' ? l.body.holders : undefined
-    if (Array.isArray(holders)) for (const h of holders) if (typeof h === 'string') named.add(h)
-  }
-  return [...named].sort()
-}
-
 async function fetchChain(hubId: string): Promise<HubChainLink[]> {
   const links: HubChainLink[] = []
   for (let from = 1; ;) {
@@ -90,8 +81,10 @@ async function fetchChain(hubId: string): Promise<HubChainLink[]> {
   }
 }
 
-async function userChainsFor(links: readonly HubChainLink[]): Promise<CrateSigchainLink[][]> {
-  const chains = await Promise.all(usersNamedBy(links).map(async u => (await getSigchain(u)).links.map(toCryptoSigchainLink)))
+/** The user chain of every user the crate says a verifier of `links` needs (each signer, each recovery holder). */
+async function userChainsFor(links: HubChainLink[]): Promise<CrateSigchainLink[][]> {
+  const { users } = await hubChainCall('usersNamed', { links })
+  const chains = await Promise.all(users.map(async u => (await getSigchain(u)).links.map(toCryptoSigchainLink)))
   return chains.filter(c => c.length > 0)
 }
 
@@ -246,40 +239,33 @@ async function ownHead(userPubkey: string): Promise<ChainHead> {
  * The founding links of a new hub, signed by this device (#2963): the genesis
  * naming the founder alone with the founder bundles the server's catalog
  * designates, and — appended once the hub exists — one `policy {kind: bundle}`
- * per bundle committing its concrete permissions (D12, ids in clear).
+ * per bundle committing its concrete permissions (D12, ids in clear). The
+ * crate builds every link from its intent (#3133).
  */
-export async function signGenesis(hubId: string, founder: string): Promise<{ genesis: HubChainLink; policies: (prev: HubChainLink) => Promise<HubChainLink[]> }> {
+export async function signGenesis(hubId: string, founder: string): Promise<{ genesis: HubChainLink; policies: (prev: ChainHead) => Promise<SignedIntent[]> }> {
   const { bundles } = await getHubFounding()
   if (bundles.length === 0) throw new Error('The server names no founder role for a new hub')
   const head = await ownHead(founder)
-  const genesis = await hubChainSignLink({
+  const { link: genesis } = await hubChainSign({
     hub: hubId,
-    seq: 1,
-    prevHash: null,
+    prev: null,
     signerUser: founder,
     signerUserHead: head,
-    body: {
-      type: 'genesis',
-      founder,
-      migration: 0,
-      members: [{ user: founder, bundles: bundles.map(b => b.bundle).sort() }],
-    },
+    intent: { type: 'genesis', bundles: bundles.map(b => b.bundle) },
   })
-  const policies = async (prev: HubChainLink) => {
-    const out: HubChainLink[] = []
+  const policies = async (prev: ChainHead) => {
+    const out: SignedIntent[] = []
     let last = prev
     for (const b of bundles) {
-      const { permsHash } = await hubChainCall('permsHash', { permissions: b.permissions })
-      const unsigned: UnsignedHubLink = {
+      const signed = await hubChainSign({
         hub: hubId,
-        seq: last.seq + 1,
-        prevHash: last.entryHash,
+        prev: last,
         signerUser: founder,
         signerUserHead: head,
-        body: { type: 'policy', kind: 'bundle', bundle: b.bundle, permissions: b.permissions, permsHash },
-      }
-      last = await hubChainSignLink(unsigned)
-      out.push(last)
+        intent: { type: 'bundlePolicy', bundle: b.bundle, permissions: b.permissions },
+      })
+      out.push(signed)
+      last = signed.head
     }
     return out
   }
@@ -290,13 +276,64 @@ export async function signGenesis(hubId: string, founder: string): Promise<{ gen
  * Commit the founding bundle policies after the hub exists, and take this
  * device's own genesis as the hub's first trusted anchor.
  */
-export function completeFounding(hubId: string, genesis: HubChainLink, policies: (prev: HubChainLink) => Promise<HubChainLink[]>): Promise<void> {
+export function completeFounding(hubId: string, genesis: HubChainLink, policies: (prev: ChainHead) => Promise<SignedIntent[]>): Promise<void> {
   return serialisedForHub(hubId, async () => {
-    await advanceHubAnchor(hubId, { seq: genesis.seq, hash: genesis.entryHash })
-    for (const link of await policies(genesis)) {
+    const genesisHead = { seq: genesis.seq, hash: genesis.entryHash }
+    await advanceHubAnchor(hubId, genesisHead)
+    for (const { link, head } of await policies(genesisHead)) {
       await appendHubChainLink(hubId, link)
       // The anchor is this device's own signed link, never the server's echo.
-      await advanceHubAnchor(hubId, { seq: link.seq, hash: link.entryHash })
+      await advanceHubAnchor(hubId, head)
+    }
+  })
+}
+
+/** How many times an append that lost the head race is rebuilt (§5.1). */
+const APPEND_ATTEMPTS = 3
+
+/** Thrown when this device's verified chain does not let it sign the intended link. */
+export class HubChainWriteRefusedError extends Error {
+  constructor(readonly hubId: string, readonly status: HubChainStatus) {
+    super(`This device cannot write to hub ${hubId}'s authority chain: it is not verified (${status.kind})`)
+    this.name = 'HubChainWriteRefusedError'
+  }
+}
+
+/**
+ * Sign and append the links `intents(state)` names, as this user, on the head
+ * this device has just verified (§5.1): verify, let the caller decide against
+ * the verified state, sign each through the crate, append. A lost race (409)
+ * re-reads, re-verifies, re-decides and re-signs. Every role write — adding a
+ * member, changing or revoking a role, signing a pending member — goes
+ * through here; the server has no unsigned role write (#3133).
+ */
+export function appendIntents(
+  hubId: string,
+  signer: string,
+  intents: (verified: HubChainVerified) => LinkIntent[] | Promise<LinkIntent[]>,
+): Promise<HubChainVerified> {
+  return serialisedForHub(hubId, async () => {
+    for (let attempt = 1; ; attempt++) {
+      const status = await loadHubChainNow(hubId)
+      if (status.kind !== 'verified') throw new HubChainWriteRefusedError(hubId, status)
+      const wanted = await intents(status.verified)
+      if (wanted.length === 0) return status.verified
+      const head = await ownHead(signer)
+      let prev = status.verified.head
+      try {
+        for (const intent of wanted) {
+          const signed = await hubChainSign({ hub: hubId, prev, signerUser: signer, signerUserHead: head, intent })
+          await appendHubChainLink(hubId, signed.link)
+          await advanceHubAnchor(hubId, signed.head)
+          prev = signed.head
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409 && attempt < APPEND_ATTEMPTS) continue
+        throw err
+      }
+      const after = await loadHubChainNow(hubId)
+      if (after.kind !== 'verified') throw new HubChainWriteRefusedError(hubId, after)
+      return after.verified
     }
   })
 }

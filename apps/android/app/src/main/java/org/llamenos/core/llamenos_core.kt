@@ -739,7 +739,7 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_hub_chain(
     ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign_link(
+    external fun uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_is_unlocked(
     ): Short
@@ -926,7 +926,7 @@ external fun uniffi_llamenos_core_fn_func_mobile_has_wake_key(uniffi_out_err: Un
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_hub_chain(`requestJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_hub_chain_sign_link(`unsignedJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+external fun uniffi_llamenos_core_fn_func_mobile_hub_chain_sign(`requestJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_is_unlocked(uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
@@ -1271,7 +1271,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_hub_chain() != 6094.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign_link() != 10729.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign() != 51133.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_is_unlocked() != 56931.toShort()) {
@@ -4381,14 +4381,17 @@ public object FfiConverterSequenceTypeSigchainVerifiedState: FfiConverterRustBuf
     
 
         /**
-         * Sign an unsigned hub-chain link (JSON) with this device's key from mobile state.
+         * Build and sign one hub-chain link from an intent (JSON
+         * `hub_chain::LinkIntentRequest`) with this device's key from mobile state;
+         * the answer is `{link, head}`. The crate derives every signed field: the app
+         * never assembles or parses one (#3133).
          */
-    @Throws(CryptoException::class) fun `mobileHubChainSignLink`(`unsignedJson`: kotlin.String): kotlin.String {
+    @Throws(CryptoException::class) fun `mobileHubChainSign`(`requestJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hub_chain_sign_link(
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hub_chain_sign(
     
-        FfiConverterString.lower(`unsignedJson`),_status)
+        FfiConverterString.lower(`requestJson`),_status)
 }
     )
     }

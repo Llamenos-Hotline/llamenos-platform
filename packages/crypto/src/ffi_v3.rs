@@ -809,10 +809,13 @@ pub fn mobile_hub_chain(request_json: String) -> Result<String, CryptoError> {
     crate::hub_chain::call_json(&request_json)
 }
 
-/// Sign an unsigned hub-chain link (JSON) with this device's key from mobile state.
+/// Build and sign one hub-chain link from an intent (JSON
+/// `hub_chain::LinkIntentRequest`) with this device's key from mobile state;
+/// the answer is `{link, head}`. The crate derives every signed field: the app
+/// never assembles or parses one (#3133).
 #[uniffi::export]
-pub fn mobile_hub_chain_sign_link(unsigned_json: String) -> Result<String, CryptoError> {
-    with_secrets(|secrets, _| crate::hub_chain::sign_link_json(secrets, &unsigned_json))
+pub fn mobile_hub_chain_sign(request_json: String) -> Result<String, CryptoError> {
+    with_secrets(|secrets, _| crate::hub_chain::sign_intent_json(secrets, &request_json))
 }
 
 /// Sign a recovery approval (JSON) with this holder device's key (D14).

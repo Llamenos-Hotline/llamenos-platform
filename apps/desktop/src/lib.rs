@@ -224,7 +224,7 @@ pub fn run() {
             crypto::sigchain_verify,
             crypto::sigchain_verify_users,
             crypto::hub_chain_call,
-            crypto::hub_chain_sign_link_from_state,
+            crypto::hub_chain_sign_from_state,
             crypto::recovery_approval_sign_from_state,
             crypto::user_init_payload_from_state,
             crypto::sigchain_verify_link,

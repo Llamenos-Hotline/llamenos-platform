@@ -1853,6 +1853,8 @@ fn parse<T: serde::de::DeserializeOwned>(v: Value, op: &str) -> Result<T, Crypto
 /// | `permsHash` | `{permissions}` | `{permsHash}` |
 /// | `verifySigchain` | `{links, userChains, hubChains, hubAnchors}` | [`SigchainVerifiedState`] |
 /// | `approvalMessage` | `{approval, holderDevice}` | `{message}` (hex) |
+/// | `build` | [`LinkIntentRequest`] | [`UnsignedHubLink`] (for hosts whose key is outside a crate session) |
+/// | `usersNamed` | `{links}` | `{users}`: every user whose chain a verifier of `links` needs (each signer, each recovery holder), sorted |
 pub fn call(op: &str, request: Value) -> Result<Value, CryptoError> {
     Ok(match op {
         "verify" => serde_json::to_value(verify_hub_chain(&parse(request, op)?)?)?,
@@ -1883,6 +1885,16 @@ pub fn call(op: &str, request: Value) -> Result<Value, CryptoError> {
                 &r.hub_anchors,
             )?)?
         }
+        "build" => serde_json::to_value(build_intent(&parse(request, op)?)?)?,
+        "usersNamed" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct R {
+                links: Vec<Value>,
+            }
+            let r: R = parse(request, op)?;
+            serde_json::json!({"users": users_named(&r.links)})
+        }
         "approvalMessage" => {
             let r: ApprovalMessageReq = parse(request, op)?;
             let msg = recovery_approval_signing_message(&r.approval, &r.holder_device)?;
@@ -1908,11 +1920,149 @@ pub fn call_json(request_json: &str) -> Result<String, CryptoError> {
     Ok(serde_json::to_string(&call(&op, v)?)?)
 }
 
-/// Sign an unsigned link (JSON) with this device; the link as JSON.
-pub fn sign_link_json(secrets: &DeviceSecrets, unsigned_json: &str) -> Result<String, CryptoError> {
-    let u: UnsignedHubLink = serde_json::from_str(unsigned_json)
-        .map_err(|e| CryptoError::InvalidFormat(format!("unsigned hub link: {e}")))?;
-    Ok(serde_json::to_string(&sign_hub_link(secrets, &u)?)?)
+/// Every user a verifier of `links` needs the user chain of — each signer and
+/// each recovery holder — sorted and unique. Hosts ask this instead of reading
+/// link fields themselves; a malformed link names nothing and is refused by
+/// `verify` on its own terms.
+pub fn users_named(links: &[Value]) -> Vec<String> {
+    let mut named = BTreeSet::new();
+    for l in links {
+        if let Some(u) = l.get("signerUser").and_then(Value::as_str) {
+            named.insert(u.to_string());
+        }
+        let body = l.get("body");
+        if body.and_then(|b| b.get("type")).and_then(Value::as_str) == Some("recovery_group") {
+            if let Some(hs) = body
+                .and_then(|b| b.get("holders"))
+                .and_then(Value::as_array)
+            {
+                named.extend(hs.iter().filter_map(Value::as_str).map(str::to_string));
+            }
+        }
+    }
+    named.into_iter().collect()
+}
+
+// ── Building links from intent (#3133: no client assembles a signed field) ──
+
+/// What a client means a link to say. The crate derives every signed field
+/// from it — `seq`, `prevHash`, the body, its sorted sets and `permsHash` — so
+/// no host builds, parses or hashes a link (the condition the wire spec's
+/// codegen amendment is accepted on).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum LinkIntent {
+    /// A new hub's genesis: the signer founds it, holding `bundles` (§5.6).
+    Genesis { bundles: Vec<String> },
+    /// `policy {kind: bundle}` committing a bundle's permissions (D12).
+    BundlePolicy {
+        bundle: String,
+        permissions: Vec<String>,
+    },
+    /// `role_grant {user, bundle}`.
+    RoleGrant { user: String, bundle: String },
+    /// `role_revoke {user, bundle}`.
+    RoleRevoke { user: String, bundle: String },
+}
+
+/// A request to build and sign one link.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LinkIntentRequest {
+    pub hub: String,
+    /// The verified head the link extends; `None` only for a genesis.
+    pub prev: Option<ChainHead>,
+    pub signer_user: String,
+    pub signer_user_head: ChainHead,
+    pub intent: LinkIntent,
+}
+
+/// A link this device signed, and the head it makes — the head a client
+/// advances its anchor to, so it never reads one out of a link.
+#[derive(Debug, Clone, Serialize)]
+pub struct SignedIntent {
+    pub link: HubChainLink,
+    pub head: ChainHead,
+}
+
+fn sorted_set(xs: &[String]) -> Vec<String> {
+    xs.iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// The unsigned link `req` describes. Refuses a genesis that extends a head,
+/// and any other link that extends none.
+pub fn build_intent(req: &LinkIntentRequest) -> Result<UnsignedHubLink, CryptoError> {
+    let (seq, prev_hash) = match (&req.intent, &req.prev) {
+        (LinkIntent::Genesis { .. }, None) => (1, None),
+        (LinkIntent::Genesis { .. }, Some(_)) => {
+            return Err(rej("chain_genesis", "a genesis extends no head"))
+        }
+        (_, Some(p)) => (p.seq + 1, Some(p.hash.clone())),
+        (_, None) => return Err(rej("chain_seq", "only a genesis extends no head")),
+    };
+    let body = match &req.intent {
+        LinkIntent::Genesis { bundles } => serde_json::json!({
+            "type": "genesis",
+            "founder": req.signer_user,
+            "migration": 0,
+            "members": [{ "user": req.signer_user, "bundles": sorted_set(bundles) }],
+        }),
+        LinkIntent::BundlePolicy {
+            bundle,
+            permissions,
+        } => {
+            let permissions = sorted_set(permissions);
+            let perms_hash = bundle_perms_hash(&permissions)?;
+            serde_json::json!({
+                "type": "policy",
+                "kind": "bundle",
+                "bundle": bundle,
+                "permissions": permissions,
+                "permsHash": perms_hash,
+            })
+        }
+        LinkIntent::RoleGrant { user, bundle } => {
+            serde_json::json!({ "type": "role_grant", "user": user, "bundle": bundle })
+        }
+        LinkIntent::RoleRevoke { user, bundle } => {
+            serde_json::json!({ "type": "role_revoke", "user": user, "bundle": bundle })
+        }
+    };
+    Ok(UnsignedHubLink {
+        hub: req.hub.clone(),
+        seq,
+        prev_hash,
+        signer_user: req.signer_user.clone(),
+        signer_user_head: req.signer_user_head.clone(),
+        body,
+    })
+}
+
+/// Build the link `req` describes and sign it with this device (D11).
+pub fn sign_intent(
+    secrets: &DeviceSecrets,
+    req: &LinkIntentRequest,
+) -> Result<SignedIntent, CryptoError> {
+    let link = sign_hub_link(secrets, &build_intent(req)?)?;
+    let head = ChainHead {
+        seq: link.seq,
+        hash: link.entry_hash.clone(),
+    };
+    Ok(SignedIntent { link, head })
+}
+
+/// [`sign_intent`] over JSON: a [`LinkIntentRequest`] in, `{link, head}` out.
+pub fn sign_intent_json(
+    secrets: &DeviceSecrets,
+    request_json: &str,
+) -> Result<String, CryptoError> {
+    let req: LinkIntentRequest = serde_json::from_str(request_json)
+        .map_err(|e| CryptoError::InvalidFormat(format!("hub link intent: {e}")))?;
+    Ok(serde_json::to_string(&sign_intent(secrets, &req)?)?)
 }
 
 /// Sign a recovery approval (JSON) with this holder device; the approval as JSON.
@@ -1931,6 +2081,106 @@ pub fn sign_approval_json(
 pub(crate) mod tests {
     use super::*;
     use crate::sigchain::{create_sigchain_link, user_init_payload};
+
+    #[test]
+    fn sign_intent_derives_every_signed_field_and_the_chain_verifies() {
+        let alice = device(1);
+        let chain_a = user_chain(&alice);
+        let a = pk(&alice);
+        let head_a = head_of(&chain_a);
+        let hub = "hub-intent".to_string();
+        let req = |prev: Option<ChainHead>, intent: LinkIntent| LinkIntentRequest {
+            hub: hub.clone(),
+            prev,
+            signer_user: a.clone(),
+            signer_user_head: head_a.clone(),
+            intent,
+        };
+        let g = sign_intent(
+            &alice,
+            &req(
+                None,
+                LinkIntent::Genesis {
+                    bundles: vec!["b-admin".into()],
+                },
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            g.head,
+            ChainHead {
+                seq: 1,
+                hash: g.link.entry_hash.clone()
+            }
+        );
+        let p = sign_intent(
+            &alice,
+            &req(
+                Some(g.head.clone()),
+                LinkIntent::BundlePolicy {
+                    bundle: "b-admin".into(),
+                    // Unsorted, duplicated: the crate sorts and dedupes the signed set.
+                    permissions: vec![
+                        ROLE_MANAGEMENT.into(),
+                        "calls:answer".into(),
+                        "calls:answer".into(),
+                    ],
+                },
+            ),
+        )
+        .unwrap();
+        assert_eq!(p.link.prev_hash.as_deref(), Some(g.head.hash.as_str()));
+        assert_eq!(
+            p.link.body["permissions"],
+            serde_json::json!(["calls:answer", ROLE_MANAGEMENT])
+        );
+        let input = HubChainInput {
+            links: vec![g.link.clone(), p.link.clone()],
+            user_chains: vec![chain_a.clone()],
+            hub_chains: vec![],
+            anchor: None,
+            hub_anchors: vec![],
+        };
+        let v = verify_hub_chain(&input).unwrap();
+        assert_eq!(v.head, p.head);
+        // A genesis extends no head; anything else must extend one.
+        assert!(sign_intent(
+            &alice,
+            &req(
+                Some(g.head.clone()),
+                LinkIntent::Genesis { bundles: vec![] }
+            )
+        )
+        .is_err());
+        assert!(sign_intent(
+            &alice,
+            &req(
+                None,
+                LinkIntent::RoleGrant {
+                    user: a.clone(),
+                    bundle: "b-admin".into()
+                }
+            )
+        )
+        .is_err());
+        // `build` over JSON names the same unsigned link the signer signed.
+        let built = call(
+            "build",
+            serde_json::json!({
+                "hub": hub, "prev": g.head, "signerUser": a, "signerUserHead": head_a,
+                "intent": {"type": "roleRevoke", "user": a, "bundle": "b-admin"},
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            built["body"],
+            serde_json::json!({"type": "role_revoke", "user": a, "bundle": "b-admin"})
+        );
+        assert_eq!(built["seq"], 2);
+        // `usersNamed` names each signer once.
+        let named = call("usersNamed", serde_json::json!({"links": [g.link, p.link]})).unwrap();
+        assert_eq!(named["users"], serde_json::json!([a]));
+    }
 
     /// CI GUARD: the crate's permission vocabulary is the one
     /// `packages/protocol/hub-chain-permissions.json` states for the hosts.

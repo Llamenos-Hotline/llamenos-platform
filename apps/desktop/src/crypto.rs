@@ -880,15 +880,16 @@ pub fn hub_chain_call(request_json: String) -> Result<String, String> {
     llamenos_core::hub_chain::call_json(&request_json).map_err(crypto_err)
 }
 
-/// Sign an unsigned hub-chain link (JSON) with this device's Ed25519 key, held
-/// in CryptoState. Returns the signed link JSON.
+/// Build and sign one hub-chain link from an intent (JSON
+/// `hub_chain::LinkIntentRequest`) with this device's Ed25519 key, held in
+/// CryptoState. Returns `{link, head}`; the webview never assembles a link.
 #[tauri::command]
-pub fn hub_chain_sign_link_from_state(
+pub fn hub_chain_sign_from_state(
     state: tauri::State<'_, CryptoState>,
-    unsigned_json: String,
+    request_json: String,
 ) -> Result<String, String> {
     state.with_secrets(|secrets| {
-        llamenos_core::hub_chain::sign_link_json(secrets, &unsigned_json).map_err(crypto_err)
+        llamenos_core::hub_chain::sign_intent_json(secrets, &request_json).map_err(crypto_err)
     })
 }
 

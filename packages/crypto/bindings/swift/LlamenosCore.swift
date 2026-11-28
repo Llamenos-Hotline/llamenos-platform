@@ -3852,12 +3852,15 @@ public func mobileHubChain(requestJson: String)throws  -> String  {
 })
 }
 /**
- * Sign an unsigned hub-chain link (JSON) with this device's key from mobile state.
+ * Build and sign one hub-chain link from an intent (JSON
+ * `hub_chain::LinkIntentRequest`) with this device's key from mobile state;
+ * the answer is `{link, head}`. The crate derives every signed field: the app
+ * never assembles or parses one (#3133).
  */
-public func mobileHubChainSignLink(unsignedJson: String)throws  -> String  {
+public func mobileHubChainSign(requestJson: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
-    uniffi_llamenos_core_fn_func_mobile_hub_chain_sign_link(
-        FfiConverterString.lower(unsignedJson),$0
+    uniffi_llamenos_core_fn_func_mobile_hub_chain_sign(
+        FfiConverterString.lower(requestJson),$0
     )
 })
 }
@@ -4463,7 +4466,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_hub_chain() != 6094) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign_link() != 10729) {
+    if (uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign() != 51133) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_is_unlocked() != 56931) {

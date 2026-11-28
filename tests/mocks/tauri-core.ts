@@ -611,6 +611,26 @@ async function mockConfiguredOrigin(): Promise<URL | null> {
   }
 }
 
+/** Forward a hub-chain request to the dev server, which runs the crate's own `hub_chain::call`. */
+async function forwardHubChainCall(requestJson: string): Promise<string> {
+  const configured = await mockConfiguredOrigin()
+  const path = '/api/test-crypto/hub-chain'
+  const target = new URL(configured ? `${configured.origin}${path}` : path, window.location.origin)
+  const res = await fetch(target.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Test-Secret': String(import.meta.env.PLAYWRIGHT_DEV_SECRET ?? ''),
+    },
+    body: requestJson,
+    redirect: 'manual',
+  })
+  const body = (await res.json()) as { error?: string; code?: string }
+  // Same error shape as apps/desktop `crypto_err`: the closed code first.
+  if (!res.ok) throw new Error(body.error ?? `${body.code ?? 'invalid_input'}: hub-chain call failed (${res.status})`)
+  return JSON.stringify(body)
+}
+
 async function mockAllowedOrigin(): Promise<URL> {
   const configured = await mockConfiguredOrigin()
   if (!configured) throw new Error('no backend server configured')
@@ -971,28 +991,16 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   // the suite could pass against while the real one differs (#2104). Signing
   // uses ./hub-chain-mock, pinned byte-for-byte to the crate.
 
-  hub_chain_call: async (a) => {
-    const configured = await mockConfiguredOrigin()
-    const path = '/api/test-crypto/hub-chain'
-    const target = new URL(configured ? `${configured.origin}${path}` : path, window.location.origin)
-    const res = await fetch(target.toString(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Test-Secret': String(import.meta.env.PLAYWRIGHT_DEV_SECRET ?? ''),
-      },
-      body: a.requestJson as string,
-      redirect: 'manual',
-    })
-    const body = (await res.json()) as { error?: string; code?: string }
-    // Same error shape as apps/desktop `crypto_err`: the closed code first.
-    if (!res.ok) throw new Error(body.error ?? `${body.code ?? 'invalid_input'}: hub-chain call failed (${res.status})`)
-    return JSON.stringify(body)
-  },
+  hub_chain_call: (a) => forwardHubChainCall(a.requestJson as string),
 
-  hub_chain_sign_link_from_state: (a) => {
+  // Building a link is the crate's (`build`, forwarded like every other op);
+  // only the signature over the crate's unsigned link is made here.
+  hub_chain_sign_from_state: async (a) => {
     const secrets = requireSecrets()
-    return JSON.stringify(signHubLinkMock(JSON.parse(a.unsignedJson as string) as UnsignedHubLink, bytesToHex(secrets.signingSeed)))
+    const req = JSON.parse(a.requestJson as string) as Record<string, unknown>
+    const unsigned = JSON.parse(await forwardHubChainCall(JSON.stringify({ op: 'build', ...req }))) as UnsignedHubLink
+    const link = signHubLinkMock(unsigned, bytesToHex(secrets.signingSeed))
+    return JSON.stringify({ link, head: { seq: link.seq, hash: link.entryHash } })
   },
 
   recovery_approval_sign_from_state: async (a) => {

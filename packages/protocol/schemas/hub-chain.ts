@@ -188,6 +188,35 @@ export const hubChainInputSchema = z.object({
 })
 export type HubChainInput = z.infer<typeof hubChainInputSchema>
 
+// --- Building links from intent (packages/crypto `hub_chain::LinkIntentRequest`) ---
+
+/**
+ * What a client means a link to say (#3133). The crate derives every signed
+ * field from it — `seq` and `prevHash` from `prev`, the body, its sorted sets,
+ * `permsHash` — so no client builds, parses or hashes a link.
+ */
+export const linkIntentSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('genesis'), bundles: z.array(z.string()) }),
+  z.object({ type: z.literal('bundlePolicy'), bundle: z.string(), permissions: z.array(z.string()) }),
+  z.object({ type: z.literal('roleGrant'), user: hex32Schema, bundle: z.string() }),
+  z.object({ type: z.literal('roleRevoke'), user: hex32Schema, bundle: z.string() }),
+])
+export type LinkIntent = z.infer<typeof linkIntentSchema>
+
+export const linkIntentRequestSchema = z.object({
+  hub: z.string(),
+  /** The verified head the link extends; `null` only for a genesis. */
+  prev: chainHeadSchema.nullable(),
+  signerUser: hex32Schema,
+  signerUserHead: chainHeadSchema,
+  intent: linkIntentSchema,
+})
+export type LinkIntentRequest = z.infer<typeof linkIntentRequestSchema>
+
+/** `hub_chain::SignedIntent`: the signed link and the head it makes. */
+export const signedIntentSchema = z.object({ link: hubChainLinkSchema, head: chainHeadSchema })
+export type SignedIntent = z.infer<typeof signedIntentSchema>
+
 // --- Routes: GET/POST /api/hubs/:hubId/chain ---
 
 /** Fetch forward: links with `seq >= from`, at most `limit`, in seq order. */
@@ -281,4 +310,6 @@ export interface HubChainOps {
     answer: SigchainVerifiedState
   }
   approvalMessage: { request: { approval: UnsignedRecoveryApproval; holderDevice: string }; answer: { message: string } }
+  build: { request: LinkIntentRequest; answer: UnsignedHubLink }
+  usersNamed: { request: { links: HubChainLink[] }; answer: { users: string[] } }
 }
