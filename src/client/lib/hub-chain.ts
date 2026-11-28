@@ -133,8 +133,18 @@ async function advanceHubAnchor(hubId: string, head: ChainHead): Promise<void> {
  * chain: the refusal is the answer, and it is recorded so sealing stops.
  */
 export function loadHubChain(hubId: string): Promise<HubChainStatus> {
-  return serialisedForHub(hubId, () => loadHubChainNow(hubId))
+  // The one entry point: every caller (the banner, the sealing gate, a hub
+  // switch) shares a verification already in flight for the hub, and anything
+  // else that moves the anchor (founding, an append) queues behind it.
+  let pending = inFlight.get(hubId)
+  if (!pending) {
+    pending = serialisedForHub(hubId, () => loadHubChainNow(hubId)).finally(() => inFlight.delete(hubId))
+    inFlight.set(hubId, pending)
+  }
+  return pending
 }
+
+const inFlight = new Map<string, Promise<HubChainStatus>>()
 
 async function loadHubChainNow(hubId: string): Promise<HubChainStatus> {
   const links = await fetchChain(hubId)
@@ -173,7 +183,6 @@ export class HubSealingStoppedError extends Error {
   }
 }
 
-const inFlight = new Map<string, Promise<HubChainStatus>>()
 const VERIFIED_TTL_MS = 5 * 60 * 1000
 
 /**
@@ -189,12 +198,7 @@ export async function assertHubSealable(hubId: string): Promise<void> {
   // A verification is good for VERIFIED_TTL_MS: after that, sealing re-checks
   // the chain (a fork served since is caught), and a failed re-check refuses.
   if (!status || status.kind === 'none' || (status.kind === 'verified' && Date.now() - status.at >= VERIFIED_TTL_MS)) {
-    let pending = inFlight.get(hubId)
-    if (!pending) {
-      pending = loadHubChain(hubId).finally(() => inFlight.delete(hubId))
-      inFlight.set(hubId, pending)
-    }
-    status = await pending
+    status = await loadHubChain(hubId)
   }
   if (status.kind !== 'verified') throw new HubSealingStoppedError(hubId, status)
 }

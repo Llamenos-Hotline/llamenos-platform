@@ -131,7 +131,7 @@ export const hubs = pgTable('hubs', {
   cryptoFormatCheck('hubs', table.cryptoFormat),
   // The identifier profile (wire spec §2.1, #2963 `hub-id-profile`) is
   // enforced by HubService.createHub in this release; the `hubs_id_profile`
-  // CHECK follows in the next one (#3135), because the previous release writes
+  // CHECK follows in the next one (#3136), because the previous release writes
   // this column and a CHECK added beside it could reject its rows mid-rollout.
 ])
 

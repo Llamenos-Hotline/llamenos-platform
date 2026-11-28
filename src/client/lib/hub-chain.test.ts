@@ -113,33 +113,36 @@ describe('loadHubChain', () => {
 })
 
 describe('the anchor never moves backwards (#3133 review)', () => {
-  it('two interleaved verifications of one hub: the shorter finishing last does not roll the anchor back', async () => {
+  it('two concurrent loads of one hub share ONE verification; a shorter chain served after it cannot roll the anchor back', async () => {
     const hub = newHub()
     mocks.anchors.set(hub, { seq: 1, hash: H(1) })
-    // The server answers the first request with the true chain (head 3) and the
-    // second with a shorter one (head 2), and holds the shorter answer back
-    // until the longer one has been verified and recorded.
+    // The server answers the first request with the true chain (head 3) and
+    // holds it back; a second caller (the banner beside the sealing gate)
+    // arrives meanwhile. Later it serves a shorter chain (head 2).
     mocks.pages = [
       { links: [link(hub, 1), link(hub, 2), link(hub, 3)], head: null, hasMore: false },
       { links: [link(hub, 1), link(hub, 2)], head: null, hasMore: false },
     ]
-    let releaseShorter!: () => void
-    const shorterHeld = new Promise<void>(resolve => { releaseShorter = resolve })
+    let releaseFirst!: () => void
+    const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve })
     mocks.verify.mockImplementation(async (req: { links: unknown[] }) => {
-      if (req.links.length === 2) {
-        await shorterHeld
-        return verified(hub, 2)
+      if (req.links.length === 3) {
+        await firstHeld
+        return verified(hub, 3)
       }
-      return verified(hub, 3)
+      return verified(hub, 2)
     })
     const first = loadHubChain(hub)
     const second = loadHubChain(hub)
-    expect((await first).kind).toBe('verified')
-    releaseShorter()
-    await second
+    releaseFirst()
+    expect(await second).toBe(await first)
+    expect(mocks.verify).toHaveBeenCalledTimes(1)
     expect(mocks.anchors.get(hub)).toEqual({ seq: 3, hash: H(3) })
-    // The second verification ran against the anchor the first one advanced.
+    // The shorter chain, verified next, is checked against the advanced anchor
+    // and cannot move it back.
+    expect((await loadHubChain(hub)).kind).toBe('fork')
     expect(mocks.verify.mock.calls[1][0]).toMatchObject({ anchor: { seq: 3, hash: H(3) } })
+    expect(mocks.anchors.get(hub)).toEqual({ seq: 3, hash: H(3) })
   })
 
   it('refuses a verified head at the anchored seq with a different hash, as a fork, keeping the anchor', async () => {

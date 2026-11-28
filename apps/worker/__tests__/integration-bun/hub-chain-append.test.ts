@@ -11,7 +11,7 @@
  *  - `hub-id-profile`: HubService.createHub, the one place a hub row is
  *    inserted, refuses an id outside the §2.1 profile and stores no row; every
  *    create path's id (a lowercase UUID) conforms. (The database CHECK is the
- *    next release's, #3135.)
+ *    next release's, #3136.)
  *
  * MUST run under `bun test` (bun:ffi, bun-jsonb):
  *   bun run test:worker:integration-bun -- hub-chain-append

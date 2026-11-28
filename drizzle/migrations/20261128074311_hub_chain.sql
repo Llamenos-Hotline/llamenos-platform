@@ -1,9 +1,8 @@
--- hub-id-profile (wire spec §2.1, §6.3): this release ships the code half —
--- HubService.createHub refuses an id outside the profile — and NOT the
--- hubs_id_profile CHECK. hubs.id is a column the previous release writes, so a
--- CHECK added here could reject its rows during a rollout
--- (docs/runbooks/migrations.md, "Add UNIQUE, CHECK or FOREIGN KEY
--- constraints"). The constraint lands in the following release: #3135.
+-- hub-id-profile (wire spec §2.1, §6.3): no hubs.id CHECK here. hubs.id is a
+-- column the previous release writes, so a CHECK added here could reject its
+-- rows during a rollout (docs/runbooks/migrations.md). The crate's canonical
+-- form refuses an id outside the profile; the database CHECK is #3136, after
+-- this release is deployed.
 CREATE TABLE "hub_chain_links" (
 	"hub_id" text NOT NULL,
 	"seq" integer NOT NULL,

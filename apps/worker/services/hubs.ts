@@ -150,7 +150,7 @@ export class HubService {
     // The identifier profile (wire spec §2.1, `hub-id-profile`): a hub id
     // enters AADs and hub-chain links, and the crate refuses one outside it.
     // This is the one place a hub row is inserted, so it is where the profile
-    // is guaranteed; the database CHECK follows in the next release (#3135).
+    // is guaranteed; the database CHECK follows in the next release (#3136).
     if (!hubIdSchema.safeParse(hub.id).success) {
       throw new ServiceError(400, 'A hub id must be inside the identifier profile (wire spec §2.1)', 'invalid_hub_id')
     }
