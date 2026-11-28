@@ -395,11 +395,11 @@ describe('break-it: the guard FAILS when a dependency is dropped from the filter
   // Each term is one thing the build depends on. Strike it from the real
   // classifier and the derived check must name the input that fell out.
   it.each<[needle: string, mustReport: string]>([
-    // #3108: protocol is enumerated (the trust snapshot tooling beside it reaches
-    // no build), so the term is the whole group, and each part is struck alone.
-    ['packages/protocol/(schemas/|templates/|generated/|(README\\.md|crypto-format\\.ts|crypto-formats\\.json|crypto-labels\\.json|package\\.json|template-types\\.ts)$|tools/(codegen|schema-registry)\\.ts$)|', 'packages/protocol/generated/swift'],
-    ['generated/|', 'packages/protocol/generated/swift'],
-    ['|tools/(codegen|schema-registry)\\.ts$', 'packages/protocol/tools/codegen.ts'],
+    // #3129: protocol is the whole prefix again (the trust snapshot tooling is an
+    // EXCLUSION, below), so striking it must lose both the generated Swift and
+    // the codegen that writes it.
+    ['packages/protocol/|', 'packages/protocol/generated/swift'],
+    ['packages/protocol/|', 'packages/protocol/tools/codegen.ts'],
     ['packages/i18n/|', 'packages/i18n/tools/i18n-codegen.ts'],
     ['packages/crypto/|', 'packages/crypto/scripts/build-mobile.sh'],
     ['|bun\\.lock', 'bun.lock'],
@@ -413,6 +413,26 @@ describe('break-it: the guard FAILS when a dependency is dropped from the filter
     const mutated = classifierWithout(needle)
     const reported = (await uncovered(inputs, mutated)).map((i) => i.path)
     expect(reported, `the derived guard did not notice ${needle} was dropped`).toContain(mustReport)
+  })
+
+  // #3129: the exclusion list is the other way to drop an input. Carving a real
+  // build input out of SHARED_DEPS_EXCLUDE_RE must be just as visible as
+  // striking it from IOS_COMPILE_RE — the guard reads the classifier's output,
+  // so the exclusion cannot hide anything from it.
+  it.each([
+    ['packages/protocol/tools/codegen\\.ts', 'packages/protocol/tools/codegen.ts'],
+    ['packages/protocol/tools/schema-registry\\.ts', 'packages/protocol/tools/schema-registry.ts'],
+  ])('carving %s out through SHARED_DEPS_EXCLUDE_RE reports %s', async (entry, mustReport) => {
+    const lines = read(SCRIPT).split('\n')
+    const idx = lines.findIndex((l) => l.startsWith("SHARED_DEPS_EXCLUDE_RE='^("))
+    expect(idx, 'SHARED_DEPS_EXCLUDE_RE line exists').toBeGreaterThanOrEqual(0)
+    lines[idx] = (lines[idx] as string).replace("SHARED_DEPS_EXCLUDE_RE='^(", `SHARED_DEPS_EXCLUDE_RE='^(${entry}|`)
+    const dir = mkdtempSync(join(tmpdir(), 'ios-compile-guard-'))
+    const path = join(dir, 'detect-changed-platforms.sh')
+    writeFileSync(path, lines.join('\n'))
+    chmodSync(path, 0o755)
+    const reported = (await uncovered(inputs, path)).map((i) => i.path)
+    expect(reported, `the derived guard did not notice ${entry} was carved out`).toContain(mustReport)
   })
 
   it('the un-mutated classifier reports nothing, so the failures above are the mutation\'s', async () => {

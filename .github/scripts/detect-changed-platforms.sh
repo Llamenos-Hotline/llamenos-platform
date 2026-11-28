@@ -61,20 +61,37 @@ SHARED_DEPS_RE='^(packages/crypto/|packages/protocol/|packages/shared/|packages/
 # diff that cannot change a Swift type: none of them is read by codegen, none is
 # listed in project.yml, none is compiled into anything. Their only reader is
 # repo-tests (`bun test`), which gates on `docs_only`, not on a platform flag, so
-# it still runs. IOS_FULL_RE and IOS_COMPILE_RE below enumerate the protocol
-# paths that DO reach the app instead of using the prefix, because arm-batch.sh
-# lifts those assignments verbatim and has no way to apply a second exclusion
-# list. The enumeration fails toward NOT running for a file added later, so
-# tests/orchestrator/ios-trust-tooling.test.ts requires every tracked file under
-# packages/protocol/ to be either matched by IOS_FULL_RE or named as trust
-# tooling: a new file fails CI until somebody has classified it.
+# it still runs.
+#
+# This ONE list is the exclusion for SHARED_DEPS_RE, IOS_FULL_RE and
+# IOS_COMPILE_RE alike (the vitest entries match neither iOS regex, so for those
+# two they are inert). The iOS regexes therefore keep the whole
+# `packages/protocol/` prefix: a protocol file NOBODY has classified earns the
+# FULL tier and compiles iOS — fail-safe — and adding one never requires an edit
+# to this file (#3129). Before #3129 the iOS regexes enumerated the protocol
+# paths that reach the app instead, which failed OPEN for a file added later, so
+# a test had to force every PR adding a protocol file to edit this supply-chain
+# file — a write only the infra lane may make.
+#
+# Every protocol entry is a LITERAL path (only `\.` escapes, no pattern), so a
+# reader and tests/orchestrator/ios-trust-tooling.test.ts can parse the list
+# back out. That suite proves each entry, rather than trusting the listing:
+# it exists, it is not a codegen input, it is not named in apps/ios/project.yml,
+# and the set equals TRUST_TOOLING_FILES in orchestrator/src/ios-isolation.ts.
+# Editing this list stays a supply-chain write, and should: carving a file out
+# of the iOS gate is the owning lane's decision.
+#
+# CONSUMERS THAT LIFT THESE ASSIGNMENTS VERBATIM must apply this exclusion to
+# all three regexes, not only to SHARED_DEPS_RE. A consumer that applies it to
+# none, or only to SHARED_DEPS_RE, over-reports the five trust files as FULL —
+# wrong in the expensive direction, never a missed gate.
 #
 # Not a way to hide a trust change: a diff that moves a pinned value does so in
 # apps/ios/, apps/android/ or apps/desktop/ (iOS and crypto files are FULL on
 # their own; the other two never reached the iOS gate). The snapshot's own
 # release gate (`trust:release-check`) is a separate rail that this flag does
 # not feed.
-SHARED_DEPS_EXCLUDE_RE='^(vitest\.(unit|integration|desktop|orchestrator)\.(config|setup)\.ts|packages/protocol/(trust\.snapshot\.json|tools/(trust-snapshot|trust-snapshot-cli|trust-snapshot\.test|trust-release\.test)\.ts))$'
+SHARED_DEPS_EXCLUDE_RE='^(vitest\.(unit|integration|desktop|orchestrator)\.(config|setup)\.ts|packages/protocol/trust\.snapshot\.json|packages/protocol/tools/trust-snapshot\.ts|packages/protocol/tools/trust-snapshot-cli\.ts|packages/protocol/tools/trust-snapshot\.test\.ts|packages/protocol/tools/trust-release\.test\.ts)$'
 
 IOS_RE='^apps/ios/'
 # Which iOS TIER a diff earns (see apps/ios/Tests/UI/ci-smoke.txt for the full
@@ -86,7 +103,7 @@ IOS_RE='^apps/ios/'
 # (crypto -> UniFFI XCFramework, protocol -> Swift types, i18n -> .strings),
 # and the CI wiring that decides any of this. Everything else runs the smoke
 # tier: still a real iOS gate, 2 runners instead of 4.
-IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/(schemas/|templates/|generated/|(README\.md|crypto-format\.ts|crypto-formats\.json|crypto-labels\.json|package\.json|template-types\.ts)$|tools/(codegen|schema-registry)\.ts$)|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
+IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 # `ios_compile` is the NARROW iOS question: "can this diff change what
 # `ios-compile-check` compiles?" It exists because `ios` is a blast-radius flag
 # (every SHARED_DEPS_RE hit sets it — `scripts/`, `packages/shared/`, the vitest
@@ -110,7 +127,7 @@ IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/(schemas/|templates/
 # `scripts/`. `package.json`, `bun.lock` and `tsconfig*.json` ARE here: the job
 # runs `bun install --frozen-lockfile` and then codegen, so a dependency bump
 # can change the generated Swift.
-IOS_COMPILE_RE='^(apps/ios/|packages/crypto/|packages/protocol/(schemas/|templates/|generated/|(README\.md|crypto-format\.ts|crypto-formats\.json|crypto-labels\.json|package\.json|template-types\.ts)$|tools/(codegen|schema-registry)\.ts$)|packages/i18n/|package\.json$|bun\.lock|tsconfig[^/]*\.json$|scripts/ci/mac-runner-disk-guard(-wait)?\.sh$|scripts/ci/mac-rust-toolchain\.sh$|\.github/actions/mac-rust-toolchain/action\.yml$|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
+IOS_COMPILE_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|package\.json$|bun\.lock|tsconfig[^/]*\.json$|scripts/ci/mac-runner-disk-guard(-wait)?\.sh$|scripts/ci/mac-rust-toolchain\.sh$|\.github/actions/mac-rust-toolchain/action\.yml$|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
 # No `.github/workflows/desktop-e2e\.yml$` term: that workflow no longer
 # exists. Its chromium tier is ci.yml's `desktop-e2e` job, and ci.yml is in
@@ -259,8 +276,10 @@ while IFS= read -r file; do
   fi
 
   echo "$file" | grep -qE "$IOS_RE" && { ios=true; echo "iOS file changed: $file" >&2; }
-  echo "$file" | grep -qE "$IOS_FULL_RE" && { ios=true; ios_full=true; echo "iOS full-tier file changed: $file" >&2; }
-  echo "$file" | grep -qE "$IOS_COMPILE_RE" && { ios=true; ios_compile=true; echo "iOS compile input changed: $file" >&2; }
+  echo "$file" | grep -qE "$IOS_FULL_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE" \
+    && { ios=true; ios_full=true; echo "iOS full-tier file changed: $file" >&2; }
+  echo "$file" | grep -qE "$IOS_COMPILE_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE" \
+    && { ios=true; ios_compile=true; echo "iOS compile input changed: $file" >&2; }
   echo "$file" | grep -qE "$ANDROID_RE" && { android=true; echo "Android file changed: $file" >&2; }
   echo "$file" | grep -qE "$DESKTOP_RE" && ! echo "$file" | grep -qE "$DESKTOP_EXCLUDE_RE" \
     && { desktop=true; echo "Desktop file changed: $file" >&2; }
