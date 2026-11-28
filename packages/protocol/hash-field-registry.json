@@ -104,15 +104,12 @@
       ]
     },
     "identifierHashes": {
-      "derivation": "HMAC blind index of each contact identifier under the hub key (iOS: hmacBlindIndex). The desktop and Android write [] until per-hub index keys (D7/E5).",
+      "derivation": "Meant to be an HMAC blind index of each contact identifier under a per-hub index key (D7/E5). No client computes one today: iOS, desktop and Android write [] (the hub key never enters Swift or the webview and the crate exports no blind-index call). Only the dev seeder writes a value, and it is reversible.",
       "producer": {
-        "kind": "hmac",
-        "file": "apps/ios/Sources/ViewModels/ContactFormViewModel.swift",
-        "symbol": "hmacBlindIndex"
+        "kind": "debt",
+        "issue": 3118,
+        "why": "No client derives an identifier index yet; every client writes [] and the dev sample seeder writes phone:+base64(phone), a reversible index. Registered as known debt until per-hub index keys (D7/E5)."
       },
-      "accepts": [
-        "buildIdentifierHashes"
-      ],
       "plainValueSites": [
         {
           "file": "apps/worker/services/sample-seeder.ts",
@@ -179,22 +176,19 @@
       }
     },
     "mergedNameHash": {
-      "derivation": "The merged contact's nameHash: same derivation, written by the client that merges.",
+      "derivation": "The merged contact's nameHash: same intended derivation. No client sends one today (the merge dialog sends none); the server forwards it into nameHash when present.",
       "producer": {
-        "kind": "hmac",
-        "file": "apps/ios/Sources/ViewModels/ContactFormViewModel.swift",
-        "symbol": "hmacBlindIndex"
+        "kind": "empty"
       }
     },
     "nameHash": {
-      "derivation": "HMAC blind index of the normalised name under the hub key (iOS: hmacBlindIndex). The desktop and Android write nothing until per-hub index keys (D7/E5).",
+      "derivation": "Meant to be an HMAC blind index of the normalised name under a per-hub index key (D7/E5). No client computes one today: iOS, desktop and Android write nothing. Only the dev seeder writes a value, and it is reversible.",
       "producer": {
-        "kind": "hmac",
-        "file": "apps/ios/Sources/ViewModels/ContactFormViewModel.swift",
-        "symbol": "hmacBlindIndex"
+        "kind": "debt",
+        "issue": 3118,
+        "why": "No client derives a name index yet; every client writes nothing and the dev sample seeder writes base64(lowercased name), a reversible index. Registered as known debt until per-hub index keys (D7/E5)."
       },
       "accepts": [
-        "hmacBlindIndex",
         "mergedNameHash"
       ],
       "plainValueSites": [
