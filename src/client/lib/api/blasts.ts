@@ -1,7 +1,21 @@
 import { request, hp } from './client'
-import type { Subscriber, Blast, BlastContent, BlastSettings, BlastStats, BlastDelivery, BlastDeliveryStatus } from '@shared/types'
+import type { Subscriber, Blast as StoredBlast, BlastSettings, BlastStats, BlastDelivery, BlastDeliveryStatus } from '@shared/types'
+import type { SingleBlastContent, MultiBlastContent } from '@protocol/schemas/blasts'
 
-export type { Subscriber, Blast, BlastContent, BlastSettings, BlastStats, BlastDelivery, BlastDeliveryStatus }
+export type { Subscriber, BlastSettings, BlastStats, BlastDelivery, BlastDeliveryStatus, SingleBlastContent, MultiBlastContent }
+
+/**
+ * A blast as the server answers it: content on the wire shape (`{ body, mediaUrl? }`
+ * or a record of those by language), which is what `blastResponseSchema` declares
+ * and what Android decodes. `@shared/types` `Blast` carries the storage shape
+ * (`{ text }`), which no response ever has (#2572).
+ */
+export type Blast = Omit<StoredBlast, 'content'> & { content: SingleBlastContent | MultiBlastContent }
+
+/** True for single-language wire content (a `body` string), false for a record by language. */
+export function isSingleBlastContent(content: Blast['content']): content is SingleBlastContent {
+  return typeof (content as Partial<SingleBlastContent>).body === 'string'
+}
 
 // --- Blasts ---
 

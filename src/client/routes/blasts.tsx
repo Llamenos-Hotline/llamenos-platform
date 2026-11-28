@@ -2,8 +2,8 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { listBlasts, deleteBlast, sendBlast, cancelBlast, getBlastStats, getBlastDeliveries, retryAllFailedDeliveries } from '@/lib/api'
-import type { Blast, BlastStats, BlastDelivery, BlastDeliveryStatus } from '@/lib/api'
+import { listBlasts, deleteBlast, sendBlast, cancelBlast, getBlastStats, getBlastDeliveries, retryAllFailedDeliveries, isSingleBlastContent } from '@/lib/api'
+import type { Blast, BlastStats, BlastDelivery, BlastDeliveryStatus, SingleBlastContent } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { Megaphone, Plus, Send, XCircle, Trash2, Users, Settings2, ChevronDown, ChevronUp, RotateCcw, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -19,20 +19,18 @@ import { useRelayState } from '@/lib/relay/context'
 import { useConfig } from '@/lib/config'
 import { KIND_BLAST_PROGRESS, KIND_BLAST_STATUS } from '@shared/event-kinds'
 import type { LlamenosEvent } from '@/lib/relay/types'
-import { isSingleBlastContent } from '@shared/types'
-import type { BlastContent, MultiBlastContent } from '@shared/types'
 import { LANGUAGES } from '@llamenos/i18n'
 
 /** Extract display text from blast content (single or multi-language) */
-function getBlastDisplayText(content: BlastContent | MultiBlastContent): string {
-  if (isSingleBlastContent(content)) return content.text
+function getBlastDisplayText(content: Blast['content']): string {
+  if (isSingleBlastContent(content)) return content.body
   const entries = Object.entries(content)
   if (entries.length === 0) return ''
-  return (entries[0][1] as BlastContent).text
+  return (entries[0][1] as SingleBlastContent).body
 }
 
 /** Get language entries from multi-language content */
-function getContentLanguages(content: BlastContent | MultiBlastContent): string[] {
+function getContentLanguages(content: Blast['content']): string[] {
   if (isSingleBlastContent(content)) return []
   return Object.keys(content)
 }
@@ -243,21 +241,21 @@ function BlastsPage() {
 
 // --- Blast Content Display (single or multi-language) ---
 
-function BlastContentDisplay({ content, defaultLanguage }: { content: BlastContent | MultiBlastContent; defaultLanguage?: string }) {
+function BlastContentDisplay({ content, defaultLanguage }: { content: Blast['content']; defaultLanguage?: string }) {
   const { t } = useTranslation()
   const [viewLang, setViewLang] = useState<string | null>(null)
 
   if (isSingleBlastContent(content)) {
     return (
       <div className="rounded-lg border border-border p-4">
-        <p className="text-sm whitespace-pre-wrap">{content.text}</p>
+        <p className="text-sm whitespace-pre-wrap">{content.body}</p>
       </div>
     )
   }
 
   const langs = getContentLanguages(content)
   const activeLang = viewLang ?? defaultLanguage ?? langs[0] ?? 'en'
-  const activeContent = (content as MultiBlastContent)[activeLang]
+  const activeContent = content[activeLang]
 
   return (
     <div className="space-y-2">
@@ -285,7 +283,7 @@ function BlastContentDisplay({ content, defaultLanguage }: { content: BlastConte
       </div>
       <div className="rounded-lg border border-border p-4">
         {activeContent ? (
-          <p className="text-sm whitespace-pre-wrap">{activeContent.text}</p>
+          <p className="text-sm whitespace-pre-wrap">{activeContent.body}</p>
         ) : (
           <p className="text-sm text-muted-foreground">{t('blast.noContent')}</p>
         )}

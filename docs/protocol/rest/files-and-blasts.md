@@ -101,8 +101,8 @@ Response: { "blasts": Blast[] }
 
 POST /api/blasts
 Auth: Required
-Body: { "name", "content": BlastContent, "targetChannels", "targetTags", "targetLanguages" }
-Response: Blast
+Body: { "name", "content": BlastContent, "defaultLanguage"?, "channels", "scheduledAt"? }
+Response (201): { "blast": Blast }
 
 GET /api/blasts/:id
 Auth: Required
@@ -110,8 +110,8 @@ Response: Blast
 
 PATCH /api/blasts/:id
 Auth: Required
-Body: partial Blast
-Response: Blast
+Body: { "name"?, "content"?: BlastContent, "defaultLanguage"?, "channels"? }
+Response: { "blast": Blast }
 
 DELETE /api/blasts/:id
 Auth: Required
@@ -119,17 +119,23 @@ Response: { "ok": true }
 
 POST /api/blasts/:id/send
 Auth: Required
-Response: { "ok": true, "stats": BlastStats }
+Response: { "blast": Blast }
 
 POST /api/blasts/:id/schedule
 Auth: Required
 Body: { "scheduledAt": ISO8601 }
-Response: { "ok": true }
+Response: { "blast": Blast }
 
 POST /api/blasts/:id/cancel
 Auth: Required
-Response: { "ok": true }
+Response: { "blast": Blast }
 ```
+
+**Blast content has one shape, in requests and in every response.** `BlastContent` is
+either a single message `{ "body": string, "mediaUrl"?: string }` or a record of those
+keyed by language code (`{ "en": { "body": … }, "es": { "body": … } }`). The server stores
+the message text under `text` internally; that name never crosses the wire, so a client
+reads back exactly the field it sent (`blastResponseSchema`, #2572).
 
 #### Blast Settings
 
