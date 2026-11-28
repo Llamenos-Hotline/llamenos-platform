@@ -260,6 +260,10 @@ export async function assertExtendsVerifiedHead(userPubkey: string, links: Sigch
 }
 
 export async function recordVerifiedHead(verified: SigchainVerifiedState): Promise<void> {
+  // Monotonic: two verifications racing (identity start, hub founding) never
+  // move the recorded head backwards for the same user.
+  const known = await getVerifiedSigchainHead()
+  if (known && known.userPubkey === verified.userPubkey && known.seq > verified.headSeq) return
   await setVerifiedSigchainHead({ userPubkey: verified.userPubkey, seq: verified.headSeq, hash: verified.headHash })
 }
 
