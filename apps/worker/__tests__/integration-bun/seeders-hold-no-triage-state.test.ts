@@ -26,6 +26,7 @@ import { sql, eq } from 'drizzle-orm'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { caseOpen } from '@llamenos/crypto/ffi'
 import { bytesToHex } from '@shared/encoding'
+import type { RecipientEnvelope } from '@shared/types'
 import { devices, users } from '../../db/schema'
 import { Hono } from 'hono'
 import '../../db/pg-array-patch'
@@ -155,10 +156,11 @@ describe('POST /api/test-seed — a record a client will change the status of', 
       expect(body.records).toHaveLength(1)
 
       const record = await services.cases.get(body.records[0].id)
-      expect(record.summaryEnvelopes.map(e => e.pubkey)).toEqual([x25519Pubkey])
+      const envelopes = record.summaryEnvelopes as RecipientEnvelope[]
+      expect(envelopes.map(e => e.pubkey)).toEqual([x25519Pubkey])
       const opened = JSON.parse(caseOpen('summary', secret, {
-        encryptedContent: record.encryptedSummary,
-        readerEnvelopes: record.summaryEnvelopes,
+        encryptedContent: record.encryptedSummary ?? '',
+        readerEnvelopes: envelopes,
       })) as { title: string; status: string }
       expect(opened.title).toBe('Test Case 1')
       expect(opened.status).toBe('reported')
