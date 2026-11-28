@@ -1,5 +1,7 @@
 package org.llamenos.hotline.service
 
+import org.llamenos.hotline.hub.cryptoSigchainLinks
+
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -285,23 +287,7 @@ class DeviceRegistrationManager @Inject constructor(
     }
 
     /** The server's links in the crate's `SigchainLink` JSON shape. */
-    private fun cryptoLinksJson(links: List<SigchainResponseLink>): String = buildJsonArray {
-        for (l in links) {
-            add(
-                buildJsonObject {
-                    put("id", l.id)
-                    put("seq", l.seqNo)
-                    put("prevHash", l.prevHash?.takeIf { it.isNotEmpty() }?.let { JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)
-                    put("entryHash", l.hash)
-                    put("signerDeviceId", l.signerDeviceID)
-                    put("signerPubkey", l.signerPubkey)
-                    put("signature", l.signature)
-                    put("timestamp", l.timestamp)
-                    put("payloadJson", (l.payload ?: kotlinx.serialization.json.JsonNull).toString())
-                },
-            )
-        }
-    }.toString()
+    private fun cryptoLinksJson(links: List<SigchainResponseLink>): String = cryptoSigchainLinks(links).toString()
 
     private companion object {
         const val TAG = "DeviceRegistration"

@@ -27,12 +27,6 @@ data class CreateHubResponse(
 )
 
 /**
- * Request body for POST /api/hubs.
- * Uses the generated CreateHubBody.
- */
-typealias CreateHubRequest = org.llamenos.protocol.CreateHubBody
-
-/**
  * Response from PATCH /api/hubs/:id.
  */
 @Serializable
