@@ -15,13 +15,20 @@ import { trackedFiles } from './codeowners.js'
  * serial Mac waves) for a diff of only the extractor, its tests and the
  * committed extraction.
  *
- * The carve-out is an explicit list of five files (`TRUST_TOOLING_FILES`), kept in
- * step in two places that decide different questions:
- *   - `.github/scripts/detect-changed-platforms.sh` — which iOS TIER a diff earns;
- *   - `orchestrator/src/ios-isolation.ts` — whether a diff that schedules the
- *     gate must form its own merge group.
- * Each rail below is a diff that can really break the iOS gate (or a file
- * that really is a codegen input) and must still be refused.
+ * #3129 — the carve-out is an EXCLUSION from that prefix, never an enumeration
+ * of what reaches the app: a protocol file nobody has classified earns FULL and
+ * compiles iOS, so adding one never forces a write to the supply-chain script.
+ *
+ * The carve-out is an explicit list of five files, kept in step in two places
+ * that decide different questions:
+ *   - `.github/scripts/detect-changed-platforms.sh`'s `SHARED_DEPS_EXCLUDE_RE`
+ *     — which iOS TIER a diff earns;
+ *   - `orchestrator/src/ios-isolation.ts`'s `TRUST_TOOLING_FILES` — whether a
+ *     diff that schedules the gate must form its own merge group.
+ * Each entry is PROVEN unable to reach the binary (exists, not a codegen input,
+ * not named in project.yml), and each rail below is a diff that can really
+ * break the iOS gate (or a file that really is a codegen input) and must still
+ * be refused.
  */
 
 const ROOT = join(__dirname, '..', '..')
@@ -75,6 +82,56 @@ function codegenInputs(): Set<string> {
 // so a raw git call throws at collection time and the whole suite fails to load.
 const trackedProtocolFiles = (): string[] => trackedFiles(ROOT).filter((f) => f.startsWith('packages/protocol/'))
 
+/** The top-level alternatives of the classifier's `SHARED_DEPS_EXCLUDE_RE`, as
+ *  written (still escaped). Depth-aware: the vitest alternative nests groups. */
+function exclusionAlternatives(script: string): string[] {
+  const line = script.split('\n').find((l) => l.startsWith("SHARED_DEPS_EXCLUDE_RE='"))
+  expect(line, 'SHARED_DEPS_EXCLUDE_RE line exists').toBeDefined()
+  const m = /^SHARED_DEPS_EXCLUDE_RE='\^\((.*)\)\$'$/.exec(line as string)
+  expect(m, `SHARED_DEPS_EXCLUDE_RE is not of the form '^(...)$': ${line}`).not.toBeNull()
+  const body = (m as RegExpExecArray)[1] as string
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of body) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (ch === '|' && depth === 0) { out.push(cur); cur = '' } else cur += ch
+  }
+  out.push(cur)
+  return out
+}
+
+/** The alternatives that carve something out of `packages/protocol/` — still as
+ *  written, so a pattern smuggled in is visible to `carveOutViolations`. */
+const protocolExclusions = (script: string): string[] =>
+  exclusionAlternatives(script).filter((a) => a.startsWith('packages/protocol/'))
+
+/** A literal path: path characters, and `\.` as the only escape. */
+const LITERAL_PATH = /^packages\/protocol\/(?:[A-Za-z0-9_\-/]|\\\.)+$/
+
+interface CarveOutEvidence { exists: (p: string) => boolean; codegenInputs: Set<string>; projectYml: string }
+
+/** Every reason an exclusion entry is NOT provably unable to reach the iOS
+ *  binary. All reasons are collected for each entry — no short-circuit — so a
+ *  rail can assert the specific one it breaks. */
+function carveOutViolations(entries: string[], ev: CarveOutEvidence): string[] {
+  const out: string[] = []
+  for (const raw of entries) {
+    if (!LITERAL_PATH.test(raw)) { out.push(`${raw}: not a literal path`); continue }
+    const path = raw.replace(/\\\./g, '.')
+    if (!ev.exists(path)) out.push(`${path}: does not exist`)
+    if (ev.codegenInputs.has(path)) out.push(`${path}: is a codegen input`)
+    if (ev.projectYml.includes(path.slice('packages/'.length))) out.push(`${path}: is named in apps/ios/project.yml`)
+  }
+  return out
+}
+const realEvidence = (): CarveOutEvidence => ({
+  exists: (p) => existsSync(join(ROOT, p)),
+  codegenInputs: codegenInputs(),
+  projectYml: read('apps/ios/project.yml'),
+})
+
 describe('TRUST_TOOLING_FILES is a list a reader can check, bound to the trust control itself', () => {
   it('names five files and every one of them exists', () => {
     expect(TRUST_TOOLING_FILES).toHaveLength(5)
@@ -114,10 +171,54 @@ describe('TRUST_TOOLING_FILES is a list a reader can check, bound to the trust c
   })
 })
 
-describe('every tracked file under packages/protocol/ is classified, none by default', () => {
-  // The tier regexes enumerate what reaches the app rather than using the
-  // prefix, so a file added later would silently fall to NONE. This is the rail
-  // that turns that into a red check on the PR that adds the file.
+describe('the exclusion list in the classifier is proven, not trusted (#3129)', () => {
+  it('names exactly TRUST_TOOLING_FILES, each as a literal path', () => {
+    const entries = protocolExclusions(read('.github/scripts/detect-changed-platforms.sh'))
+    for (const e of entries) expect(e, 'an exclusion entry must be a literal path').toMatch(LITERAL_PATH)
+    expect(entries.map((e) => e.replace(/\\\./g, '.')).sort()).toEqual([...TRUST_TOOLING_FILES].sort())
+  })
+
+  it('every entry exists, is not a codegen input and is not named in project.yml', () => {
+    expect(carveOutViolations(protocolExclusions(read('.github/scripts/detect-changed-platforms.sh')), realEvidence())).toEqual([])
+  })
+
+  // Faking a carve-out: each of these, added to the list, must turn the suite red
+  // for the reason it breaks — not merely for some other reason.
+  it.each([
+    ['a codegen input', 'packages/protocol/tools/codegen\\.ts', 'is a codegen input'],
+    ['a codegen data file', 'packages/protocol/crypto-labels\\.json', 'is a codegen input'],
+    ['a pattern instead of a path', 'packages/protocol/tools/trust-.*\\.ts', 'not a literal path'],
+    ['a file that does not exist', 'packages/protocol/tools/no-such-file\\.ts', 'does not exist'],
+  ])('break-it: %s cannot be carved out', (_name, entry, reason) => {
+    const real = protocolExclusions(read('.github/scripts/detect-changed-platforms.sh'))
+    const v = carveOutViolations([...real, entry], realEvidence())
+    expect(v.length, v.join('; ')).toBeGreaterThan(0)
+    expect(v.join('; ')).toContain(reason)
+  })
+
+  it('break-it: a path project.yml names cannot be carved out', () => {
+    const named = [...read('apps/ios/project.yml').matchAll(/\.\.\/\.\.\/(packages\/protocol\/[^\s'"]+)/g)].map((m) => m[1] as string)
+    expect(named.length).toBeGreaterThan(0)
+    const entry = (named[0] as string).replace(/\./g, '\\.')
+    expect(carveOutViolations([entry], realEvidence()).join('; ')).toContain('is named in apps/ios/project.yml')
+  })
+
+  it('break-it: carving codegen.ts out of the real script takes it off FULL — and the rails above catch exactly that edit', () => {
+    const text = read('.github/scripts/detect-changed-platforms.sh')
+    const needle = 'packages/protocol/trust\\.snapshot\\.json|'
+    expect(text, 'the exclusion entry this rail mutates moved').toContain(needle)
+    const mutatedText = text.replace(needle, `${needle}packages/protocol/tools/codegen\\.ts|`)
+    const dir = mkdtempSync(join(tmpdir(), 'ios-trust-tooling-'))
+    const mutated = join(dir, 'detect-changed-platforms.sh')
+    writeFileSync(mutated, mutatedText, { mode: 0o755 })
+    // The mutation is live: codegen.ts no longer schedules the FULL tier...
+    expect(classifyWith(mutated, ['packages/protocol/tools/codegen.ts'])).toMatchObject({ ios_tier: 'none', ios_compile: 'false' })
+    // ...and the list check refuses it.
+    expect(carveOutViolations(protocolExclusions(mutatedText), realEvidence())).toEqual(['packages/protocol/tools/codegen.ts: is a codegen input'])
+  })
+})
+
+describe('every tracked file under packages/protocol/ is FULL unless carved out — FULL by default (#3129)', () => {
   const files = trackedProtocolFiles()
   const trust = new Set(TRUST_TOOLING_FILES)
 
@@ -131,7 +232,19 @@ describe('every tracked file under packages/protocol/ is classified, none by def
       const o = classify([f])
       return o['ios_tier'] !== 'full' || o['ios_compile'] !== 'true'
     })
-    expect(offenders, 'classify these as trust tooling in TRUST_TOOLING_FILES, or add them to IOS_FULL_RE and IOS_COMPILE_RE').toEqual([])
+    expect(offenders, 'a protocol file off the FULL tier that is not in the proven exclusion list').toEqual([])
+  })
+
+  // The property #3129 exists for: nobody classified these, and nobody has to.
+  it.each([
+    'packages/protocol/hash-field-registry.json',
+    'packages/protocol/brand-new-registry.json',
+    'packages/protocol/tools/brand-new-codegen-step.ts',
+    'packages/protocol/fixtures/new-fixture.json',
+    'packages/protocol/NOTES.md',
+  ])('a protocol file nobody has classified (%s) earns FULL and compiles iOS', (f) => {
+    expect(classify([f])).toMatchObject({ ios: 'true', ios_tier: 'full', ios_compile: 'true' })
+    if (!f.endsWith('.md')) expect(classifyIosGateFile(f).kind).toBe('risky')
   })
 
   it('a non-markdown file that is not trust tooling is risky to the isolation predicate', () => {
@@ -201,14 +314,18 @@ describe('the tier a diff earns (what arm-batch.sh reads out of the same regexes
     expect(classify(['apps/desktop/tauri.conf.json', SNAPSHOT_PATH])).toMatchObject({ ios_tier: 'none' })
   })
 
-  it('break-it: with the old `packages/protocol/` prefix back, the same files read FULL — the rail measures the carve-out', () => {
+  it('break-it: with the protocol entries struck from the exclusion list, the same files read FULL — the rail measures the carve-out', () => {
+    const text = read('.github/scripts/detect-changed-platforms.sh')
+    const entries = protocolExclusions(text)
+    expect(entries).toHaveLength(TRUST_TOOLING_FILES.length)
+    let mutatedText = text
+    for (const e of entries) mutatedText = mutatedText.replace(`|${e}`, '')
+    expect(protocolExclusions(mutatedText), 'the mutation struck every protocol entry').toEqual([])
     const dir = mkdtempSync(join(tmpdir(), 'ios-trust-tooling-'))
     const mutated = join(dir, 'detect-changed-platforms.sh')
-    const text = read('.github/scripts/detect-changed-platforms.sh')
-    const group = /packages\/protocol\/\(schemas\/.*?schema-registry\)\\\.ts\$\)(?=\|)/
-    expect(group.test(text), 'the regex group this rail mutates moved').toBe(true)
-    writeFileSync(mutated, text.replace(new RegExp(group.source, 'g'), 'packages/protocol/'), { mode: 0o755 })
-    expect(classifyWith(mutated, [SNAPSHOT_PATH])['ios_tier']).toBe('full')
+    writeFileSync(mutated, mutatedText, { mode: 0o755 })
+    expect(classifyWith(mutated, [SNAPSHOT_PATH])).toMatchObject({ ios: 'true', ios_tier: 'full', ios_compile: 'true' })
+    expect(classifyWith(mutated, [...TRUST_TOOLING_FILES])['ios_tier']).toBe('full')
   })
 })
 

@@ -107,8 +107,11 @@ export type IosGateFileClass =
  *  An explicit list a reader can check, never a pattern: a file under
  *  `packages/protocol/` that is NOT named here stays risky, so a new codegen
  *  input fails toward isolation. tests/orchestrator/ios-trust-tooling.test.ts
- *  binds it to `TRUST_ANCHOR_FILES`, `SNAPSHOT_PATH`, the codegen import closure
- *  and `detect-changed-platforms.sh`'s own tier regexes.
+ *  binds it to `TRUST_ANCHOR_FILES`, `SNAPSHOT_PATH`, the codegen import closure,
+ *  `apps/ios/project.yml`, and the identical exclusion list the tier script
+ *  applies to its `packages/protocol/` prefix (`SHARED_DEPS_EXCLUDE_RE` in
+ *  `detect-changed-platforms.sh`, #3129) — both sides carve out of a prefix,
+ *  so a protocol file nobody has named is risky here and FULL there.
  *
  *  Pinned values are not hidden by this: a change to one lands in `apps/ios/**`
  *  or `packages/crypto/**` (risky as whole trees, whatever else is in the diff)
