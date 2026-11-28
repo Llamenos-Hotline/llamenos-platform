@@ -446,7 +446,7 @@
     {
       "functionName": "getMyErasureRequest",
       "file": "src/client/lib/api/governance.ts",
-      "line": 18,
+      "line": 28,
       "method": "GET",
       "pathPattern": "/erasure/me",
       "serverPath": "/api/erasure/me",
@@ -463,7 +463,7 @@
     {
       "functionName": "createMyErasureRequest",
       "file": "src/client/lib/api/governance.ts",
-      "line": 22,
+      "line": 32,
       "method": "POST",
       "pathPattern": "/erasure/me",
       "serverPath": "/api/erasure/me",
@@ -486,7 +486,7 @@
     {
       "functionName": "cancelMyErasureRequest",
       "file": "src/client/lib/api/governance.ts",
-      "line": 26,
+      "line": 36,
       "method": "DELETE",
       "pathPattern": "/erasure/me",
       "serverPath": "/api/erasure/me",
@@ -508,7 +508,7 @@
     {
       "functionName": "listErasureRequests",
       "file": "src/client/lib/api/governance.ts",
-      "line": 30,
+      "line": 40,
       "method": "GET",
       "pathPattern": "/erasure/requests",
       "serverPath": "/api/erasure/requests",
@@ -531,7 +531,7 @@
     {
       "functionName": "adminEraseUser",
       "file": "src/client/lib/api/governance.ts",
-      "line": 37,
+      "line": 47,
       "method": "POST",
       "pathPattern": "/erasure/:param",
       "serverPath": "/api/erasure/:userId",
@@ -556,7 +556,7 @@
     {
       "functionName": "remoteWipeDevice",
       "file": "src/client/lib/api/governance.ts",
-      "line": 44,
+      "line": 54,
       "method": "POST",
       "pathPattern": "/erasure/:param/wipe-device/:param",
       "serverPath": "/api/erasure/:userId/wipe-device/:devicePubkey",
@@ -580,7 +580,7 @@
     {
       "functionName": "getErasureConfig",
       "file": "src/client/lib/api/governance.ts",
-      "line": 50,
+      "line": 60,
       "method": "GET",
       "pathPattern": "/erasure/config",
       "serverPath": "/api/erasure/config",
@@ -601,7 +601,7 @@
     {
       "functionName": "updateErasureConfig",
       "file": "src/client/lib/api/governance.ts",
-      "line": 54,
+      "line": 64,
       "method": "PATCH",
       "pathPattern": "/erasure/config",
       "serverPath": "/api/erasure/config",
@@ -629,7 +629,7 @@
     {
       "functionName": "listEnvelopeRevocationJobs",
       "file": "src/client/lib/api/governance.ts",
-      "line": 61,
+      "line": 71,
       "method": "GET",
       "pathPattern": "/erasure/envelope-revocation-jobs",
       "serverPath": "/api/erasure/envelope-revocation-jobs",
@@ -650,7 +650,7 @@
     {
       "functionName": "getRetentionSettings",
       "file": "src/client/lib/api/governance.ts",
-      "line": 70,
+      "line": 80,
       "method": "GET",
       "pathPattern": "/retention",
       "serverPath": "/api/retention",
@@ -671,7 +671,7 @@
     {
       "functionName": "updateRetentionSettings",
       "file": "src/client/lib/api/governance.ts",
-      "line": 74,
+      "line": 84,
       "method": "PATCH",
       "pathPattern": "/retention",
       "serverPath": "/api/retention",
@@ -708,7 +708,7 @@
     {
       "functionName": "getRetentionPlatformFloors",
       "file": "src/client/lib/api/governance.ts",
-      "line": 81,
+      "line": 91,
       "method": "GET",
       "pathPattern": "/retention/platform-floors",
       "serverPath": "/api/retention/platform-floors",
@@ -729,7 +729,7 @@
     {
       "functionName": "updateRetentionPlatformFloor",
       "file": "src/client/lib/api/governance.ts",
-      "line": 85,
+      "line": 95,
       "method": "PATCH",
       "pathPattern": "/retention/platform-floors",
       "serverPath": "/api/retention/platform-floors",
@@ -766,7 +766,7 @@
     {
       "functionName": "listPlatformBans",
       "file": "src/client/lib/api/governance.ts",
-      "line": 94,
+      "line": 104,
       "method": "GET",
       "pathPattern": "/admin/bans",
       "serverPath": "/api/admin/bans",
@@ -774,57 +774,76 @@
         "verdict": "N/A"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ bans: PlatformBan[]; total: number }",
+        "verdict": "BOUND",
+        "clientType": "PlatformBanListResponse",
         "schemaIdent": "platformBanListResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `platformBanListResponseSchema` — add `export type <Name> = z.infer<typeof platformBanListResponseSchema>` beside it in packages/protocol/schemas/bans.ts"
+        "schemaTypeAlias": "PlatformBanListResponse"
       }
+    },
+    {
+      "functionName": "platformBanDigests",
+      "file": "src/client/lib/api/governance.ts",
+      "line": 118,
+      "method": "POST",
+      "pathPattern": "/admin/bans/evaluate",
+      "serverPath": "/api/admin/bans/evaluate",
+      "body": {
+        "verdict": "UNRESOLVED",
+        "schemaIdent": "banDigestEvaluateBodySchema",
+        "note": "server validates/returns a schema here but no client type could be statically determined"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "BanDigestEvaluateResponse",
+        "schemaIdent": "banDigestEvaluateResponseSchema",
+        "schemaTypeAlias": "BanDigestEvaluateResponse"
+      },
+      "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
+    },
+    {
+      "functionName": "banLookups",
+      "file": "src/client/lib/api/governance.ts",
+      "line": 140,
+      "method": "POST",
+      "pathPattern": "/admin/bans/search/evaluate",
+      "serverPath": "/api/admin/bans/search/evaluate",
+      "body": {
+        "verdict": "UNRESOLVED",
+        "schemaIdent": "searchBansEvaluateBodySchema",
+        "note": "server validates/returns a schema here but no client type could be statically determined"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "SearchBansEvaluateResponse",
+        "schemaIdent": "searchBansEvaluateResponseSchema",
+        "schemaTypeAlias": "SearchBansEvaluateResponse"
+      },
+      "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
     },
     {
       "functionName": "createPlatformBan",
       "file": "src/client/lib/api/governance.ts",
-      "line": 102,
+      "line": 166,
       "method": "POST",
       "pathPattern": "/admin/bans",
       "serverPath": "/api/admin/bans",
       "body": {
-        "verdict": "UNBOUND",
-        "clientType": "{ phoneHash: string; reason: string }",
+        "verdict": "UNRESOLVED",
         "schemaIdent": "createPlatformBanBodySchema",
-        "fieldDiff": {
-          "missingOnClient": [
-            "phone"
-          ],
-          "extraOnClient": [
-            "phoneHash"
-          ]
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `createPlatformBanBodySchema` — add `export type <Name> = z.infer<typeof createPlatformBanBodySchema>` beside it in packages/protocol/schemas/bans.ts"
+        "note": "server validates/returns a schema here but no client type could be statically determined"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ ban: PlatformBan }",
+        "verdict": "BOUND",
+        "clientType": "OkResponse",
         "schemaIdent": "okResponseSchema",
-        "schemaTypeAlias": "OkResponse",
-        "fieldDiff": {
-          "missingOnClient": [
-            "ok"
-          ],
-          "extraOnClient": [
-            "ban"
-          ]
-        },
-        "note": "hand-written shape; protocol already exports `OkResponse` for this schema — import it instead"
-      }
+        "schemaTypeAlias": "OkResponse"
+      },
+      "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
     },
     {
       "functionName": "deletePlatformBan",
       "file": "src/client/lib/api/governance.ts",
-      "line": 110,
+      "line": 175,
       "method": "DELETE",
       "pathPattern": "/admin/bans/:param",
       "serverPath": "/api/admin/bans/:id",
@@ -844,74 +863,14 @@
       }
     },
     {
-      "functionName": "bulkImportPlatformBans",
+      "functionName": "dismissPlatformBanReentry",
       "file": "src/client/lib/api/governance.ts",
-      "line": 115,
-      "method": "POST",
-      "pathPattern": "/admin/bans/bulk",
-      "serverPath": "/api/admin/bans/bulk",
-      "body": {
-        "verdict": "UNBOUND",
-        "clientType": "{ phoneHashes: string[]; reason: string }",
-        "schemaIdent": "bulkPlatformBanBodySchema",
-        "fieldDiff": {
-          "missingOnClient": [
-            "phones"
-          ],
-          "extraOnClient": [
-            "phoneHashes"
-          ]
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `bulkPlatformBanBodySchema` — add `export type <Name> = z.infer<typeof bulkPlatformBanBodySchema>` beside it in packages/protocol/schemas/bans.ts"
-      },
-      "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ count: number }",
-        "schemaIdent": "okResponseSchema",
-        "schemaTypeAlias": "OkResponse",
-        "fieldDiff": {
-          "missingOnClient": [
-            "ok"
-          ],
-          "extraOnClient": [
-            "count"
-          ]
-        },
-        "note": "hand-written shape; protocol already exports `OkResponse` for this schema — import it instead"
-      }
-    },
-    {
-      "functionName": "searchPlatformBans",
-      "file": "src/client/lib/api/governance.ts",
-      "line": 122,
-      "method": "GET",
-      "pathPattern": "/admin/bans/search",
-      "serverPath": "/api/admin/bans/search",
+      "line": 181,
+      "method": "DELETE",
+      "pathPattern": "/admin/bans/reentries/:param",
+      "serverPath": "/api/admin/bans/reentries/:id",
       "body": {
         "verdict": "N/A"
-      },
-      "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ bans: (PlatformBan & { scope: 'hub' | 'platform' })[] }",
-        "schemaIdent": "searchBansResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `searchBansResponseSchema` — add `export type <Name> = z.infer<typeof searchBansResponseSchema>` beside it in packages/protocol/schemas/bans.ts"
-      }
-    },
-    {
-      "functionName": "promoteHubBan",
-      "file": "src/client/lib/api/governance.ts",
-      "line": 129,
-      "method": "POST",
-      "pathPattern": "/admin/bans/promote",
-      "serverPath": "/api/admin/bans/promote",
-      "body": {
-        "verdict": "UNRESOLVED",
-        "schemaIdent": "promoteBanBodySchema",
-        "note": "server validates/returns a schema here but no client type could be statically determined"
       },
       "response": {
         "verdict": "UNBOUND",
@@ -923,13 +882,73 @@
           "extraOnClient": []
         },
         "note": "hand-written shape; protocol already exports `OkResponse` for this schema — import it instead"
+      }
+    },
+    {
+      "functionName": "bulkImportPlatformBans",
+      "file": "src/client/lib/api/governance.ts",
+      "line": 185,
+      "method": "POST",
+      "pathPattern": "/admin/bans/bulk",
+      "serverPath": "/api/admin/bans/bulk",
+      "body": {
+        "verdict": "UNRESOLVED",
+        "schemaIdent": "bulkPlatformBanBodySchema",
+        "note": "server validates/returns a schema here but no client type could be statically determined"
+      },
+      "response": {
+        "verdict": "MISMATCHED",
+        "clientType": "BulkBanResponse",
+        "schemaIdent": "okResponseSchema",
+        "schemaTypeAlias": "OkResponse",
+        "note": "client imports `BulkBanResponse` from @protocol/schemas, but this route's schema (`okResponseSchema`) is aliased as `OkResponse` — likely referencing a sibling/stale schema"
+      },
+      "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
+    },
+    {
+      "functionName": "searchPlatformBans",
+      "file": "src/client/lib/api/governance.ts",
+      "line": 197,
+      "method": "POST",
+      "pathPattern": "/admin/bans/search",
+      "serverPath": "/api/admin/bans/search",
+      "body": {
+        "verdict": "UNRESOLVED",
+        "schemaIdent": "searchBansBodySchema",
+        "note": "server validates/returns a schema here but no client type could be statically determined"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "SearchBansResponse",
+        "schemaIdent": "searchBansResponseSchema",
+        "schemaTypeAlias": "SearchBansResponse"
+      },
+      "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
+    },
+    {
+      "functionName": "promoteHubBan",
+      "file": "src/client/lib/api/governance.ts",
+      "line": 209,
+      "method": "POST",
+      "pathPattern": "/admin/bans/promote",
+      "serverPath": "/api/admin/bans/promote",
+      "body": {
+        "verdict": "UNRESOLVED",
+        "schemaIdent": "promoteBanBodySchema",
+        "note": "server validates/returns a schema here but no client type could be statically determined"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "OkResponse",
+        "schemaIdent": "okResponseSchema",
+        "schemaTypeAlias": "OkResponse"
       },
       "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
     },
     {
       "functionName": "getPlatformSettings",
       "file": "src/client/lib/api/governance.ts",
-      "line": 138,
+      "line": 222,
       "method": "GET",
       "pathPattern": "/settings/platform",
       "serverPath": "/api/settings/platform",
@@ -950,7 +969,7 @@
     {
       "functionName": "updatePlatformSettings",
       "file": "src/client/lib/api/governance.ts",
-      "line": 142,
+      "line": 226,
       "method": "PATCH",
       "pathPattern": "/settings/platform",
       "serverPath": "/api/settings/platform",
@@ -997,7 +1016,24 @@
     {
       "functionName": "getMyShiftStatus",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 10,
+      "line": 12,
+      "method": "GET",
+      "pathPattern": "/shifts/my-status",
+      "serverPath": "/api/hubs/:hubId/shifts/my-status",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "ShiftStatus",
+        "schemaIdent": "myStatusResponseSchema",
+        "schemaTypeAlias": "ShiftStatus"
+      }
+    },
+    {
+      "functionName": "getMyShiftStatusIn",
+      "file": "src/client/lib/api/shifts.ts",
+      "line": 22,
       "method": "GET",
       "pathPattern": "/shifts/my-status",
       "serverPath": "/api/hubs/:hubId/shifts/my-status",
@@ -1014,7 +1050,7 @@
     {
       "functionName": "listShifts",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 16,
+      "line": 28,
       "method": "GET",
       "pathPattern": "/shifts",
       "serverPath": "/api/hubs/:hubId/shifts",
@@ -1035,7 +1071,7 @@
     {
       "functionName": "createShift",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 20,
+      "line": 32,
       "method": "POST",
       "pathPattern": "/shifts",
       "serverPath": "/api/hubs/:hubId/shifts",
@@ -1055,7 +1091,7 @@
     {
       "functionName": "updateShift",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 27,
+      "line": 39,
       "method": "PATCH",
       "pathPattern": "/shifts/:param",
       "serverPath": "/api/hubs/:hubId/shifts/:id",
@@ -1075,7 +1111,7 @@
     {
       "functionName": "deleteShift",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 35,
+      "line": 47,
       "method": "DELETE",
       "pathPattern": "/shifts/:param",
       "serverPath": "/api/hubs/:hubId/shifts/:id",
@@ -1097,7 +1133,7 @@
     {
       "functionName": "getFallbackGroup",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 40,
+      "line": 52,
       "method": "GET",
       "pathPattern": "/shifts/fallback",
       "serverPath": "/api/hubs/:hubId/shifts/fallback",
@@ -1114,7 +1150,7 @@
     {
       "functionName": "setFallbackGroup",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 44,
+      "line": 56,
       "method": "PUT",
       "pathPattern": "/shifts/fallback",
       "serverPath": "/api/hubs/:hubId/shifts/fallback",
@@ -1135,7 +1171,7 @@
     {
       "functionName": "clockIn",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 53,
+      "line": 65,
       "method": "POST",
       "pathPattern": "/shifts/clock-in",
       "serverPath": "/api/hubs/:hubId/shifts/clock-in",
@@ -1157,7 +1193,7 @@
     {
       "functionName": "clockOut",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 57,
+      "line": 69,
       "method": "POST",
       "pathPattern": "/shifts/clock-out",
       "serverPath": "/api/hubs/:hubId/shifts/clock-out",
@@ -1179,7 +1215,7 @@
     {
       "functionName": "sendHeartbeat",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 61,
+      "line": 79,
       "method": "POST",
       "pathPattern": "/shifts/heartbeat",
       "serverPath": "/api/hubs/:hubId/shifts/heartbeat",
@@ -1201,7 +1237,7 @@
     {
       "functionName": "listActiveShifts",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 65,
+      "line": 83,
       "method": "GET",
       "pathPattern": "/shifts/active",
       "serverPath": "/api/hubs/:hubId/shifts/active",
@@ -1215,7 +1251,7 @@
     {
       "functionName": "listShiftOverrides",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 71,
+      "line": 89,
       "method": "GET",
       "pathPattern": "/shifts/overrides",
       "serverPath": "/api/hubs/:hubId/shifts/overrides",
@@ -1223,48 +1259,36 @@
         "verdict": "N/A"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ overrides: Array<{ id: string; hubId: string; shiftId: string | null; date: string; type: string; userPubkeys: string[] | null; encryptedNote: string | null; createdBy: string; createdAt: string }> }",
+        "verdict": "BOUND",
+        "clientType": "ShiftOverrideListResponse",
         "schemaIdent": "shiftOverrideListResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `shiftOverrideListResponseSchema` — add `export type <Name> = z.infer<typeof shiftOverrideListResponseSchema>` beside it in packages/protocol/schemas/shift-override.ts"
+        "schemaTypeAlias": "ShiftOverrideListResponse"
       }
     },
     {
       "functionName": "createShiftOverride",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 77,
+      "line": 95,
       "method": "POST",
       "pathPattern": "/shifts/overrides",
       "serverPath": "/api/hubs/:hubId/shifts/overrides",
       "body": {
-        "verdict": "UNBOUND",
-        "clientType": "{ id: string; shiftId?: string | null; date: string; type: 'cancel' | 'substitute'; userPubkeys?: string[] | null; encryptedNote?: string | null }",
+        "verdict": "MISMATCHED",
+        "clientType": "CreateShiftOverrideBody",
         "schemaIdent": "createShiftOverrideBodySchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `createShiftOverrideBodySchema` — add `export type <Name> = z.infer<typeof createShiftOverrideBodySchema>` beside it in packages/protocol/schemas/shift-override.ts"
+        "note": "client imports `CreateShiftOverrideBody` from @protocol/schemas, but this route's schema (`createShiftOverrideBodySchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof createShiftOverrideBodySchema>` beside it in packages/protocol/schemas/shift-override.ts"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ id: string; hubId: string; shiftId: string | null; date: string; type: string; userPubkeys: string[] | null; encryptedNote: string | null; createdBy: string; createdAt: string }",
+        "verdict": "BOUND",
+        "clientType": "ShiftOverride",
         "schemaIdent": "shiftOverrideResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `shiftOverrideResponseSchema` — add `export type <Name> = z.infer<typeof shiftOverrideResponseSchema>` beside it in packages/protocol/schemas/shift-override.ts"
+        "schemaTypeAlias": "ShiftOverride"
       }
     },
     {
       "functionName": "deleteShiftOverride",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 85,
+      "line": 103,
       "method": "DELETE",
       "pathPattern": "/shifts/overrides/:param",
       "serverPath": "/api/hubs/:hubId/shifts/overrides/:id",
@@ -1286,7 +1310,7 @@
     {
       "functionName": "listAvailabilityBlocks",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 92,
+      "line": 110,
       "method": "GET",
       "pathPattern": "/shifts/availability",
       "serverPath": "/api/hubs/:hubId/shifts/availability",
@@ -1294,20 +1318,16 @@
         "verdict": "N/A"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ blocks: Array<{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }> }",
+        "verdict": "BOUND",
+        "clientType": "AvailabilityBlockListResponse",
         "schemaIdent": "availabilityBlockListResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `availabilityBlockListResponseSchema` — add `export type <Name> = z.infer<typeof availabilityBlockListResponseSchema>` beside it in packages/protocol/schemas/shift-availability.ts"
+        "schemaTypeAlias": "AvailabilityBlockListResponse"
       }
     },
     {
       "functionName": "listMyAvailabilityBlocks",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 98,
+      "line": 116,
       "method": "GET",
       "pathPattern": "/shifts/availability/my",
       "serverPath": "/api/hubs/:hubId/shifts/availability/my",
@@ -1315,48 +1335,36 @@
         "verdict": "N/A"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ blocks: Array<{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }> }",
+        "verdict": "BOUND",
+        "clientType": "AvailabilityBlockListResponse",
         "schemaIdent": "availabilityBlockListResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `availabilityBlockListResponseSchema` — add `export type <Name> = z.infer<typeof availabilityBlockListResponseSchema>` beside it in packages/protocol/schemas/shift-availability.ts"
+        "schemaTypeAlias": "AvailabilityBlockListResponse"
       }
     },
     {
       "functionName": "createAvailabilityBlock",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 102,
+      "line": 120,
       "method": "POST",
       "pathPattern": "/shifts/availability",
       "serverPath": "/api/hubs/:hubId/shifts/availability",
       "body": {
-        "verdict": "UNBOUND",
-        "clientType": "{ id: string; startDate: string; endDate: string; encryptedReason?: string | null }",
+        "verdict": "MISMATCHED",
+        "clientType": "CreateAvailabilityBlockBody",
         "schemaIdent": "createAvailabilityBlockBodySchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `createAvailabilityBlockBodySchema` — add `export type <Name> = z.infer<typeof createAvailabilityBlockBodySchema>` beside it in packages/protocol/schemas/shift-availability.ts"
+        "note": "client imports `CreateAvailabilityBlockBody` from @protocol/schemas, but this route's schema (`createAvailabilityBlockBodySchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof createAvailabilityBlockBodySchema>` beside it in packages/protocol/schemas/shift-availability.ts"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }",
+        "verdict": "BOUND",
+        "clientType": "AvailabilityBlock",
         "schemaIdent": "availabilityBlockResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `availabilityBlockResponseSchema` — add `export type <Name> = z.infer<typeof availabilityBlockResponseSchema>` beside it in packages/protocol/schemas/shift-availability.ts"
+        "schemaTypeAlias": "AvailabilityBlock"
       }
     },
     {
       "functionName": "deleteAvailabilityBlock",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 109,
+      "line": 127,
       "method": "DELETE",
       "pathPattern": "/shifts/availability/:param",
       "serverPath": "/api/hubs/:hubId/shifts/availability/:id",
@@ -1378,7 +1386,7 @@
     {
       "functionName": "listShiftRequests",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 115,
+      "line": 133,
       "method": "GET",
       "pathPattern": "/shifts/requests",
       "serverPath": "/api/hubs/:hubId/shifts/requests",
@@ -1399,7 +1407,7 @@
     {
       "functionName": "createShiftRequest",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 119,
+      "line": 137,
       "method": "POST",
       "pathPattern": "/shifts/requests",
       "serverPath": "/api/hubs/:hubId/shifts/requests",
@@ -1427,7 +1435,7 @@
     {
       "functionName": "approveShiftRequest",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 126,
+      "line": 144,
       "method": "POST",
       "pathPattern": "/shifts/requests/:param/approve",
       "serverPath": "/api/hubs/:hubId/shifts/requests/:id/approve",
@@ -1451,7 +1459,7 @@
     {
       "functionName": "rejectShiftRequest",
       "file": "src/client/lib/api/shifts.ts",
-      "line": 133,
+      "line": 151,
       "method": "POST",
       "pathPattern": "/shifts/requests/:param/reject",
       "serverPath": "/api/hubs/:hubId/shifts/requests/:id/reject",
@@ -2005,7 +2013,7 @@
       "response": {
         "verdict": "UNBOUND",
         "clientType": "BlastStats",
-        "schemaIdent": "subscriberStatsResponseSchema",
+        "schemaIdent": "blastStatsSchema",
         "note": "named type `BlastStats` is not imported from @protocol/schemas"
       }
     },
@@ -2393,18 +2401,10 @@
         "verdict": "N/A"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ recordings: IvrAudioRecording[] }",
-        "schemaIdent": "ivrAudioPromptsResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [
-            "prompts"
-          ],
-          "extraOnClient": [
-            "recordings"
-          ]
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `ivrAudioPromptsResponseSchema` — add `export type <Name> = z.infer<typeof ivrAudioPromptsResponseSchema>` beside it in packages/protocol/schemas/settings.ts"
+        "verdict": "BOUND",
+        "clientType": "IvrAudioListResponse",
+        "schemaIdent": "ivrAudioListResponseSchema",
+        "schemaTypeAlias": "IvrAudioListResponse"
       }
     },
     {
@@ -2463,7 +2463,7 @@
     {
       "functionName": "listHubs",
       "file": "src/client/lib/api/hubs.ts",
-      "line": 9,
+      "line": 21,
       "method": "GET",
       "pathPattern": "/hubs",
       "serverPath": "/api/hubs",
@@ -2482,9 +2482,30 @@
       }
     },
     {
+      "functionName": "getMyHubPermissions",
+      "file": "src/client/lib/api/hubs.ts",
+      "line": 31,
+      "method": "GET",
+      "pathPattern": "/hubs/:param/permissions/me",
+      "serverPath": "/api/hubs/:hubId/permissions/me",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "UNBOUND",
+        "clientType": "{ hubId: string; permissions: string[] }",
+        "schemaIdent": "hubPermissionsResponseSchema",
+        "fieldDiff": {
+          "missingOnClient": [],
+          "extraOnClient": []
+        },
+        "note": "hand-written shape; no PascalCase type alias exists yet for `hubPermissionsResponseSchema` — add `export type <Name> = z.infer<typeof hubPermissionsResponseSchema>` beside it in packages/protocol/schemas/hubs.ts"
+      }
+    },
+    {
       "functionName": "createHub",
       "file": "src/client/lib/api/hubs.ts",
-      "line": 13,
+      "line": 35,
       "method": "POST",
       "pathPattern": "/hubs",
       "serverPath": "/api/hubs",
@@ -2512,7 +2533,7 @@
     {
       "functionName": "getHub",
       "file": "src/client/lib/api/hubs.ts",
-      "line": 20,
+      "line": 42,
       "method": "GET",
       "pathPattern": "/hubs/:param",
       "serverPath": "/api/hubs/:hubId",
@@ -2533,7 +2554,7 @@
     {
       "functionName": "updateHub",
       "file": "src/client/lib/api/hubs.ts",
-      "line": 24,
+      "line": 46,
       "method": "PATCH",
       "pathPattern": "/hubs/:param",
       "serverPath": "/api/hubs/:hubId",
@@ -2546,32 +2567,18 @@
       "response": {
         "verdict": "UNBOUND",
         "clientType": "{ hub: Hub }",
-        "schemaIdent": "hubResponseSchema",
-        "schemaTypeAlias": "Hub",
+        "schemaIdent": "hubDetailResponseSchema",
         "fieldDiff": {
-          "missingOnClient": [
-            "id",
-            "name",
-            "slug",
-            "description",
-            "phoneNumber",
-            "timezone",
-            "status",
-            "createdBy",
-            "createdAt",
-            "updatedAt"
-          ],
-          "extraOnClient": [
-            "hub"
-          ]
+          "missingOnClient": [],
+          "extraOnClient": []
         },
-        "note": "hand-written shape; protocol already exports `Hub` for this schema — import it instead"
+        "note": "hand-written shape; no PascalCase type alias exists yet for `hubDetailResponseSchema` — add `export type <Name> = z.infer<typeof hubDetailResponseSchema>` beside it in packages/protocol/schemas/hubs.ts"
       }
     },
     {
       "functionName": "deleteHub",
       "file": "src/client/lib/api/hubs.ts",
-      "line": 31,
+      "line": 53,
       "method": "DELETE",
       "pathPattern": "/hubs/:param",
       "serverPath": "/api/hubs/:hubId",
@@ -2593,7 +2600,7 @@
     {
       "functionName": "addHubMember",
       "file": "src/client/lib/api/hubs.ts",
-      "line": 37,
+      "line": 59,
       "method": "POST",
       "pathPattern": "/hubs/:param/members",
       "serverPath": "/api/hubs/:hubId/members",
@@ -2618,7 +2625,7 @@
     {
       "functionName": "removeHubMember",
       "file": "src/client/lib/api/hubs.ts",
-      "line": 44,
+      "line": 66,
       "method": "DELETE",
       "pathPattern": "/hubs/:param/members/:param",
       "serverPath": "/api/hubs/:hubId/members/:pubkey",
@@ -2638,9 +2645,117 @@
       }
     },
     {
+      "functionName": "getHubReaders",
+      "file": "src/client/lib/api/hubs.ts",
+      "line": 78,
+      "method": "GET",
+      "pathPattern": "/hubs/:param/readers",
+      "serverPath": "/api/hubs/:hubId/readers",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "HubReadersResponse",
+        "schemaIdent": "hubReadersResponseSchema",
+        "schemaTypeAlias": "HubReadersResponse"
+      }
+    },
+    {
+      "functionName": "getHubKeyEnvelope",
+      "file": "src/client/lib/api/hubs.ts",
+      "line": 85,
+      "method": "GET",
+      "pathPattern": "/hubs/:param/key",
+      "serverPath": "/api/hubs/:hubId/key",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "HubKeyEnvelopeResponse",
+        "schemaIdent": "hubKeyEnvelopeResponseSchema",
+        "schemaTypeAlias": "HubKeyEnvelopeResponse"
+      }
+    },
+    {
+      "functionName": "getHubKeyRecipients",
+      "file": "src/client/lib/api/hubs.ts",
+      "line": 90,
+      "method": "GET",
+      "pathPattern": "/hubs/:param/key/recipients",
+      "serverPath": "/api/hubs/:hubId/key/recipients",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "HubKeyRecipientsResponse",
+        "schemaIdent": "hubKeyRecipientsResponseSchema",
+        "schemaTypeAlias": "HubKeyRecipientsResponse"
+      }
+    },
+    {
+      "functionName": "getHubKeyRotation",
+      "file": "src/client/lib/api/hubs.ts",
+      "line": 95,
+      "method": "GET",
+      "pathPattern": "/hubs/:param/key/rotation",
+      "serverPath": "/api/hubs/:hubId/key/rotation",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "HubKeyRotationResponse",
+        "schemaIdent": "hubKeyRotationResponseSchema",
+        "schemaTypeAlias": "HubKeyRotationResponse"
+      }
+    },
+    {
+      "functionName": "rotateHubKey",
+      "file": "src/client/lib/api/hubs.ts",
+      "line": 104,
+      "method": "POST",
+      "pathPattern": "/hubs/:param/key/rotate",
+      "serverPath": "/api/hubs/:hubId/key/rotate",
+      "body": {
+        "verdict": "BOUND",
+        "clientType": "HubKeyRotateBody",
+        "schemaIdent": "hubKeyRotateBodySchema",
+        "schemaTypeAlias": "HubKeyRotateBody"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "HubKeyRotateResponse",
+        "schemaIdent": "hubKeyRotateResponseSchema",
+        "schemaTypeAlias": "HubKeyRotateResponse"
+      }
+    },
+    {
+      "functionName": "setHubKeyEnvelopes",
+      "file": "src/client/lib/api/hubs.ts",
+      "line": 112,
+      "method": "PUT",
+      "pathPattern": "/hubs/:param/key",
+      "serverPath": "/api/hubs/:hubId/key",
+      "body": {
+        "verdict": "BOUND",
+        "clientType": "HubKeyEnvelopesBody",
+        "schemaIdent": "hubKeyEnvelopesBodySchema",
+        "schemaTypeAlias": "HubKeyEnvelopesBody"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "HubKeySetResponse",
+        "schemaIdent": "hubKeySetResponseSchema",
+        "schemaTypeAlias": "HubKeySetResponse"
+      }
+    },
+    {
       "functionName": "fetchSystemHealth",
       "file": "src/client/lib/api/hubs.ts",
-      "line": 50,
+      "line": 121,
       "method": "GET",
       "pathPattern": "/system/health",
       "serverPath": "/api/system/health",
@@ -2665,14 +2780,10 @@
         "verdict": "N/A"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ bans: BanEntry[] }",
+        "verdict": "BOUND",
+        "clientType": "BanListResponse",
         "schemaIdent": "banListResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `banListResponseSchema` — add `export type <Name> = z.infer<typeof banListResponseSchema>` beside it in packages/protocol/schemas/bans.ts"
+        "schemaTypeAlias": "BanListResponse"
       }
     },
     {
@@ -2770,17 +2881,40 @@
         "verdict": "UNBOUND",
         "clientType": "{ count: number }",
         "schemaIdent": "bulkBanResponseSchema",
+        "schemaTypeAlias": "BulkBanResponse",
         "fieldDiff": {
           "missingOnClient": [],
           "extraOnClient": []
         },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `bulkBanResponseSchema` — add `export type <Name> = z.infer<typeof bulkBanResponseSchema>` beside it in packages/protocol/schemas/bans.ts"
+        "note": "hand-written shape; protocol already exports `BulkBanResponse` for this schema — import it instead"
+      }
+    },
+    {
+      "functionName": "dismissBanReentry",
+      "file": "src/client/lib/api/bans.ts",
+      "line": 45,
+      "method": "DELETE",
+      "pathPattern": "/bans/reentries/:param",
+      "serverPath": "/api/hubs/:hubId/bans/reentries/:id",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "UNBOUND",
+        "clientType": "{ ok: true }",
+        "schemaIdent": "okResponseSchema",
+        "schemaTypeAlias": "OkResponse",
+        "fieldDiff": {
+          "missingOnClient": [],
+          "extraOnClient": []
+        },
+        "note": "hand-written shape; protocol already exports `OkResponse` for this schema — import it instead"
       }
     },
     {
       "functionName": "setOnAuthExpired",
       "file": "src/client/lib/api/client.ts",
-      "line": 10,
+      "line": 11,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2794,7 +2928,49 @@
     {
       "functionName": "notifyAuthExpired",
       "file": "src/client/lib/api/client.ts",
-      "line": 17,
+      "line": 18,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
+    },
+    {
+      "functionName": "setOnHubGone",
+      "file": "src/client/lib/api/client.ts",
+      "line": 24,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
+    },
+    {
+      "functionName": "notifyHubGone",
+      "file": "src/client/lib/api/client.ts",
+      "line": 27,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
+    },
+    {
+      "functionName": "holdsSession",
+      "file": "src/client/lib/api/client.ts",
+      "line": 50,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2808,7 +2984,7 @@
     {
       "functionName": "getAuthHeaders",
       "file": "src/client/lib/api/client.ts",
-      "line": 31,
+      "line": 55,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2822,7 +2998,7 @@
     {
       "functionName": "getAuthHeadersForReplay",
       "file": "src/client/lib/api/client.ts",
-      "line": 55,
+      "line": 79,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2836,7 +3012,7 @@
     {
       "functionName": "setOnApiActivity",
       "file": "src/client/lib/api/client.ts",
-      "line": 61,
+      "line": 85,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2850,7 +3026,7 @@
     {
       "functionName": "notifyApiActivity",
       "file": "src/client/lib/api/client.ts",
-      "line": 64,
+      "line": 88,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2864,7 +3040,7 @@
     {
       "functionName": "isRetryable",
       "file": "src/client/lib/api/client.ts",
-      "line": 94,
+      "line": 121,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2878,7 +3054,7 @@
     {
       "functionName": "request",
       "file": "src/client/lib/api/client.ts",
-      "line": 110,
+      "line": 137,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2890,63 +3066,7 @@
       "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
     },
     {
-      "functionName": "getApiErrorCode",
-      "file": "src/client/lib/api/client.ts",
-      "line": 222,
-      "method": "GET",
-      "pathPattern": "",
-      "body": {
-        "verdict": "UNRESOLVED"
-      },
-      "response": {
-        "verdict": "UNRESOLVED"
-      },
-      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
-    },
-    {
-      "functionName": "isNetworkError",
-      "file": "src/client/lib/api/client.ts",
-      "line": 240,
-      "method": "GET",
-      "pathPattern": "",
-      "body": {
-        "verdict": "UNRESOLVED"
-      },
-      "response": {
-        "verdict": "UNRESOLVED"
-      },
-      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
-    },
-    {
-      "functionName": "setActiveHub",
-      "file": "src/client/lib/api/client.ts",
-      "line": 259,
-      "method": "GET",
-      "pathPattern": "",
-      "body": {
-        "verdict": "UNRESOLVED"
-      },
-      "response": {
-        "verdict": "UNRESOLVED"
-      },
-      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
-    },
-    {
-      "functionName": "getActiveHub",
-      "file": "src/client/lib/api/client.ts",
-      "line": 264,
-      "method": "GET",
-      "pathPattern": "",
-      "body": {
-        "verdict": "UNRESOLVED"
-      },
-      "response": {
-        "verdict": "UNRESOLVED"
-      },
-      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
-    },
-    {
-      "functionName": "subscribeActiveHub",
+      "functionName": "isHubNotFound",
       "file": "src/client/lib/api/client.ts",
       "line": 271,
       "method": "GET",
@@ -2960,9 +3080,79 @@
       "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
     },
     {
+      "functionName": "getApiErrorCode",
+      "file": "src/client/lib/api/client.ts",
+      "line": 282,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
+    },
+    {
+      "functionName": "isNetworkError",
+      "file": "src/client/lib/api/client.ts",
+      "line": 323,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
+    },
+    {
+      "functionName": "setActiveHub",
+      "file": "src/client/lib/api/client.ts",
+      "line": 342,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
+    },
+    {
+      "functionName": "getActiveHub",
+      "file": "src/client/lib/api/client.ts",
+      "line": 347,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
+    },
+    {
+      "functionName": "subscribeActiveHub",
+      "file": "src/client/lib/api/client.ts",
+      "line": 354,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "no request() call in function body (custom fetch, pure helper, or delegates elsewhere)"
+    },
+    {
       "functionName": "hp",
       "file": "src/client/lib/api/client.ts",
-      "line": 277,
+      "line": 360,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2976,7 +3166,7 @@
     {
       "functionName": "activeHubPath",
       "file": "src/client/lib/api/client.ts",
-      "line": 295,
+      "line": 378,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -2990,7 +3180,7 @@
     {
       "functionName": "hubPath",
       "file": "src/client/lib/api/client.ts",
-      "line": 305,
+      "line": 388,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -3004,7 +3194,7 @@
     {
       "functionName": "getConfig",
       "file": "src/client/lib/api/client.ts",
-      "line": 316,
+      "line": 399,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -3430,27 +3620,21 @@
     {
       "functionName": "updateRecord",
       "file": "src/client/lib/api/records.ts",
-      "line": 40,
-      "method": "PATCH",
-      "pathPattern": "/records/:param",
-      "serverPath": "/api/hubs/:hubId/records/:id",
+      "line": 46,
+      "method": "GET",
+      "pathPattern": "",
       "body": {
-        "verdict": "MISMATCHED",
-        "clientType": "UpdateRecordBody",
-        "schemaIdent": "updateRecordBodySchema",
-        "note": "client imports `UpdateRecordBody` from @protocol/schemas, but this route's schema (`updateRecordBodySchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof updateRecordBodySchema>` beside it in packages/protocol/schemas/records.ts"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "BOUND",
-        "clientType": "CaseRecord",
-        "schemaIdent": "recordSchema",
-        "schemaTypeAlias": "CaseRecord"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `hubId ? hubPath(hubId, `/records/${id}`) : activeHubPath(`/records/${id}`)`"
     },
     {
       "functionName": "deleteRecord",
       "file": "src/client/lib/api/records.ts",
-      "line": 47,
+      "line": 53,
       "method": "DELETE",
       "pathPattern": "/records/:param",
       "serverPath": "/api/hubs/:hubId/records/:id",
@@ -3472,7 +3656,7 @@
     {
       "functionName": "listEventLinkedRecords",
       "file": "src/client/lib/api/records.ts",
-      "line": 56,
+      "line": 62,
       "method": "GET",
       "pathPattern": "/events/:param/records",
       "serverPath": "/api/hubs/:hubId/events/:id/records",
@@ -3493,7 +3677,7 @@
     {
       "functionName": "listEventLinkedReports",
       "file": "src/client/lib/api/records.ts",
-      "line": 60,
+      "line": 66,
       "method": "GET",
       "pathPattern": "/events/:param/reports",
       "serverPath": "/api/hubs/:hubId/events/:id/reports",
@@ -3514,7 +3698,7 @@
     {
       "functionName": "linkRecordToEvent",
       "file": "src/client/lib/api/records.ts",
-      "line": 64,
+      "line": 70,
       "method": "POST",
       "pathPattern": "/events/:param/records",
       "serverPath": "/api/hubs/:hubId/events/:id/records",
@@ -3536,7 +3720,7 @@
     {
       "functionName": "linkReportToEvent",
       "file": "src/client/lib/api/records.ts",
-      "line": 71,
+      "line": 77,
       "method": "POST",
       "pathPattern": "/events/:param/reports",
       "serverPath": "/api/hubs/:hubId/events/:id/reports",
@@ -3558,7 +3742,7 @@
     {
       "functionName": "listChildRecords",
       "file": "src/client/lib/api/records.ts",
-      "line": 78,
+      "line": 84,
       "method": "GET",
       "pathPattern": "/records",
       "serverPath": "/api/hubs/:hubId/records",
@@ -3579,7 +3763,7 @@
     {
       "functionName": "listRecordContacts",
       "file": "src/client/lib/api/records.ts",
-      "line": 85,
+      "line": 91,
       "method": "GET",
       "pathPattern": "/records/:param/contacts",
       "serverPath": "/api/hubs/:hubId/records/:id/contacts",
@@ -3600,7 +3784,7 @@
     {
       "functionName": "linkContactToRecord",
       "file": "src/client/lib/api/records.ts",
-      "line": 89,
+      "line": 95,
       "method": "POST",
       "pathPattern": "/records/:param/contacts",
       "serverPath": "/api/hubs/:hubId/records/:id/contacts",
@@ -3621,7 +3805,7 @@
     {
       "functionName": "unlinkContactFromRecord",
       "file": "src/client/lib/api/records.ts",
-      "line": 96,
+      "line": 102,
       "method": "DELETE",
       "pathPattern": "/records/:param/contacts/:param",
       "serverPath": "/api/hubs/:hubId/records/:id/contacts/:contactId",
@@ -3643,7 +3827,7 @@
     {
       "functionName": "assignRecord",
       "file": "src/client/lib/api/records.ts",
-      "line": 100,
+      "line": 106,
       "method": "POST",
       "pathPattern": "/records/:param/assign",
       "serverPath": "/api/hubs/:hubId/records/:id/assign",
@@ -3664,7 +3848,7 @@
     {
       "functionName": "unassignRecord",
       "file": "src/client/lib/api/records.ts",
-      "line": 107,
+      "line": 113,
       "method": "POST",
       "pathPattern": "/records/:param/unassign",
       "serverPath": "/api/hubs/:hubId/records/:id/unassign",
@@ -3685,7 +3869,7 @@
     {
       "functionName": "getAssignmentSuggestions",
       "file": "src/client/lib/api/records.ts",
-      "line": 116,
+      "line": 122,
       "method": "GET",
       "pathPattern": "/records/:param/suggest-assignees",
       "serverPath": "/api/hubs/:hubId/records/:id/suggest-assignees",
@@ -3706,7 +3890,7 @@
     {
       "functionName": "getAutoAssignmentStatus",
       "file": "src/client/lib/api/records.ts",
-      "line": 120,
+      "line": 126,
       "method": "GET",
       "pathPattern": "/settings/cms/auto-assignment",
       "serverPath": "/api/settings/cms/auto-assignment",
@@ -3727,7 +3911,7 @@
     {
       "functionName": "setAutoAssignment",
       "file": "src/client/lib/api/records.ts",
-      "line": 124,
+      "line": 130,
       "method": "PUT",
       "pathPattern": "/settings/cms/auto-assignment",
       "serverPath": "/api/settings/cms/auto-assignment",
@@ -3751,7 +3935,7 @@
     {
       "functionName": "convertReportToEntity",
       "file": "src/client/lib/api/records.ts",
-      "line": 148,
+      "line": 154,
       "method": "POST",
       "pathPattern": "/records/convert-from-report",
       "serverPath": "/api/hubs/:hubId/records/convert-from-report",
@@ -3773,7 +3957,7 @@
     {
       "functionName": "notifyContacts",
       "file": "src/client/lib/api/records.ts",
-      "line": 170,
+      "line": 176,
       "method": "POST",
       "pathPattern": "/records/:param/notify-contacts",
       "serverPath": "/api/hubs/:hubId/records/:id/notify-contacts",
@@ -3803,28 +3987,21 @@
     {
       "functionName": "getRecordEnvelopeRecipients",
       "file": "src/client/lib/api/records.ts",
-      "line": 185,
+      "line": 191,
       "method": "GET",
-      "pathPattern": "/records/:param/envelope-recipients",
-      "serverPath": "/api/hubs/:hubId/records/:id/envelope-recipients",
+      "pathPattern": "",
       "body": {
-        "verdict": "N/A"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ summary: string[] fields: string[] pii: string[] }",
-        "schemaIdent": "envelopeRecipientsResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `envelopeRecipientsResponseSchema` — add `export type <Name> = z.infer<typeof envelopeRecipientsResponseSchema>` beside it in packages/protocol/schemas/records.ts"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `params.hubId ? hubPath(params.hubId, path) : activeHubPath(path)`"
     },
     {
       "functionName": "getRecordEnvelopeRecipients [call site 2]",
       "file": "src/client/lib/api/records.ts",
-      "line": 185,
+      "line": 191,
       "method": "GET",
       "pathPattern": "/records/envelope-recipients",
       "serverPath": "/api/hubs/:hubId/records/envelope-recipients",
@@ -3845,7 +4022,7 @@
     {
       "functionName": "mergeEntities",
       "file": "src/client/lib/api/records.ts",
-      "line": 211,
+      "line": 220,
       "method": "POST",
       "pathPattern": "/records/merge",
       "serverPath": "/api/hubs/:hubId/records/merge",
@@ -3865,7 +4042,7 @@
     {
       "functionName": "listEntitiesCrossHub",
       "file": "src/client/lib/api/records.ts",
-      "line": 220,
+      "line": 229,
       "method": "GET",
       "pathPattern": "/records",
       "serverPath": "/api/hubs/:hubId/records",
@@ -3888,26 +4065,19 @@
       "file": "src/client/lib/api/evidence.ts",
       "line": 9,
       "method": "GET",
-      "pathPattern": "/records/:param/evidence",
-      "serverPath": "/api/hubs/:hubId/records/:id/evidence",
+      "pathPattern": "",
       "body": {
-        "verdict": "N/A"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ evidence: EvidenceMetadata[] total: number page: number limit: number hasMore: boolean }",
-        "schemaIdent": "evidenceListResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `evidenceListResponseSchema` — add `export type <Name> = z.infer<typeof evidenceListResponseSchema>` beside it in packages/protocol/schemas/evidence.ts"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `hubId ? hubPath(hubId, `/records/${recordId}/evidence?${qs}`) : activeHubPath(`/records/${recordId}/evidence?${qs}`)`"
     },
     {
       "functionName": "uploadEvidence",
       "file": "src/client/lib/api/evidence.ts",
-      "line": 27,
+      "line": 31,
       "method": "POST",
       "pathPattern": "/records/:param/evidence",
       "serverPath": "/api/hubs/:hubId/records/:id/evidence",
@@ -3932,7 +4102,7 @@
     {
       "functionName": "getEvidenceMetadata",
       "file": "src/client/lib/api/evidence.ts",
-      "line": 46,
+      "line": 50,
       "method": "GET",
       "pathPattern": "/evidence/:param",
       "serverPath": "/api/hubs/:hubId/evidence/:evidenceId",
@@ -3949,7 +4119,7 @@
     {
       "functionName": "getEvidenceCustody",
       "file": "src/client/lib/api/evidence.ts",
-      "line": 50,
+      "line": 54,
       "method": "GET",
       "pathPattern": "/evidence/:param/custody",
       "serverPath": "/api/hubs/:hubId/evidence/:evidenceId/custody",
@@ -3970,7 +4140,7 @@
     {
       "functionName": "logEvidenceAccess",
       "file": "src/client/lib/api/evidence.ts",
-      "line": 57,
+      "line": 61,
       "method": "POST",
       "pathPattern": "/evidence/:param/access",
       "serverPath": "/api/hubs/:hubId/evidence/:evidenceId/access",
@@ -3995,7 +4165,7 @@
     {
       "functionName": "verifyEvidenceIntegrity",
       "file": "src/client/lib/api/evidence.ts",
-      "line": 68,
+      "line": 72,
       "method": "POST",
       "pathPattern": "/evidence/:param/verify",
       "serverPath": "/api/hubs/:hubId/evidence/:evidenceId/verify",
@@ -4850,7 +5020,7 @@
     {
       "functionName": "login",
       "file": "src/client/lib/api/auth.ts",
-      "line": 13,
+      "line": 14,
       "method": "POST",
       "pathPattern": "/auth/login",
       "serverPath": "/api/auth/login",
@@ -4874,7 +5044,7 @@
     {
       "functionName": "bootstrapAdmin",
       "file": "src/client/lib/api/auth.ts",
-      "line": 20,
+      "line": 21,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -4888,7 +5058,7 @@
     {
       "functionName": "logout",
       "file": "src/client/lib/api/auth.ts",
-      "line": 44,
+      "line": 45,
       "method": "POST",
       "pathPattern": "/auth/me/logout",
       "serverPath": "/api/auth/me/logout",
@@ -4910,7 +5080,7 @@
     {
       "functionName": "getMe",
       "file": "src/client/lib/api/auth.ts",
-      "line": 48,
+      "line": 49,
       "method": "GET",
       "pathPattern": "/auth/me",
       "serverPath": "/api/auth/me",
@@ -4918,21 +5088,10 @@
         "verdict": "N/A"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ pubkey: string; roles: string[]; permissions: string[]; primaryRole: { id: string; name: string; slug: string } | null; name: string; transcriptionEnabled: boolean; spokenLanguages: string[]; uiLanguage: string; profileCompleted: boolean; onBreak: boolean; callPreference: 'phone' | 'browser' | 'both'; webauthnRequired: boolean; webauthnRegistered: boolean; adminDecryptionPubkey: string; serverEventKeyHex?: string; serverEventKeyPrevHex?: string; eventKeyEpoch?: number; eventKeyEpochDuration?: number }",
+        "verdict": "BOUND",
+        "clientType": "MeResponse",
         "schemaIdent": "meResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [
-            "hubEventKeys"
-          ],
-          "extraOnClient": [
-            "serverEventKeyHex",
-            "serverEventKeyPrevHex",
-            "eventKeyEpoch",
-            "eventKeyEpochDuration"
-          ]
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `meResponseSchema` — add `export type <Name> = z.infer<typeof meResponseSchema>` beside it in packages/protocol/schemas/auth.ts"
+        "schemaTypeAlias": "MeResponse"
       }
     },
     {
@@ -5152,33 +5311,9 @@
       }
     },
     {
-      "functionName": "createRolesFromTemplate",
-      "file": "src/client/lib/api/cms.ts",
-      "line": 77,
-      "method": "POST",
-      "pathPattern": "/settings/cms/roles/from-template",
-      "serverPath": "/api/settings/cms/roles/from-template",
-      "body": {
-        "verdict": "UNRESOLVED",
-        "schemaIdent": "createRolesFromTemplateBodySchema",
-        "note": "server validates/returns a schema here but no client type could be statically determined"
-      },
-      "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ created: Array<{ id: string; name: string }>; count: number }",
-        "schemaIdent": "rolesFromTemplateResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `rolesFromTemplateResponseSchema` — add `export type <Name> = z.infer<typeof rolesFromTemplateResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts"
-      },
-      "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
-    },
-    {
       "functionName": "listEntityTemplates",
       "file": "src/client/lib/api/cms.ts",
-      "line": 93,
+      "line": 86,
       "method": "GET",
       "pathPattern": "/settings/cms/templates",
       "serverPath": "/api/settings/cms/templates",
@@ -5199,7 +5334,7 @@
     {
       "functionName": "applyEntityTemplate",
       "file": "src/client/lib/api/cms.ts",
-      "line": 97,
+      "line": 90,
       "method": "POST",
       "pathPattern": "/settings/cms/templates/apply",
       "serverPath": "/api/settings/cms/templates/apply",
@@ -5228,27 +5363,21 @@
     {
       "functionName": "initUpload",
       "file": "src/client/lib/api/files.ts",
-      "line": 19,
-      "method": "POST",
-      "pathPattern": "/uploads/init",
-      "serverPath": "/api/hubs/:hubId/uploads/init",
+      "line": 36,
+      "method": "GET",
+      "pathPattern": "",
       "body": {
-        "verdict": "BOUND",
-        "clientType": "UploadInitBody",
-        "schemaIdent": "uploadInitBodySchema",
-        "schemaTypeAlias": "UploadInitBody"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "BOUND",
-        "clientType": "UploadInitResponse",
-        "schemaIdent": "uploadInitResponseSchema",
-        "schemaTypeAlias": "UploadInitResponse"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `uploadHubPath(hubId, '/uploads/init')`"
     },
     {
       "functionName": "uploadChunk",
       "file": "src/client/lib/api/files.ts",
-      "line": 26,
+      "line": 43,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -5262,41 +5391,35 @@
     {
       "functionName": "completeUpload",
       "file": "src/client/lib/api/files.ts",
-      "line": 71,
-      "method": "POST",
-      "pathPattern": "/uploads/:param/complete",
-      "serverPath": "/api/hubs/:hubId/uploads/:id/complete",
+      "line": 88,
+      "method": "GET",
+      "pathPattern": "",
       "body": {
-        "verdict": "N/A"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "BOUND",
-        "clientType": "UploadCompleteResponse",
-        "schemaIdent": "uploadCompleteResponseSchema",
-        "schemaTypeAlias": "UploadCompleteResponse"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `uploadHubPath(hubId, `/uploads/${uploadId}/complete`)`"
     },
     {
       "functionName": "getUploadStatus",
       "file": "src/client/lib/api/files.ts",
-      "line": 75,
+      "line": 92,
       "method": "GET",
-      "pathPattern": "/uploads/:param/status",
-      "serverPath": "/api/hubs/:hubId/uploads/:id/status",
+      "pathPattern": "",
       "body": {
-        "verdict": "N/A"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "BOUND",
-        "clientType": "UploadStatusResponse",
-        "schemaIdent": "uploadStatusResponseSchema",
-        "schemaTypeAlias": "UploadStatusResponse"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `uploadHubPath(hubId, `/uploads/${uploadId}/status`)`"
     },
     {
       "functionName": "downloadFile",
       "file": "src/client/lib/api/files.ts",
-      "line": 79,
+      "line": 96,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -5310,66 +5433,49 @@
     {
       "functionName": "getFileEnvelopes",
       "file": "src/client/lib/api/files.ts",
-      "line": 113,
+      "line": 130,
       "method": "GET",
-      "pathPattern": "/files/:param/envelopes",
-      "serverPath": "/api/hubs/:hubId/files/:id/envelopes",
+      "pathPattern": "",
       "body": {
-        "verdict": "N/A"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "BOUND",
-        "clientType": "FileEnvelopesResponse",
-        "schemaIdent": "fileEnvelopesResponseSchema",
-        "schemaTypeAlias": "FileEnvelopesResponse"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `uploadHubPath(hubId, `/files/${fileId}/envelopes`)`"
     },
     {
       "functionName": "getFileMetadata",
       "file": "src/client/lib/api/files.ts",
-      "line": 117,
+      "line": 134,
       "method": "GET",
-      "pathPattern": "/files/:param/metadata",
-      "serverPath": "/api/hubs/:hubId/files/:id/metadata",
+      "pathPattern": "",
       "body": {
-        "verdict": "N/A"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "BOUND",
-        "clientType": "FileMetadataResponse",
-        "schemaIdent": "fileMetadataResponseSchema",
-        "schemaTypeAlias": "FileMetadataResponse"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `uploadHubPath(hubId, `/files/${fileId}/metadata`)`"
     },
     {
       "functionName": "shareFile",
       "file": "src/client/lib/api/files.ts",
-      "line": 121,
-      "method": "POST",
-      "pathPattern": "/files/:param/share",
-      "serverPath": "/api/hubs/:hubId/files/:id/share",
+      "line": 138,
+      "method": "GET",
+      "pathPattern": "",
       "body": {
-        "verdict": "BOUND",
-        "clientType": "ShareFileBody",
-        "schemaIdent": "shareFileBodySchema",
-        "schemaTypeAlias": "ShareFileBody"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ ok: true }",
-        "schemaIdent": "okResponseSchema",
-        "schemaTypeAlias": "OkResponse",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; protocol already exports `OkResponse` for this schema — import it instead"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `uploadHubPath(hubId, `/files/${fileId}/share`)`"
     },
     {
       "functionName": "listRoles",
       "file": "src/client/lib/api/roles.ts",
-      "line": 8,
+      "line": 24,
       "method": "GET",
       "pathPattern": "/settings/roles",
       "serverPath": "/api/settings/roles",
@@ -5377,113 +5483,56 @@
         "verdict": "N/A"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ roles: RoleDefinition[] }",
+        "verdict": "BOUND",
+        "clientType": "RoleListResponse",
         "schemaIdent": "roleListResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `roleListResponseSchema` — add `export type <Name> = z.infer<typeof roleListResponseSchema>` beside it in packages/protocol/schemas/settings.ts"
+        "schemaTypeAlias": "RoleListResponse"
       }
     },
     {
       "functionName": "createRole",
       "file": "src/client/lib/api/roles.ts",
-      "line": 12,
+      "line": 29,
       "method": "POST",
       "pathPattern": "/settings/roles",
       "serverPath": "/api/settings/roles",
       "body": {
-        "verdict": "UNBOUND",
-        "clientType": "{ id?: string name?: string slug: string permissions: string[] description: string envelopes?: Array<{ adminPubkey: string; encryptedName: string; encryptedDescription: string }> }",
+        "verdict": "BOUND",
+        "clientType": "CreateRoleBody",
         "schemaIdent": "createRoleSchema",
-        "fieldDiff": {
-          "missingOnClient": [
-            "encryptedName",
-            "encryptedDescription"
-          ],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `createRoleSchema` — add `export type <Name> = z.infer<typeof createRoleSchema>` beside it in packages/protocol/schemas/settings.ts"
+        "schemaTypeAlias": "CreateRoleBody"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ role: RoleDefinition }",
+        "verdict": "BOUND",
+        "clientType": "RoleDefinition",
         "schemaIdent": "roleResponseSchema",
-        "schemaTypeAlias": "RoleDefinition",
-        "fieldDiff": {
-          "missingOnClient": [
-            "id",
-            "name",
-            "slug",
-            "permissions",
-            "isDefault",
-            "isSystem",
-            "description",
-            "encryptedName",
-            "encryptedDescription",
-            "envelopes",
-            "assignedUserCount",
-            "createdAt",
-            "updatedAt"
-          ],
-          "extraOnClient": [
-            "role"
-          ]
-        },
-        "note": "hand-written shape; protocol already exports `RoleDefinition` for this schema — import it instead"
+        "schemaTypeAlias": "RoleDefinition"
       }
     },
     {
       "functionName": "updateRole",
       "file": "src/client/lib/api/roles.ts",
-      "line": 26,
+      "line": 36,
       "method": "PATCH",
       "pathPattern": "/settings/roles/:param",
       "serverPath": "/api/settings/roles/:id",
       "body": {
-        "verdict": "UNBOUND",
-        "clientType": "Partial<{ name: string; permissions: string[]; description: string }>",
+        "verdict": "BOUND",
+        "clientType": "UpdateRoleBody",
         "schemaIdent": "updateRoleSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `updateRoleSchema` — add `export type <Name> = z.infer<typeof updateRoleSchema>` beside it in packages/protocol/schemas/settings.ts"
+        "schemaTypeAlias": "UpdateRoleBody"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ role: RoleDefinition }",
+        "verdict": "BOUND",
+        "clientType": "RoleDefinition",
         "schemaIdent": "roleResponseSchema",
-        "schemaTypeAlias": "RoleDefinition",
-        "fieldDiff": {
-          "missingOnClient": [
-            "id",
-            "name",
-            "slug",
-            "permissions",
-            "isDefault",
-            "isSystem",
-            "description",
-            "encryptedName",
-            "encryptedDescription",
-            "envelopes",
-            "assignedUserCount",
-            "createdAt",
-            "updatedAt"
-          ],
-          "extraOnClient": [
-            "role"
-          ]
-        },
-        "note": "hand-written shape; protocol already exports `RoleDefinition` for this schema — import it instead"
+        "schemaTypeAlias": "RoleDefinition"
       }
     },
     {
       "functionName": "deleteRole",
       "file": "src/client/lib/api/roles.ts",
-      "line": 33,
+      "line": 43,
       "method": "DELETE",
       "pathPattern": "/settings/roles/:param",
       "serverPath": "/api/settings/roles/:id",
@@ -5505,7 +5554,7 @@
     {
       "functionName": "addRoleEnvelopes",
       "file": "src/client/lib/api/roles.ts",
-      "line": 37,
+      "line": 47,
       "method": "POST",
       "pathPattern": "/settings/roles/:param/envelopes",
       "serverPath": "/api/settings/roles/:id/envelopes",
@@ -5528,9 +5577,87 @@
       "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
     },
     {
+      "functionName": "listHubRoles",
+      "file": "src/client/lib/api/roles.ts",
+      "line": 58,
+      "method": "GET",
+      "pathPattern": "",
+      "body": {
+        "verdict": "UNRESOLVED"
+      },
+      "response": {
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `path`"
+    },
+    {
+      "functionName": "createHubRole",
+      "file": "src/client/lib/api/roles.ts",
+      "line": 67,
+      "method": "POST",
+      "pathPattern": "/settings/roles",
+      "serverPath": "/api/settings/roles",
+      "body": {
+        "verdict": "MISMATCHED",
+        "clientType": "CreateHubRoleBody",
+        "schemaIdent": "createRoleSchema",
+        "schemaTypeAlias": "CreateRoleBody",
+        "note": "client imports `CreateHubRoleBody` from @protocol/schemas, but this route's schema (`createRoleSchema`) is aliased as `CreateRoleBody` — likely referencing a sibling/stale schema"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "RoleDefinition",
+        "schemaIdent": "roleResponseSchema",
+        "schemaTypeAlias": "RoleDefinition"
+      }
+    },
+    {
+      "functionName": "updateHubRole",
+      "file": "src/client/lib/api/roles.ts",
+      "line": 74,
+      "method": "PATCH",
+      "pathPattern": "/settings/roles/:param",
+      "serverPath": "/api/settings/roles/:id",
+      "body": {
+        "verdict": "MISMATCHED",
+        "clientType": "UpdateHubRoleBody",
+        "schemaIdent": "updateRoleSchema",
+        "schemaTypeAlias": "UpdateRoleBody",
+        "note": "client imports `UpdateHubRoleBody` from @protocol/schemas, but this route's schema (`updateRoleSchema`) is aliased as `UpdateRoleBody` — likely referencing a sibling/stale schema"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "RoleDefinition",
+        "schemaIdent": "roleResponseSchema",
+        "schemaTypeAlias": "RoleDefinition"
+      }
+    },
+    {
+      "functionName": "deleteHubRole",
+      "file": "src/client/lib/api/roles.ts",
+      "line": 81,
+      "method": "DELETE",
+      "pathPattern": "/settings/roles/:param",
+      "serverPath": "/api/settings/roles/:id",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "UNBOUND",
+        "clientType": "{ ok: true }",
+        "schemaIdent": "okResponseSchema",
+        "schemaTypeAlias": "OkResponse",
+        "fieldDiff": {
+          "missingOnClient": [],
+          "extraOnClient": []
+        },
+        "note": "hand-written shape; protocol already exports `OkResponse` for this schema — import it instead"
+      }
+    },
+    {
       "functionName": "getPermissionsCatalog",
       "file": "src/client/lib/api/roles.ts",
-      "line": 44,
+      "line": 85,
       "method": "GET",
       "pathPattern": "/settings/permissions",
       "serverPath": "/api/settings/permissions",
@@ -5674,7 +5801,9 @@
         "clientType": "{ calls: CallRecord[]; total: number }",
         "schemaIdent": "callHistoryResponseSchema",
         "fieldDiff": {
-          "missingOnClient": [],
+          "missingOnClient": [
+            "access"
+          ],
           "extraOnClient": [
             "total"
           ]
@@ -6531,7 +6660,7 @@
     {
       "functionName": "startOAuth",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 19,
+      "line": 20,
       "method": "POST",
       "pathPattern": "/provider-setup/oauth/start",
       "serverPath": "/api/provider-setup/oauth/start",
@@ -6551,7 +6680,7 @@
     {
       "functionName": "getOAuthStatus",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 30,
+      "line": 31,
       "method": "GET",
       "pathPattern": "/provider-setup/oauth/status/:param",
       "serverPath": "/api/provider-setup/oauth/status/:state",
@@ -6568,7 +6697,7 @@
     {
       "functionName": "getWebhookUrls",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 42,
+      "line": 43,
       "method": "GET",
       "pathPattern": "/provider-setup/webhook-urls",
       "serverPath": "/api/provider-setup/webhook-urls",
@@ -6585,7 +6714,7 @@
     {
       "functionName": "configureProvider",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 48,
+      "line": 49,
       "method": "POST",
       "pathPattern": "/provider-setup/configure",
       "serverPath": "/api/provider-setup/configure",
@@ -6610,7 +6739,7 @@
     {
       "functionName": "testProviderConnection",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 59,
+      "line": 60,
       "method": "POST",
       "pathPattern": "/provider-setup/test",
       "serverPath": "/api/provider-setup/test",
@@ -6627,7 +6756,7 @@
     {
       "functionName": "getProviderStatus",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 75,
+      "line": 76,
       "method": "GET",
       "pathPattern": "/provider-setup/status/:param",
       "serverPath": "/api/provider-setup/status/:provider",
@@ -6644,7 +6773,7 @@
     {
       "functionName": "listPhoneNumbers",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 86,
+      "line": 87,
       "method": "GET",
       "pathPattern": "/provider-setup/phone-numbers",
       "serverPath": "/api/provider-setup/phone-numbers",
@@ -6661,7 +6790,7 @@
     {
       "functionName": "searchPhoneNumbers",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 96,
+      "line": 97,
       "method": "POST",
       "pathPattern": "/provider-setup/phone-numbers/search",
       "serverPath": "/api/provider-setup/phone-numbers/search",
@@ -6681,7 +6810,7 @@
     {
       "functionName": "provisionPhoneNumber",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 103,
+      "line": 104,
       "method": "POST",
       "pathPattern": "/provider-setup/phone-numbers/provision",
       "serverPath": "/api/provider-setup/phone-numbers/provision",
@@ -6701,7 +6830,7 @@
     {
       "functionName": "configureWebhooks",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 112,
+      "line": 113,
       "method": "POST",
       "pathPattern": "/provider-setup/configure-webhooks",
       "serverPath": "/api/provider-setup/configure-webhooks",
@@ -6726,7 +6855,7 @@
     {
       "functionName": "createSipTrunk",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 128,
+      "line": 129,
       "method": "POST",
       "pathPattern": "/provider-setup/create-sip-trunk",
       "serverPath": "/api/provider-setup/create-sip-trunk",
@@ -6743,7 +6872,7 @@
     {
       "functionName": "startSignalRegistration",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 174,
+      "line": 165,
       "method": "POST",
       "pathPattern": "/provider-setup/signal/register",
       "serverPath": "/api/provider-setup/signal/register",
@@ -6763,7 +6892,7 @@
     {
       "functionName": "getSignalStatus",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 183,
+      "line": 174,
       "method": "GET",
       "pathPattern": "/provider-setup/signal/status",
       "serverPath": "/api/provider-setup/signal/status",
@@ -6780,7 +6909,7 @@
     {
       "functionName": "verifySignalCode",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 192,
+      "line": 183,
       "method": "POST",
       "pathPattern": "/provider-setup/signal/verify",
       "serverPath": "/api/provider-setup/signal/verify",
@@ -6800,7 +6929,7 @@
     {
       "functionName": "unregisterSignal",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 199,
+      "line": 190,
       "method": "DELETE",
       "pathPattern": "/provider-setup/signal/unregister",
       "serverPath": "/api/provider-setup/signal/unregister",
@@ -6822,7 +6951,7 @@
     {
       "functionName": "getSignalAccount",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 209,
+      "line": 200,
       "method": "GET",
       "pathPattern": "/provider-setup/signal/account",
       "serverPath": "/api/provider-setup/signal/account",
@@ -6836,7 +6965,7 @@
     {
       "functionName": "submitA2PBrand",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 246,
+      "line": 237,
       "method": "POST",
       "pathPattern": "/provider-setup/a2p/brand",
       "serverPath": "/api/provider-setup/a2p/brand",
@@ -6856,7 +6985,7 @@
     {
       "functionName": "submitA2PCampaign",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 257,
+      "line": 248,
       "method": "POST",
       "pathPattern": "/provider-setup/a2p/campaign",
       "serverPath": "/api/provider-setup/a2p/campaign",
@@ -6876,7 +7005,7 @@
     {
       "functionName": "getA2PStatus",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 268,
+      "line": 259,
       "method": "GET",
       "pathPattern": "/provider-setup/a2p/status",
       "serverPath": "/api/provider-setup/a2p/status",
@@ -6893,7 +7022,7 @@
     {
       "functionName": "skipA2P",
       "file": "src/client/lib/api/provider-setup.ts",
-      "line": 277,
+      "line": 268,
       "method": "POST",
       "pathPattern": "/provider-setup/a2p/skip",
       "serverPath": "/api/provider-setup/a2p/skip",
@@ -7016,28 +7145,21 @@
     {
       "functionName": "listInteractions",
       "file": "src/client/lib/api/interactions.ts",
-      "line": 11,
+      "line": 16,
       "method": "GET",
-      "pathPattern": "/records/:param/interactions",
-      "serverPath": "/api/hubs/:hubId/records/:id/interactions",
+      "pathPattern": "",
       "body": {
-        "verdict": "N/A"
+        "verdict": "UNRESOLVED"
       },
       "response": {
-        "verdict": "UNBOUND",
-        "clientType": "{ interactions: CaseInteraction[] total: number page: number limit: number hasMore: boolean }",
-        "schemaIdent": "interactionListResponseSchema",
-        "fieldDiff": {
-          "missingOnClient": [],
-          "extraOnClient": []
-        },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `interactionListResponseSchema` — add `export type <Name> = z.infer<typeof interactionListResponseSchema>` beside it in packages/protocol/schemas/interactions.ts"
-      }
+        "verdict": "UNRESOLVED"
+      },
+      "unresolvedReason": "path argument is not a string/template literal: `recordPath(hubId, `/records/${recordId}/interactions?${qs}`)`"
     },
     {
       "functionName": "createInteraction",
       "file": "src/client/lib/api/interactions.ts",
-      "line": 33,
+      "line": 42,
       "method": "POST",
       "pathPattern": "/records/:param/interactions",
       "serverPath": "/api/hubs/:hubId/records/:id/interactions",
@@ -7058,7 +7180,7 @@
     {
       "functionName": "getRecoveryGroup",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 54,
+      "line": 47,
       "method": "GET",
       "pathPattern": "/recovery-group/:param",
       "serverPath": "/api/recovery-group/:hubId",
@@ -7075,16 +7197,16 @@
     {
       "functionName": "enrollRecoveryGroup",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 63,
+      "line": 56,
       "method": "POST",
       "pathPattern": "/recovery-group/enroll",
       "serverPath": "/api/recovery-group/enroll",
       "body": {
-        "verdict": "UNBOUND",
+        "verdict": "MISMATCHED",
         "clientType": "RecoveryGroupEnrollBody",
         "schemaIdent": "recoveryGroupEnrollSchema",
         "schemaTypeAlias": "RecoveryGroupEnroll",
-        "note": "named type `RecoveryGroupEnrollBody` is not imported from @protocol/schemas"
+        "note": "client imports `RecoveryGroupEnrollBody` from @protocol/schemas, but this route's schema (`recoveryGroupEnrollSchema`) is aliased as `RecoveryGroupEnroll` — likely referencing a sibling/stale schema"
       },
       "response": {
         "verdict": "UNBOUND",
@@ -7095,9 +7217,67 @@
       }
     },
     {
+      "functionName": "getMyShareEnvelope",
+      "file": "src/client/lib/api/recovery.ts",
+      "line": 68,
+      "method": "GET",
+      "pathPattern": "/recovery-group/shares/my",
+      "serverPath": "/api/recovery-group/shares/my",
+      "body": {
+        "verdict": "N/A"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "MyShareEnvelopeResponse",
+        "schemaIdent": "myShareEnvelopeResponseSchema",
+        "schemaTypeAlias": "MyShareEnvelopeResponse"
+      }
+    },
+    {
+      "functionName": "requestLivenessChallenge",
+      "file": "src/client/lib/api/recovery.ts",
+      "line": 80,
+      "method": "POST",
+      "pathPattern": "/recovery-group/shares/liveness/challenge",
+      "serverPath": "/api/recovery-group/shares/liveness/challenge",
+      "body": {
+        "verdict": "UNRESOLVED",
+        "schemaIdent": "shareLivenessChallengeRequestSchema",
+        "schemaTypeAlias": "ShareLivenessChallengeRequest",
+        "note": "server validates/returns a schema here but no client type could be statically determined"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "ShareLivenessChallengeResponse",
+        "schemaIdent": "shareLivenessChallengeResponseSchema",
+        "schemaTypeAlias": "ShareLivenessChallengeResponse"
+      },
+      "unresolvedReason": "body is constructed from an inline object literal or non-identifier expression — no single declared body type"
+    },
+    {
+      "functionName": "submitLivenessProof",
+      "file": "src/client/lib/api/recovery.ts",
+      "line": 88,
+      "method": "POST",
+      "pathPattern": "/recovery-group/shares/liveness",
+      "serverPath": "/api/recovery-group/shares/liveness",
+      "body": {
+        "verdict": "BOUND",
+        "clientType": "ShareLivenessProof",
+        "schemaIdent": "shareLivenessProofSchema",
+        "schemaTypeAlias": "ShareLivenessProof"
+      },
+      "response": {
+        "verdict": "BOUND",
+        "clientType": "ShareLivenessProofResponse",
+        "schemaIdent": "shareLivenessProofResponseSchema",
+        "schemaTypeAlias": "ShareLivenessProofResponse"
+      }
+    },
+    {
       "functionName": "getRecoverySessions",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 70,
+      "line": 95,
       "method": "GET",
       "pathPattern": "/recovery-group/sessions",
       "serverPath": "/api/recovery-group/sessions",
@@ -7114,7 +7294,7 @@
     {
       "functionName": "getRecoverySession",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 74,
+      "line": 99,
       "method": "GET",
       "pathPattern": "/recovery-group/session/:param",
       "serverPath": "/api/recovery-group/session/:id",
@@ -7132,7 +7312,7 @@
     {
       "functionName": "contributeShare",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 78,
+      "line": 103,
       "method": "POST",
       "pathPattern": "/recovery-group/session/:param/contribute",
       "serverPath": "/api/recovery-group/session/:id/contribute",
@@ -7158,7 +7338,7 @@
     {
       "functionName": "cancelRecoverySession",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 89,
+      "line": 114,
       "method": "POST",
       "pathPattern": "/recovery-group/session/:param/cancel",
       "serverPath": "/api/recovery-group/session/:id/cancel",
@@ -7176,7 +7356,7 @@
     {
       "functionName": "initiateRecovery",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 93,
+      "line": 118,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -7190,7 +7370,7 @@
     {
       "functionName": "verifyRecoveryCode",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 110,
+      "line": 135,
       "method": "GET",
       "pathPattern": "",
       "body": {
@@ -7204,7 +7384,7 @@
     {
       "functionName": "getRecoveryGroupCandidates",
       "file": "src/client/lib/api/recovery.ts",
-      "line": 143,
+      "line": 168,
       "method": "GET",
       "pathPattern": "/hubs/:param/recovery-group/candidates",
       "body": {

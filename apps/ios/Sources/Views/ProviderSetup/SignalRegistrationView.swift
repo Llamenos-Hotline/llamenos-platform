@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - SignalRegistrationView
 
 /// Full Signal registration state machine UI.
-/// States: idle → registering → pending (code entry) → verified / failed
+/// States: idle → registering (request in flight) → pending / verifying (code entry) → complete / failed
 struct SignalRegistrationView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel: SignalRegistrationViewModel
@@ -65,10 +65,10 @@ struct SignalRegistrationView: View {
         if viewModel.isRegistering { return .registering }
         guard let state = viewModel.state else { return .idle }
         switch state.status {
-        case .registering: return .registering
-        case .pending: return .pendingVerification
-        case .registered: return .verified
-        case .failed, .expired: return .failed
+        case .idle: return .idle
+        case .pending, .verifying: return .pendingVerification
+        case .complete: return .verified
+        case .failed: return .failed
         }
     }
 
@@ -177,7 +177,7 @@ struct SignalRegistrationView: View {
 
                 if let state = viewModel.state {
                     LabeledContent(NSLocalizedString("signal_registered_number", comment: "Registered Number")) {
-                        Text(state.phoneNumber)
+                        Text(state.phoneNumberMasked)
                             .font(.brandMono(.body))
                     }
                 }
@@ -253,7 +253,7 @@ struct SignalRegistrationView: View {
                     Text(NSLocalizedString("signal_registered_success", comment: "Signal registered successfully"))
                         .font(.brand(.headline))
 
-                    if let number = viewModel.state?.phoneNumber {
+                    if let number = viewModel.state?.phoneNumberMasked {
                         Text(number)
                             .font(.brandMono(.caption))
                             .foregroundStyle(.secondary)
@@ -287,11 +287,7 @@ struct SignalRegistrationView: View {
                     .foregroundStyle(Color.brandDestructive)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(
-                        viewModel.state?.status == .expired
-                            ? NSLocalizedString("signal_registration_expired", comment: "Registration expired")
-                            : NSLocalizedString("signal_registration_failed", comment: "Registration failed")
-                    )
+                    Text(NSLocalizedString("signal_registration_failed", comment: "Registration failed"))
                     .font(.brand(.headline))
                     .foregroundStyle(Color.brandDestructive)
 

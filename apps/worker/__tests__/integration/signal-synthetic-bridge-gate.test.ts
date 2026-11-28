@@ -39,6 +39,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import type { DevSurfacesEnv } from '../../lib/dev-surfaces'
+import { signalRegistrationStateSchema } from '@protocol/schemas'
 
 // `lib/crypto` loads the Rust library through bun:ffi, which Node cannot
 // resolve — the same mock every integration test in this directory uses. The
@@ -298,5 +299,45 @@ describe('Signal synthetic bridge path — staging without the credential', () =
     })
 
     expect(bridgeCalls.urls).toHaveLength(1)
+  })
+})
+
+// The declared response of /provider-setup/signal/{register,status,verify} must be
+// what the service really returns for every status it can be in (#2571). `.strict()`
+// makes an undeclared key — the raw phone number, the bridge URL — a failure rather
+// than something zod silently strips.
+describe('registration wire shape matches the declared schema', () => {
+  const declared = signalRegistrationStateSchema.strict()
+
+  it('every state of the machine parses, and carries only the masked number', async () => {
+    const svc = service(optedIn('staging'))
+
+    const started = await svc.startRegistration({
+      bridgeUrl: BRIDGE_URL,
+      phoneNumber: PHONE,
+      method: 'voice',
+      hubId: 'hub-1',
+      harnessSecret: SECRET,
+    })
+    expect(declared.parse(started).status).toBe('pending')
+
+    const polled = await svc.checkStatus(started.id, SECRET)
+    expect(declared.parse(polled).status).toBe('pending')
+
+    const rejected = await svc.verifyCode({ registrationId: started.id, code: '000000', harnessSecret: SECRET })
+    expect(declared.parse(rejected)).toMatchObject({ status: 'verifying', attempts: 1 })
+
+    const accepted = await svc.verifyCode({ registrationId: started.id, code: VALID_CODE, harnessSecret: SECRET })
+    const complete = declared.parse(accepted)
+    expect(complete.status).toBe('complete')
+    expect(complete.phoneNumberMasked).toBe('****0001')
+    expect(JSON.stringify(accepted)).not.toContain(PHONE)
+
+    const failedId = await seedPendingVoice()
+    let last
+    for (let i = 0; i < 3; i++) {
+      last = await svc.verifyCode({ registrationId: failedId, code: '000000', harnessSecret: SECRET })
+    }
+    expect(declared.parse(last).status).toBe('failed')
   })
 })

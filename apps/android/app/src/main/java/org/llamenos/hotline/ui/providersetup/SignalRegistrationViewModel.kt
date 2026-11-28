@@ -39,6 +39,9 @@ class SignalRegistrationViewModel @Inject constructor(
     private val _isUnregistering = MutableStateFlow(false)
     val isUnregistering: StateFlow<Boolean> = _isUnregistering.asStateFlow()
 
+    // Only `pending` is polled: the bridge confirms an SMS registration on its own while
+    // it is pending, whereas `verifying` is waiting on a code from the admin and nothing
+    // on the server changes until one is submitted.
     private var pollJob: Job? = null
 
     fun startRegistration(
@@ -59,9 +62,7 @@ class SignalRegistrationViewModel @Inject constructor(
                 onSuccess = { registration ->
                     _state.value = registration
                     _isLoading.value = false
-                    if (registration.status == SignalRegistrationStatus.Pending ||
-                        registration.status == SignalRegistrationStatus.Registering
-                    ) {
+                    if (registration.status == SignalRegistrationStatus.Pending) {
                         startPolling()
                     }
                 },
@@ -82,9 +83,7 @@ class SignalRegistrationViewModel @Inject constructor(
                 onSuccess = { registration ->
                     _state.value = registration
                     _isLoading.value = false
-                    if (registration.status == SignalRegistrationStatus.Pending ||
-                        registration.status == SignalRegistrationStatus.Registering
-                    ) {
+                    if (registration.status == SignalRegistrationStatus.Pending) {
                         startPolling()
                     }
                 },
@@ -110,9 +109,7 @@ class SignalRegistrationViewModel @Inject constructor(
                     _state.value = updated
                     _isVerifying.value = false
                     _verificationCode.value = ""
-                    if (updated.status == SignalRegistrationStatus.Pending ||
-                        updated.status == SignalRegistrationStatus.Registering
-                    ) {
+                    if (updated.status == SignalRegistrationStatus.Pending) {
                         startPolling()
                     }
                 },
@@ -156,18 +153,14 @@ class SignalRegistrationViewModel @Inject constructor(
                 delay(delayMs)
                 delayMs = (delayMs * 2).coerceAtMost(POLL_MAX_DELAY_MS)
                 val current = _state.value ?: break
-                if (current.status != SignalRegistrationStatus.Pending &&
-                    current.status != SignalRegistrationStatus.Registering
-                ) {
+                if (current.status != SignalRegistrationStatus.Pending) {
                     break
                 }
                 val result = repository.getSignalStatus()
                 result.fold(
                     onSuccess = { updated ->
                         _state.value = updated
-                        if (updated.status != SignalRegistrationStatus.Pending &&
-                            updated.status != SignalRegistrationStatus.Registering
-                        ) {
+                        if (updated.status != SignalRegistrationStatus.Pending) {
                             stopPolling()
                         }
                     },

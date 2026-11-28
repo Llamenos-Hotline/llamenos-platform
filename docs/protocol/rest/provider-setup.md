@@ -76,13 +76,21 @@ Response: SignalRegistration
 GET  /api/provider-setup/signal/status
 Permission: messaging:manage-signal
 Query: ?hubId=&registrationId=
-Response: SignalRegistrationStatus
+Response: SignalRegistration
 
 POST /api/provider-setup/signal/verify
 Permission: messaging:manage-signal
 Body: { "registrationId": string, "code": string }
-Response: SignalRegistrationStatus
+Response: SignalRegistration  // a rejected code is a 200 with status "verifying" (or "failed" on the third miss)
 Rate limit: 5/min
+
+// SignalRegistration: { id, hubId, method: "sms"|"voice",
+//   status: "idle"|"pending"|"verifying"|"complete"|"failed",
+//   phoneNumberMasked: string  // "****" + last 4 digits — the raw number never leaves the server
+//   attempts: number, error: string|null, expiresAt: string|null, createdAt, updatedAt }
+// State machine: idle -> pending -> verifying -> complete; pending -> complete (SMS auto-confirmed);
+// pending|verifying -> failed (10-minute expiry, or the third wrong code). complete/failed are terminal.
+// Clients poll only while "pending"; "verifying" waits on the admin's code.
 
 DELETE /api/provider-setup/signal/unregister
 Permission: messaging:manage-signal
