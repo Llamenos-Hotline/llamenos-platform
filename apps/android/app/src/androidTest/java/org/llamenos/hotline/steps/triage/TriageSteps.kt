@@ -45,7 +45,6 @@ class TriageSteps : BaseSteps() {
                 ),
             )
         )
-        check(result.ok) { "test-seed failed for triage: errors=${result.errors}" }
         Log.i("TriageSteps", "Seeded ${result.reportTypes.size} report types, ${result.triageReports.size} reports")
         iNavigateToTheTriageScreen()
     }

@@ -139,6 +139,9 @@ android {
         // Gradle discovers these automatically — no explicit config needed.
         // src/main/jniLibs is deliberately empty: refuseMainJniLibs fails the build if it is not.
         getByName("test") {
+            // The pure-Kotlin seed response model that the androidTest TestApiClient decodes
+            // (#3088): compiled here too so SeedResultTest can decode the server's wire JSON.
+            kotlin.srcDir("src/androidTest/java/org/llamenos/hotline/helpers/seed")
             // See copyProductionNetworkSecurityConfig below: the debug build variant
             // (which `testDebugUnitTest` runs against) overrides network_security_config.xml
             // with a pin-less debug/LAN config, so CertificatePinDerivationTest reads the real

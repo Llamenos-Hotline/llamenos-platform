@@ -82,47 +82,13 @@ class TestApiClient(
         val contacts: List<SeedContact> = emptyList(),
     )
 
-    // ─── Seed Result Types ────────────────────────────────────────────
-
-    @Serializable
-    data class EntityTypeResult(
-        val id: String = "",
-        val name: String = "",
-        val category: String = "",
-        val defaultStatus: String = "",
-    )
-
-    @Serializable
-    data class RecordResult(
-        val id: String = "",
-        val entityTypeId: String = "",
-        val caseNumber: String? = null,
-    )
-
-    @Serializable
-    data class IdResult(val id: String = "")
-
-    @Serializable
-    data class PubkeyResult(val pubkey: String = "")
-
-    @Serializable
-    data class SeedResult(
-        val ok: Boolean = false,
-        val entityTypes: List<EntityTypeResult> = emptyList(),
-        val records: List<RecordResult> = emptyList(),
-        val reportTypes: List<IdResult> = emptyList(),
-        val triageReports: List<IdResult> = emptyList(),
-        val shifts: List<IdResult> = emptyList(),
-        val contacts: List<IdResult> = emptyList(),
-        val members: List<PubkeyResult> = emptyList(),
-        val errors: List<String> = emptyList(),
-    )
-
     // ─── Core API ─────────────────────────────────────────────────────
 
     /**
      * Seed test data via the declarative /api/test-seed endpoint.
      * Returns IDs for all created resources.
+     *
+     * @throws SeedFailedException when any requested step did not happen (#3088).
      */
     fun seed(spec: SeedSpec): SeedResult {
         val body = json.encodeToString(SeedSpec.serializer(), spec)
@@ -130,12 +96,14 @@ class TestApiClient(
             "records=${spec.entityTypes.sumOf { it.records }}")
         val response = post("/api/test-seed", body)
         val result = json.decodeFromString(SeedResult.serializer(), response)
-        if (result.errors.isNotEmpty()) {
-            Log.w(TAG, "seed warnings: ${result.errors}")
+        if (result.warnings.isNotEmpty()) {
+            Log.w(TAG, "seed warnings: ${result.warnings}")
         }
         Log.i(TAG, "seed result: ok=${result.ok}, entityTypes=${result.entityTypes.size}, " +
-            "records=${result.records.size}")
-        return result
+            "records=${result.records.size}, failures=${result.failures.size}")
+        // A seed that did not do everything it was asked fails the scenario here,
+        // naming the step — never three steps later as an unexplained empty screen.
+        return result.requireOk()
     }
 
     /**

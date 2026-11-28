@@ -33,6 +33,7 @@ import {
 } from '../messaging/signal/failover'
 import type { SignalConfig } from '@shared/types'
 import type { BridgeHealthStatus } from '../messaging/signal/health'
+import { SeedOutcome, type SeedResultBody } from '../lib/test-seed-result'
 import { devSurfacesEnabled, devSurfaceSecretPresented, type DevSurfacesEnv } from '../lib/dev-surfaces'
 
 /**
@@ -543,33 +544,27 @@ dev.post('/test-seed', async (c) => {
   const spec = parsed.data
   const { hubId, adminSeed } = spec
   const services = c.get('services')
-  const warnings: string[] = []
+  // Every requested step is recorded; `ok` is false when any of them did not
+  // happen (#3088). See lib/test-seed-result.ts.
+  const outcome = new SeedOutcome()
 
   // Ensure default roles/settings exist (CI fresh database)
   await services.settingsBootstrap.ensureInit({ ENVIRONMENT: c.env.ENVIRONMENT })
 
   // ── Permissions ──────────────────────────────────────────────────────────
   if (spec.permissions.enableCaseManagement) {
-    try {
-      await services.hubSettings.setCaseManagementEnabled({ enabled: true }, hubId)
-    } catch (e) {
-      warnings.push(`setCaseManagementEnabled: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    await outcome.run('setCaseManagementEnabled', () =>
+      services.hubSettings.setCaseManagementEnabled({ enabled: true }, hubId))
   }
 
   // ── Members ──────────────────────────────────────────────────────────────
   const memberIds: Array<{ pubkey: string }> = []
   for (const m of spec.members) {
-    try {
-      await services.identity.setHubRole({
-        pubkey: m.pubkey,
-        hubId,
-        roleIds: m.roleIds,
-      })
-      memberIds.push({ pubkey: m.pubkey })
-    } catch (e) {
-      warnings.push(`member ${m.pubkey.slice(0, 8)}...: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    const assigned = await outcome.run(`member ${m.pubkey.slice(0, 8)}...`, async () => {
+      await services.identity.setHubRole({ pubkey: m.pubkey, hubId, roleIds: m.roleIds })
+      return true
+    })
+    if (assigned) memberIds.push({ pubkey: m.pubkey })
   }
 
   // ── Entity Types + Records ───────────────────────────────────────────────
@@ -578,27 +573,22 @@ dev.post('/test-seed', async (c) => {
 
   for (const etSpec of spec.entityTypes) {
     const tmpl = entityTypeTemplate(etSpec.template)
-    let entityTypeId: string
+    const etStep = `entityType ${tmpl.name}`
 
-    try {
-      const created = await services.entitySchema.createEntityType({ ...tmpl, hubId })
-      entityTypeId = created.id
-    } catch (e) {
-      // If already exists (409), look it up
-      if (e instanceof Error && e.message.includes('already exists')) {
+    const entityTypeId = await outcome.run(etStep, async () => {
+      try {
+        return (await services.entitySchema.createEntityType({ ...tmpl, hubId })).id
+      } catch (e) {
+        // Already seeded for this hub (409): reuse it, and say so.
+        if (!(e instanceof Error && e.message.includes('already exists'))) throw e
         const { entityTypes } = await services.entitySchema.getEntityTypes(hubId)
         const existing = entityTypes.find(et => et.name === tmpl.name)
-        if (existing) {
-          entityTypeId = existing.id
-        } else {
-          warnings.push(`entityType ${tmpl.name}: already exists but not found on lookup`)
-          continue
-        }
-      } else {
-        warnings.push(`entityType ${tmpl.name}: ${e instanceof Error ? e.message : String(e)}`)
-        continue
+        if (!existing) throw new Error('already exists but not found on lookup')
+        outcome.warn(`${etStep}: already existed, reused ${existing.id}`)
+        return existing.id
       }
-    }
+    })
+    if (entityTypeId === undefined) continue
 
     entityTypeIds.push({ id: entityTypeId, name: tmpl.name, category: tmpl.category })
 
@@ -608,9 +598,9 @@ dev.post('/test-seed', async (c) => {
     // (no envelope matching the user's pubkey).
     const dummyEnvelope = { pubkey: adminSeed, ct: 'a'.repeat(64), enc: adminSeed }
     for (let i = 0; i < etSpec.records; i++) {
-      try {
-        const isEvent = tmpl.category === 'event'
-        const record = await services.cases.create({
+      const isEvent = tmpl.category === 'event'
+      const record = await outcome.run(`record ${tmpl.name}[${i}]`, () =>
+        services.cases.create({
           entityTypeId,
           statusHash: tmpl.defaultStatus,
           assignedTo: etSpec.assignTo,
@@ -621,11 +611,8 @@ dev.post('/test-seed', async (c) => {
           summaryEnvelopes: [dummyEnvelope],
           createdBy: adminSeed,
           hubId,
-        })
-        recordIds.push({ id: record.id, entityTypeId, caseNumber: record.caseNumber ?? undefined })
-      } catch (e) {
-        warnings.push(`record ${tmpl.name}[${i}]: ${e instanceof Error ? e.message : String(e)}`)
-      }
+        }))
+      if (record) recordIds.push({ id: record.id, entityTypeId, caseNumber: record.caseNumber ?? undefined })
     }
   }
 
@@ -634,9 +621,9 @@ dev.post('/test-seed', async (c) => {
   const triageReportIds: Array<{ id: string }> = []
 
   for (const rtSpec of spec.reportTypes) {
-    try {
-      const reportTypeName = rtSpec.template === 'general_report' ? 'General Report' : rtSpec.template
-      const reportType = await services.reportTypes.createCmsReportType({
+    const reportTypeName = rtSpec.template === 'general_report' ? 'General Report' : rtSpec.template
+    const reportType = await outcome.run(`reportType ${rtSpec.template}`, () =>
+      services.reportTypes.createCmsReportType({
         hubId,
         name: reportTypeName,
         label: reportTypeName,
@@ -646,31 +633,26 @@ dev.post('/test-seed', async (c) => {
         statuses: [],
         defaultStatus: '',
         closedStatuses: [],
-      })
-      reportTypeIds.push({ id: reportType.id, name: reportType.name })
+      }))
+    if (!reportType) continue
+    reportTypeIds.push({ id: reportType.id, name: reportType.name })
 
-      // Create triage reports as conversations with report metadata
-      for (let i = 0; i < rtSpec.triageReports; i++) {
-        try {
-          const report = await services.conversations.create({
-            hubId,
-            channelType: 'web',
-            status: 'waiting',
-            metadata: {
-              type: 'report',
-              reportTitle: `Test Triage Report ${i + 1}`,
-              reportCategory: 'general',
-              reportTypeId: reportType.id,
-              conversionStatus: 'pending',
-            },
-          })
-          triageReportIds.push({ id: report.id })
-        } catch (e) {
-          warnings.push(`triageReport[${i}]: ${e instanceof Error ? e.message : String(e)}`)
-        }
-      }
-    } catch (e) {
-      warnings.push(`reportType ${rtSpec.template}: ${e instanceof Error ? e.message : String(e)}`)
+    // Create triage reports as conversations with report metadata
+    for (let i = 0; i < rtSpec.triageReports; i++) {
+      const report = await outcome.run(`triageReport[${i}]`, () =>
+        services.conversations.create({
+          hubId,
+          channelType: 'web',
+          status: 'waiting',
+          metadata: {
+            type: 'report',
+            reportTitle: `Test Triage Report ${i + 1}`,
+            reportCategory: 'general',
+            reportTypeId: reportType.id,
+            conversionStatus: 'pending',
+          },
+        }))
+      if (report) triageReportIds.push({ id: report.id })
     }
   }
 
@@ -678,16 +660,13 @@ dev.post('/test-seed', async (c) => {
   const shiftIds: Array<{ id: string }> = []
 
   for (const shiftSpec of spec.shifts) {
-    try {
-      const shift = await services.shifts.create(hubId, {
+    const shift = await outcome.run(`shift ${shiftSpec.pubkey.slice(0, 8)}...`, () =>
+      services.shifts.create(hubId, {
         encryptedName: btoa('Seeded Shift'),
         ...ALWAYS_ON_SHIFT,
         userPubkeys: [shiftSpec.pubkey],
-      })
-      shiftIds.push({ id: shift.id })
-    } catch (e) {
-      warnings.push(`shift ${shiftSpec.pubkey.slice(0, 8)}...: ${e instanceof Error ? e.message : String(e)}`)
-    }
+      }))
+    if (shift) shiftIds.push({ id: shift.id })
   }
 
   // ── Contacts ─────────────────────────────────────────────────────────────
@@ -695,22 +674,19 @@ dev.post('/test-seed', async (c) => {
   const dummyEnvelope = { pubkey: adminSeed, ct: 'a'.repeat(64), enc: adminSeed }
 
   for (const contactSpec of spec.contacts) {
-    try {
-      const contact = await services.contacts.create({
+    const contact = await outcome.run(`contact ${contactSpec.displayName}`, () =>
+      services.contacts.create({
         hubId,
         identifierHashes: [contactSpec.displayName.toLowerCase().replace(/\s+/g, '-')],
         encryptedSummary: btoa(JSON.stringify({ displayName: contactSpec.displayName })),
         summaryEnvelopes: [dummyEnvelope],
         contactTypeHash: contactSpec.contactType,
-      })
-      contactIds.push({ id: contact.id })
-    } catch (e) {
-      warnings.push(`contact ${contactSpec.displayName}: ${e instanceof Error ? e.message : String(e)}`)
-    }
+      }))
+    if (contact) contactIds.push({ id: contact.id })
   }
 
-  return c.json({
-    ok: true,
+  const body: SeedResultBody = {
+    ok: outcome.ok,
     hubId,
     entityTypes: entityTypeIds,
     records: recordIds,
@@ -719,8 +695,11 @@ dev.post('/test-seed', async (c) => {
     shifts: shiftIds,
     members: memberIds,
     contacts: contactIds,
-    warnings: warnings.length > 0 ? warnings : undefined,
-  })
+    steps: outcome.steps,
+    failures: outcome.failures,
+    warnings: outcome.warnings,
+  }
+  return c.json(body)
 })
 
 

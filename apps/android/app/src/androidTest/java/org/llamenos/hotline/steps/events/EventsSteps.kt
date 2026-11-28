@@ -46,7 +46,6 @@ class EventsSteps : BaseSteps() {
                 ),
             )
         )
-        check(result.ok) { "test-seed failed for events: errors=${result.errors}" }
         Log.i("EventsSteps", "Seeded ${result.entityTypes.size} entity types, ${result.records.size} records")
         iNavigateToTheEventsScreen()
     }
