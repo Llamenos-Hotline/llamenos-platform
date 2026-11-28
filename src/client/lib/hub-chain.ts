@@ -30,7 +30,7 @@ import type {
 } from '@protocol/schemas/hub-chain'
 import { appendHubChainLink, createHub, getHubChainPage, getHubFounding, getSigchain } from './api'
 import { getDevicePubkeys, getHubChainAnchor, hubChainCall, hubChainSignLink, setHubChainAnchor } from './platform'
-import { initializeUserIdentity, toCryptoSigchainLink } from './user-identity'
+import { assertExtendsVerifiedHead, initializeUserIdentity, recordVerifiedHead, toCryptoSigchainLink } from './user-identity'
 import type { Hub } from '@shared/types'
 
 /** What loading a hub's chain concluded. */
@@ -184,12 +184,18 @@ async function ownHead(userPubkey: string): Promise<ChainHead> {
   const device = await getDevicePubkeys()
   if (!device) throw new Error('device key locked')
   const { links } = await getSigchain(userPubkey)
-  const verified = links.length === 0
-    ? await initializeUserIdentity(userPubkey)
-    : await hubChainCall('verifySigchain', { links: links.map(toCryptoSigchainLink) })
+  if (links.length === 0) {
+    const created = await initializeUserIdentity(userPubkey)
+    return { seq: created.headSeq, hash: created.headHash }
+  }
+  // The served chain must extend the head this device last verified (no
+  // rollback to a head where a since-removed device was still active).
+  await assertExtendsVerifiedHead(userPubkey, links)
+  const verified = await hubChainCall('verifySigchain', { links: links.map(toCryptoSigchainLink) })
   if (verified.userPubkey !== userPubkey || !verified.activeDevicePubkeys.includes(device.signingPubkeyHex)) {
     throw new Error('This device is not active in its user chain, so it cannot sign for this user in a hub')
   }
+  await recordVerifiedHead(verified)
   return { seq: verified.headSeq, hash: verified.headHash }
 }
 

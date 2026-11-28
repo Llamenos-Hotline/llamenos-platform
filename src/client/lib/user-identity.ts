@@ -248,7 +248,7 @@ function assertNamesHeldKemKey(verified: SigchainVerifiedState, device: DeviceKe
  * verified for `userPubkey`: an empty, shorter or forked chain is a rollback,
  * and re-initialising it would sign a second genesis (#2496).
  */
-async function assertExtendsVerifiedHead(userPubkey: string, links: SigchainLinkRecord[]): Promise<void> {
+export async function assertExtendsVerifiedHead(userPubkey: string, links: SigchainLinkRecord[]): Promise<void> {
   const known = await getVerifiedSigchainHead()
   if (!known) return
   // Fail closed: another user's head is not "no head" (sign-out clears it).
@@ -259,7 +259,7 @@ async function assertExtendsVerifiedHead(userPubkey: string, links: SigchainLink
   }
 }
 
-async function recordVerifiedHead(verified: SigchainVerifiedState): Promise<void> {
+export async function recordVerifiedHead(verified: SigchainVerifiedState): Promise<void> {
   await setVerifiedSigchainHead({ userPubkey: verified.userPubkey, seq: verified.headSeq, hash: verified.headHash })
 }
 

@@ -34,7 +34,7 @@ vi.mock('./platform', () => ({
   hubChainSignLink: vi.fn(),
   getDevicePubkeys: vi.fn(),
 }))
-vi.mock('./user-identity', () => ({ initializeUserIdentity: vi.fn(), toCryptoSigchainLink: (l: unknown) => l }))
+vi.mock('./user-identity', () => ({ assertExtendsVerifiedHead: vi.fn(), initializeUserIdentity: vi.fn(), recordVerifiedHead: vi.fn(), toCryptoSigchainLink: (l: unknown) => l }))
 
 const { assertHubSealable, HubSealingStoppedError, loadHubChain } = await import('./hub-chain')
 
