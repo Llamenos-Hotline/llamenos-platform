@@ -51,6 +51,7 @@ import type { SealedRecordingEraser } from './call-recordings'
 import type { ProviderMediaEraser } from './provider-recordings'
 import {
   hubFounderRoleIds,
+  hubGrantableRoleIds,
   loadRoleCatalog,
   lockHubAdminSets,
   mergeHubRole,
@@ -170,6 +171,9 @@ export class HubService {
       // hub's admin is committed (and be counted by its own guard).
       await lockHubAdminSets(tx, [hub.id])
       const catalog = await loadRoleCatalog(tx)
+      if (genesisBundles && hubGrantableRoleIds(genesisBundles, catalog, hub.id).length !== genesisBundles.length) {
+        throw new ServiceError(400, 'Every bundle a genesis gives its founder must be a hub role with no instance-level authority', 'chain_genesis')
+      }
       const founderRoleIds = genesisBundles ?? founder.roleIds ?? hubFounderRoleIds(catalog)
       if (!rolesConferHubAdmin(founderRoleIds, catalog)) {
         throw new ServiceError(400, 'A hub must be created with an admin role for its founder')
@@ -207,7 +211,7 @@ export class HubService {
         })
         .where(eq(users.pubkey, founder.pubkey))
 
-      if (founder.genesis) await new HubChainService(this.db).appendInTx(tx, hub.id, founder.genesis)
+      if (founder.genesis) await new HubChainService(this.db).appendInTx(tx, hub.id, founder.genesis, { genesis: true })
     })
 
     // What was stored, not what was typed: numbers come back in E.164.

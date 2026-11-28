@@ -23,7 +23,7 @@ import type { Database } from '../db'
 import { hubChainLinks, users } from '../db/schema'
 import { loadCrateSigchain } from './crypto-keys'
 import { ServiceError } from './service-error'
-import { replaceHubRole, type HubRoleAssignment } from '../lib/hub-admin'
+import { hubGrantableRoleIds, loadRoleCatalog, replaceHubRole, type HubRoleAssignment } from '../lib/hub-admin'
 
 type Tx = Parameters<Parameters<Database['transaction']>[0]>[0]
 type Reader = Pick<Database, 'select'>
@@ -127,9 +127,15 @@ export class HubChainService {
    * head under the hub's advisory lock, crate validation of the stored chain
    * plus the link, then the row and the `hub_roles` cache.
    */
-  async appendInTx(tx: Tx, hubId: string, link: HubChainLink): Promise<ChainHead> {
+  async appendInTx(tx: Tx, hubId: string, link: HubChainLink, opts: { genesis?: boolean } = {}): Promise<ChainHead> {
     if (link.hub !== hubId) {
       throw new HubChainRejectedError('chain_hub_mismatch', `The link names hub ${link.hub}, not ${hubId}`)
+    }
+    // A genesis is stored only by hub creation (HubService.createHub), in the
+    // transaction that creates the hub. Appending one to an existing hub with
+    // no chain would let any member found it as themselves.
+    if ((link.seq === 1 || link.body.type === 'genesis') && !opts.genesis) {
+      throw new HubChainRejectedError('chain_genesis', "A hub's genesis is stored only when the hub is created")
     }
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${hubChainLockKey(hubId)}))`)
     const head = await this.head(tx, hubId)
@@ -176,7 +182,10 @@ async function writeHubRolesCache(tx: Tx, hubId: string, state: HubChainState, l
     .from(users)
     .where(inArray(users.pubkey, [...touched]))
     .for('update')
-  const bundlesOf = new Map(state.members.map(m => [m.user, m.bundles]))
+  // Only bundles the server's catalog can safely resolve in this hub (no
+  // instance-level authority) reach the cache; see hubGrantableRoleIds.
+  const catalog = await loadRoleCatalog(tx)
+  const bundlesOf = new Map(state.members.map(m => [m.user, hubGrantableRoleIds(m.bundles, catalog, hubId)]))
   for (const row of rows) {
     const prior = (row.hubRoles as HubRoleAssignment[] | null) ?? []
     const bundles = bundlesOf.get(row.pubkey)

@@ -170,6 +170,23 @@ export function hubFounderRoleIds(catalog: RoleCatalog): string[] {
   return candidates.length > 0 ? [candidates[0].id] : []
 }
 
+/**
+ * The subset of `roleIds` a hub's authority chain may place in `hub_roles` for
+ * `hubId` (#2963): roles the catalog (or the default set) defines, usable in
+ * this hub, and carrying no instance-level permission ({@link isInstanceLevel}).
+ * Chain bundles are opaque ids a hub admin chooses; the server resolves a
+ * cached role id against ITS catalog, so a bundle named after a role with
+ * instance authority (`role-super-admin`) must never reach the cache.
+ */
+export function hubGrantableRoleIds(roleIds: readonly string[], catalog: RoleCatalog, hubId: string): string[] {
+  const known = new Set(catalog.map(r => r.id))
+  const defs = [...catalog, ...DEFAULT_ROLES.filter(r => !known.has(r.id))]
+  return roleIds.filter(id => {
+    const def = defs.find(r => r.id === id)
+    return def !== undefined && roleUsableIn(id, defs, hubId) && !def.permissions.some(isInstanceLevel)
+  })
+}
+
 function canAct(state: AdminState): boolean {
   return state.active && state.status === 'active'
 }
