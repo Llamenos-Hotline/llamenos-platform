@@ -796,6 +796,31 @@ pub fn mobile_sigchain_verify_link(
     sigchain::verify_sigchain_link(&link, &expected_signer_pubkey)
 }
 
+// ── Hub authority chain (#2963; wire spec §5) ───────────────────────
+
+/// One stateless hub-chain operation, JSON in and JSON out
+/// (`hub_chain::call`): `{"op": "verify" | "signingMessage" | "assemble" |
+/// "permsHash" | "verifySigchain" | "approvalMessage", …}`. The app verifies
+/// every hub chain it is served through this, and never canonicalises, hashes
+/// or checks a link itself. A refusal is a `CryptoError` whose message starts
+/// with its closed rejection code.
+#[uniffi::export]
+pub fn mobile_hub_chain(request_json: String) -> Result<String, CryptoError> {
+    crate::hub_chain::call_json(&request_json)
+}
+
+/// Sign an unsigned hub-chain link (JSON) with this device's key from mobile state.
+#[uniffi::export]
+pub fn mobile_hub_chain_sign_link(unsigned_json: String) -> Result<String, CryptoError> {
+    with_secrets(|secrets, _| crate::hub_chain::sign_link_json(secrets, &unsigned_json))
+}
+
+/// Sign a recovery approval (JSON) with this holder device's key (D14).
+#[uniffi::export]
+pub fn mobile_recovery_approval_sign(approval_json: String) -> Result<String, CryptoError> {
+    with_secrets(|secrets, _| crate::hub_chain::sign_approval_json(secrets, &approval_json))
+}
+
 // ── Hub key + server event key management ───────────────────────────
 
 /// Store a hub symmetric key in Rust memory (never exposed to Swift/Kotlin).

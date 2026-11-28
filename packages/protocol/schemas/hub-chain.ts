@@ -139,6 +139,55 @@ export const hubChainVerifiedSchema = z.object({
 })
 export type HubChainVerified = z.infer<typeof hubChainVerifiedSchema>
 
+// --- The crate's own shapes, as every host binding passes them ---
+
+/** packages/crypto `sigchain::SigchainLink` — a user-chain link as the crate hashes and signs it. */
+export const crateSigchainLinkSchema = z.object({
+  id: z.string(),
+  seq: z.number().int(),
+  prevHash: z.string().nullable(),
+  entryHash: z.string(),
+  signerDeviceId: z.string(),
+  signerPubkey: z.string(),
+  signature: z.string(),
+  timestamp: z.string(),
+  payloadJson: z.string(),
+})
+export type CrateSigchainLink = z.infer<typeof crateSigchainLinkSchema>
+
+/** packages/crypto `sigchain::ActiveDeviceKey`. */
+export const activeDeviceKeySchema = z.object({
+  devicePubkey: z.string(),
+  encryptionPubkey: z.string(),
+  format: z.number().int(),
+})
+
+/** packages/crypto `sigchain::SigchainVerifiedState`. */
+export const sigchainVerifiedStateSchema = z.object({
+  userPubkey: z.string(),
+  verifiedCount: z.number().int(),
+  headSeq: z.number().int(),
+  headHash: z.string(),
+  activeDevicePubkeys: z.array(z.string()),
+  activeDeviceKeys: z.array(activeDeviceKeySchema),
+  namedKeys: z.array(z.string()),
+})
+export type SigchainVerifiedState = z.infer<typeof sigchainVerifiedStateSchema>
+
+/** A trusted anchor for a hub other than the one being verified. */
+export const hubAnchorSchema = z.object({ hub: z.string(), head: chainHeadSchema })
+export type HubAnchor = z.infer<typeof hubAnchorSchema>
+
+/** packages/crypto `hub_chain::HubChainInput`. */
+export const hubChainInputSchema = z.object({
+  links: z.array(hubChainLinkSchema),
+  userChains: z.array(z.array(crateSigchainLinkSchema)).optional(),
+  hubChains: z.array(z.array(hubChainLinkSchema)).optional(),
+  anchor: chainHeadSchema.optional(),
+  hubAnchors: z.array(hubAnchorSchema).optional(),
+})
+export type HubChainInput = z.infer<typeof hubChainInputSchema>
+
 // --- Routes: GET/POST /api/hubs/:hubId/chain ---
 
 /** Fetch forward: links with `seq >= from`, at most `limit`, in seq order. */
@@ -161,10 +210,12 @@ export type HubChainResponse = z.infer<typeof hubChainResponseSchema>
 export const appendHubChainLinkBodySchema = z.object({
   link: hubChainLinkSchema,
 })
+export type AppendHubChainLinkBody = z.infer<typeof appendHubChainLinkBodySchema>
 
 export const appendHubChainLinkResponseSchema = z.object({
   head: chainHeadSchema,
 })
+export type AppendHubChainLinkResponse = z.infer<typeof appendHubChainLinkResponseSchema>
 
 /**
  * The append lost a race (409): another link took this seq. Re-read the chain,
@@ -181,6 +232,16 @@ export const hubChainRejectedResponseSchema = z.object({
   error: z.string(),
   code: z.string(),
 })
+
+/**
+ * What a founder signs into a new hub's chain (#2963): the bundles its genesis
+ * gives the founder — the catalog's founder role, chosen by permission — each
+ * with the concrete permissions its `policy {kind: bundle}` link commits.
+ */
+export const hubFoundingResponseSchema = z.object({
+  bundles: z.array(z.object({ bundle: z.string(), permissions: z.array(z.string()) })),
+})
+export type HubFoundingResponse = z.infer<typeof hubFoundingResponseSchema>
 
 // --- Recovery approvals (D14, §5.8) ---
 
@@ -201,3 +262,20 @@ export type RecoveryApproval = z.infer<typeof recoveryApprovalSchema>
 
 export const unsignedRecoveryApprovalSchema = recoveryApprovalSchema.omit({ type: true, holderDevice: true, sig: true })
 export type UnsignedRecoveryApproval = z.infer<typeof unsignedRecoveryApprovalSchema>
+
+/**
+ * The request and answer of each `hub_chain::call` op — the one JSON entry
+ * point every host binding exposes (server `ffi_hub_chain`, desktop
+ * `hub_chain_call`, mobile `mobileHubChain`).
+ */
+export interface HubChainOps {
+  verify: { request: HubChainInput; answer: HubChainVerified }
+  signingMessage: { request: { unsigned: UnsignedHubLink; signerDevice: string }; answer: { entryHash: string; message: string } }
+  assemble: { request: { unsigned: UnsignedHubLink; signerDevice: string; sig: string }; answer: HubChainLink }
+  permsHash: { request: { permissions: string[] }; answer: { permsHash: string } }
+  verifySigchain: {
+    request: { links: CrateSigchainLink[]; userChains?: CrateSigchainLink[][]; hubChains?: HubChainLink[][]; hubAnchors?: HubAnchor[] }
+    answer: SigchainVerifiedState
+  }
+  approvalMessage: { request: { approval: UnsignedRecoveryApproval; holderDevice: string }; answer: { message: string } }
+}

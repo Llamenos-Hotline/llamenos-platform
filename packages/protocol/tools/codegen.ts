@@ -167,6 +167,14 @@ function defNameFromPath(propertyName: string, isArrayItem: boolean): string {
  * mobile rename, not a codegen tweak.
  */
 const REFERENCED_BY_NAME = new Set([
+  // #2963 — the crate's hub-chain verdict. Its `alerts` items and `state` would
+  // otherwise be named `Alert` (shadowing SwiftUI's `Alert`) and `StateClass`.
+  'HubChainAlert',
+  'HubChainState',
+  'HubChainGroup',
+  'HubChainMember',
+  'HubChainBundle',
+  'ChainHead',
   // #2999 — `serverEventKeys` items would otherwise be named `ServerEventKey`,
   // which is the crate's UniFFI record of the same shape: a Swift-module collision.
   'RelayEventKey',

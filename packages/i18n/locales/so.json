@@ -4800,5 +4800,13 @@
     "push": "Khadkaaga waxaa ka jira dhaqdhaqaaq u baahan in la eego.",
     "signalAlert": "Digniinta khadka — {{category}}: {{state}}. Fur app-ka si aad u aragto faahfaahinta.",
     "title": "Dhacdooyinka socda"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Diiwaanka awoodda xaruntan wuu kala qaybsamay",
+      "refusedTitle": "Diiwaanka awoodda xaruntan waxaa ku jira isbeddel aan cidna oggolaan",
+      "sealingStopped": "Wax cusub laguma sir-dhigi doono xaruntan ilaa maamule xalliyo. Server-ku waxa laga yaabaa inuu ku tusayo taariikh ka duwan tan xubnaha kale.",
+      "staleSigner": "Isbeddel dhowaan ka dhacay xaruntan waxaa saxeexay qalab uu milkiiluhu ka saaray ({{count}})."
+    }
   }
 }

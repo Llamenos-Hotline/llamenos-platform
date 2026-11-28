@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import path from 'path'
 import { readFileSync } from 'fs'
+import { devSurfaceSecret } from './tests/dev-surface-secret'
 
 // Test builds: mock Tauri IPC so Playwright can run in a regular browser
 const isTestBuild = !!process.env.PLAYWRIGHT_TEST
@@ -85,6 +86,10 @@ export default defineConfig({
     '__VERSION_FLOOR__': JSON.stringify(buildVersion),
     // Make PLAYWRIGHT_TEST available as import.meta.env.PLAYWRIGHT_TEST in the browser
     ...(isTestBuild ? { 'import.meta.env.PLAYWRIGHT_TEST': JSON.stringify('true') } : {}),
+    // The test build's IPC mock forwards the crate's stateless hub-chain ops to
+    // the dev server's /api/test-crypto/hub-chain (#2963), which, like every
+    // /test-* route, answers only a caller presenting the dev-surface secret.
+    ...(isTestBuild ? { 'import.meta.env.PLAYWRIGHT_DEV_SECRET': JSON.stringify(devSurfaceSecret()) } : {}),
   },
   build: {
     outDir: 'dist/client',

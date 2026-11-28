@@ -4,13 +4,13 @@ import { useAuth } from '@/lib/auth'
 import { useEffect, useState } from 'react'
 import {
   listHubs,
-  createHub,
   updateHub,
   deleteHub,
   type Hub,
 } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { ensureHubKey } from '@/lib/hub-key-manager'
+import { foundHub } from '@/lib/hub-chain'
 import { useConfig } from '@/lib/config'
 import { Building2, Plus, Pencil, Phone, Trash2 } from 'lucide-react'
 import { AlertTriangle } from 'lucide-react'
@@ -217,6 +217,7 @@ function CreateHubDialog({
 }) {
   const { t } = useTranslation()
   const { toast } = useToast()
+  const { publicKey } = useAuth()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
@@ -232,10 +233,11 @@ function CreateHubDialog({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!name.trim()) return
+    if (!name.trim() || !publicKey) return
     setSaving(true)
     try {
-      const res = await createHub({
+      // This device signs the hub's genesis, its founding link (#2963).
+      const res = await foundHub(publicKey, {
         name: name.trim(),
         ...(description.trim() && { description: description.trim() }),
         ...(phoneNumber.trim() && { phoneNumber: phoneNumber.trim() }),

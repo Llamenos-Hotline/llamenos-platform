@@ -4802,5 +4802,13 @@
     "push": "Có hoạt động trên đường dây nóng của bạn cần được xem xét.",
     "signalAlert": "Cảnh báo đường dây nóng — {{category}}: {{state}}. Mở ứng dụng để xem chi tiết.",
     "title": "Sự cố đang diễn ra"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Hồ sơ thẩm quyền của trung tâm này đã bị phân nhánh",
+      "refusedTitle": "Hồ sơ thẩm quyền của trung tâm này có một thay đổi không ai cho phép",
+      "sealingStopped": "Sẽ không có gì mới được mã hóa trong trung tâm này cho đến khi quản trị viên giải quyết. Máy chủ có thể đang hiển thị cho bạn lịch sử khác với các thành viên khác.",
+      "staleSigner": "Một thay đổi gần đây trong trung tâm này được ký bởi một thiết bị mà chủ sở hữu đã gỡ bỏ ({{count}})."
+    }
   }
 }

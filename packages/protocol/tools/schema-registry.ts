@@ -19,6 +19,25 @@ import * as schemaExports from '../schemas'
  * - Overly generic schemas with no useful mobile representation
  */
 const EXCLUDED_SCHEMAS = new Set([
+  // The crate's own shapes (#2963): mobile receives these as UniFFI records
+  // (SigchainLink, SigchainVerifiedState, ActiveDeviceKey) or passes them as
+  // JSON to `mobileHubChain`, so a generated type of the same name would
+  // shadow the UniFFI one in the Swift and Kotlin modules.
+  'crateSigchainLinkSchema',
+  'activeDeviceKeySchema',
+  'sigchainVerifiedStateSchema',
+  'hubChainInputSchema',
+  'hubAnchorSchema',
+  'hubChainQuerySchema',
+  // Hub-chain LINKS have an open, type-tagged body that quicktype cannot
+  // express: a generated type keeps only `body.type` and silently drops every
+  // signed field. Mobile handles links as raw JSON from the response straight
+  // into the crate (`mobileHubChain`), so no lossy type is generated for them.
+  'hubChainBodySchema',
+  'hubChainLinkSchema',
+  'unsignedHubLinkSchema',
+  'hubChainResponseSchema',
+  'appendHubChainLinkBodySchema',
   // Query schemas — URL parameter validation, not wire types
   'listRecordsQuerySchema',
   'listAuditQuerySchema',

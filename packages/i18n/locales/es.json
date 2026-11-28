@@ -4802,5 +4802,13 @@
     "push": "Hay actividad en su línea que requiere atención.",
     "signalAlert": "Alerta de la línea — {{category}}: {{state}}. Abra la aplicación para ver los detalles.",
     "title": "Incidentes activos"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "El registro de autoridad de este centro se ha bifurcado",
+      "refusedTitle": "El registro de autoridad de este centro contiene un cambio que nadie autorizó",
+      "sealingStopped": "No se cifrará nada nuevo en este centro hasta que un administrador lo resuelva. Es posible que el servidor le muestre un historial distinto al de otros miembros.",
+      "staleSigner": "Un cambio reciente en este centro fue firmado por un dispositivo que su propietario ya eliminó ({{count}})."
+    }
   }
 }

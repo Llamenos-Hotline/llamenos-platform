@@ -207,7 +207,6 @@ pub fn bundle_perms_hash(permissions: &[String]) -> Result<String, CryptoError> 
 /// A chain head: `{seq, hash}`. Also the wire shape of a trusted anchor (§5.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
 pub struct ChainHead {
     pub seq: u64,
     pub hash: String,
@@ -830,7 +829,6 @@ impl<'a> Context<'a> {
 /// attention (D13's stale-signer alert).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
 pub struct HubChainAlert {
     /// `stale_signer`: the signer device is removed in the signer's user chain
     /// after the head the link referenced.

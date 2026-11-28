@@ -35,6 +35,7 @@ import type { SignalConfig } from '@shared/types'
 import type { BridgeHealthStatus } from '../messaging/signal/health'
 import { SeedOutcome, type SeedResultBody } from '../lib/test-seed-result'
 import { devSurfacesEnabled, devSurfaceSecretPresented, type DevSurfacesEnv } from '../lib/dev-surfaces'
+import { CryptoError, hubChainCallJson } from '@llamenos/crypto/ffi'
 
 /**
  * Decode a pubkey (hex only — npub1 bech32 encoding is no longer supported).
@@ -85,6 +86,25 @@ function devRouteDenied(c: {
 // nothing would notice (issue #1277). This route exists solely so a test can
 // assert devGuard alone 404s it when devSurfacesEnabled(env) is false.
 dev.get('/test-devguard-canary', (c) => c.json({ ok: true }))
+
+// The crate's stateless hub-chain operations, for the Playwright Tauri IPC
+// mock (#2963): the desktop test build runs in a plain browser where the crate
+// cannot load, and a JS re-implementation of the verifier would be a second
+// verifier the suite could pass against while the real one differs (#2104).
+// The mock forwards `hub_chain_call` here, so desktop E2E exercises the same
+// `hub_chain::call` the packaged app reaches through Tauri. Compute only: it
+// reads and writes nothing.
+dev.post('/test-crypto/hub-chain', async (c) => {
+  const denied = devRouteDenied(c)
+  if (denied) return denied
+  const request = await c.req.text()
+  try {
+    return c.json(JSON.parse(hubChainCallJson(request)))
+  } catch (e) {
+    if (e instanceof CryptoError) return c.json({ error: e.message, code: e.reason ?? 'invalid_input' }, 400)
+    throw e
+  }
+})
 
 dev.post('/test-reset', async (c) => {
   // Full reset. Available wherever the dev surface is (development, or a

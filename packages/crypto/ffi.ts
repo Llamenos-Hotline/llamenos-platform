@@ -527,71 +527,13 @@ export function recoveryLivenessVerify(
   throw new CryptoError(code, getLastError())
 }
 
-/** One user-sigchain link as the crate hashes and signs it (`sigchain::SigchainLink`). */
-export interface SigchainLink {
-  id: string
-  seq: number
-  prevHash: string | null
-  entryHash: string
-  signerDeviceId: string
-  signerPubkey: string
-  signature: string
-  timestamp: string
-  payloadJson: string
-}
-
-/** An active device's format-2 (X-Wing) encryption key, as its `user_init` / `device_add` names it. */
-export interface ActiveDeviceKey {
-  devicePubkey: string
-  encryptionPubkey: string
-  format: number
-}
-
-/** `sigchain::SigchainVerifiedState`. */
-export interface SigchainVerifiedState {
-  userPubkey: string
-  verifiedCount: number
-  headSeq: number
-  headHash: string
-  activeDevicePubkeys: string[]
-  activeDeviceKeys: ActiveDeviceKey[]
-  namedKeys: string[]
-}
-
-import type {
-  ChainHead,
-  HubChainLink,
-  HubChainVerified,
-  RecoveryApproval,
-  UnsignedHubLink,
-  UnsignedRecoveryApproval,
+export type {
+  /** One user-sigchain link as the crate hashes and signs it (`sigchain::SigchainLink`). */
+  CrateSigchainLink as SigchainLink,
+  SigchainVerifiedState,
 } from '../protocol/schemas/hub-chain'
-
-/** A trusted anchor for a hub other than the one being verified. */
-export interface HubAnchor { hub: string; head: ChainHead }
-
-/** `hub_chain::HubChainInput`. */
-export interface HubChainInput {
-  links: HubChainLink[]
-  userChains?: SigchainLink[][]
-  hubChains?: HubChainLink[][]
-  anchor?: ChainHead
-  hubAnchors?: HubAnchor[]
-}
-
-/** The request and answer of each `hub_chain::call` op. */
-export interface HubChainOps {
-  verify: { request: HubChainInput; answer: HubChainVerified }
-  signingMessage: { request: { unsigned: UnsignedHubLink; signerDevice: string }; answer: { entryHash: string; message: string } }
-  assemble: { request: { unsigned: UnsignedHubLink; signerDevice: string; sig: string }; answer: HubChainLink }
-  permsHash: { request: { permissions: string[] }; answer: { permsHash: string } }
-  verifySigchain: {
-    request: { links: SigchainLink[]; userChains?: SigchainLink[][]; hubChains?: HubChainLink[][]; hubAnchors?: HubAnchor[] }
-    answer: SigchainVerifiedState
-  }
-  approvalMessage: { request: { approval: UnsignedRecoveryApproval; holderDevice: string }; answer: { message: string } }
-}
-export type { RecoveryApproval }
+import type { CrateSigchainLink as SigchainLink, HubChainOps, SigchainVerifiedState } from '../protocol/schemas/hub-chain'
+export type { HubAnchor, HubChainInput, HubChainOps } from '../protocol/schemas/hub-chain'
 
 /** `check_output_size!` in ffi_server.rs: the buffer was too small; the message names the size needed. */
 const OUTPUT_TOO_SMALL = -2
@@ -634,7 +576,12 @@ export function hubChainCall<Op extends keyof HubChainOps>(
   op: Op,
   request: HubChainOps[Op]['request'],
 ): HubChainOps[Op]['answer'] {
-  const input = new TextEncoder().encode(JSON.stringify({ op, ...request }))
+  return JSON.parse(hubChainCallJson(JSON.stringify({ op, ...request }))) as HubChainOps[Op]['answer']
+}
+
+/** {@link hubChainCall} over a raw `{"op": …}` request; the answer as JSON text. */
+export function hubChainCallJson(requestJson: string): string {
+  const input = new TextEncoder().encode(requestJson)
   // Answers repeat the X-Wing keys the links name; the crate names the exact
   // size when the first buffer is too small, as in sigchainVerify.
   let out = new Uint8Array(input.length * 2 + 65536)
@@ -647,7 +594,7 @@ export function hubChainCall<Op extends keyof HubChainOps>(
     written = lib.symbols.ffi_hub_chain(ptr(input), input.length, ptr(out), out.length)
   }
   if (written < 0) checkResult(written)
-  return JSON.parse(new TextDecoder().decode(out.subarray(0, written))) as HubChainOps[Op]['answer']
+  return new TextDecoder().decode(out.subarray(0, written))
 }
 
 export function ed25519PubkeyFromSeed(seed: Uint8Array): Uint8Array {

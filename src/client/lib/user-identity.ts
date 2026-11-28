@@ -48,7 +48,7 @@ import {
   setVerifiedSigchainHead,
   pukCreateFromState,
   sigchainCreateLinkFromState,
-  sigchainVerify,
+  hubChainCall,
   userInitPayloadFromState,
   type DeviceKeyState,
   type SigchainLink,
@@ -226,7 +226,10 @@ async function verifyAuthorisesDevice(
   links: SigchainLinkRecord[],
   device: DeviceKeyState,
 ): Promise<SigchainVerifiedState> {
-  const verified = await sigchainVerify(links.map(toCryptoSigchainLink))
+  // The crate's verifier (`hub_chain::call` verifySigchain) — the same one the
+  // hub chain's signer checks use, so a recovery link is decided by its
+  // approvals and never accepted on trust (#2963).
+  const verified = await hubChainCall('verifySigchain', { links: links.map(toCryptoSigchainLink) })
   if (verified.userPubkey !== userPubkey || !verified.activeDevicePubkeys.includes(device.signingPubkeyHex)) {
     throw new Error('Verified sigchain does not authorise this device')
   }

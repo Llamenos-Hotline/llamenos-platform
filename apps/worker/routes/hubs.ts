@@ -7,7 +7,9 @@ import { validator } from '../openapi/validator'
 import type { AppEnv, Env } from '../types'
 import type { Services } from '../services'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
-import { resolveHubPermissions } from '@shared/permissions'
+import { DEFAULT_ROLES, expandPermissions, resolveHubPermissions } from '@shared/permissions'
+import { hubFounderRoleIds } from '../lib/hub-admin'
+import { hubFoundingResponseSchema } from '@protocol/schemas/hub-chain'
 import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, hubKeyRecipientsResponseSchema, hubKeySetResponseSchema, hubKeyRotateBodySchema, hubKeyRotateResponseSchema, hubKeyRotationResponseSchema, hubPermissionsResponseSchema, hubReadersQuerySchema, hubReadersResponseSchema, hubEscrowKeyResponseSchema, setHubEscrowKeyBodySchema } from '@protocol/schemas/hubs'
 import { assertMayManageHubEscrow } from '../lib/readers'
 import { assertMayManageHubKey } from '../lib/hub-key'
@@ -107,6 +109,35 @@ routes.get('/',
 )
 
 // Create hub (super admin only)
+// What a founder signs into a new hub's chain (#2963): the founder role the
+// catalog designates by permission, with the concrete permissions its bundle
+// policy commits. The founder's own client signs the genesis and the policy;
+// the server only names the role, and validates both when they arrive.
+routes.get('/founding',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: "The bundles a new hub's founder signs into its genesis",
+    responses: {
+      200: {
+        description: 'Founder bundles with their concrete permissions',
+        content: { 'application/json': { schema: resolver(hubFoundingResponseSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requireAnyPermission('system:manage-hubs', 'system:create-hub', 'settings:manage-setup'),
+  async (c) => {
+    const catalog = c.get('allRoles')
+    const known = new Set(catalog.map(r => r.id))
+    const defs = [...catalog, ...DEFAULT_ROLES.filter(r => !known.has(r.id))]
+    const bundles = hubFounderRoleIds(catalog).map(id => ({
+      bundle: id,
+      permissions: expandPermissions(defs.find(r => r.id === id)?.permissions ?? []),
+    }))
+    return c.json({ bundles })
+  },
+)
+
 routes.post('/',
   describeRoute({
     tags: ['Hubs'],

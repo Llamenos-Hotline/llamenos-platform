@@ -113,7 +113,12 @@ vi.mock('./platform', async importOriginal => {
       const d = unlocked()
       return createSigchainLinkMock(d.signingSeed, id, d.keys.deviceId, seq, prevHash, timestamp, payloadJson)
     }),
-    sigchainVerify: vi.fn(async (links: Parameters<typeof verifySigchainMock>[0]) => verifySigchainMock(links)),
+    // The flow under test calls the crate through `hubChainCall('verifySigchain')`;
+    // these chains carry no recovery link, so the pinned mock verifier answers it.
+    hubChainCall: vi.fn(async (op: string, req: { links: Parameters<typeof verifySigchainMock>[0] }) => {
+      if (op !== 'verifySigchain') throw new Error(`unexpected hub-chain op ${op}`)
+      return verifySigchainMock(req.links)
+    }),
   }
 })
 

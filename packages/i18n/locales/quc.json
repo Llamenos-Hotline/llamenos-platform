@@ -4808,5 +4808,13 @@
     "erasure.envelopeRevocationFailed",
     "erasure.envelopeRevocationProcessed",
     "erasure.envelopeRevocationProgress"
-  ]
+  ],
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Ri utz'ib'axik ri uchuqa'b' we jun k'olib'al xpaxin pa keb'",
+      "refusedTitle": "Ri utz'ib'axik ri uchuqa'b' we jun k'olib'al k'o jun jalwachinik ri man k'o ta jun xya'wi",
+      "sealingStopped": "Man kab'an ta chi k'u'x ri k'ak' pa we k'olib'al chi' are taq jun ajchak'ib' kusolij. Rik'in jub'iq' ri server kuk'ut jun jalan nab'e chawe chuwach ri e kik'.",
+      "staleSigner": "Jun k'ak' jalwachinik pa we k'olib'al xb'an ruk' jun ch'akb'al ri xresaj ri rajaw ({{count}})."
+    }
+  }
 }

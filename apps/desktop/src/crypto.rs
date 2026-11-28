@@ -868,6 +868,41 @@ pub fn sigchain_verify_users(chains_json: String) -> Result<serde_json::Value, S
     serde_json::to_value(&states).map_err(err_str)
 }
 
+// ── Hub authority chain (#2963; wire spec §5) ───────────────────────
+
+/// One stateless hub-chain operation (`llamenos_core::hub_chain::call`): the
+/// request is `{"op": "verify" | "signingMessage" | "assemble" | "permsHash" |
+/// "verifySigchain" | "approvalMessage", …}`, the answer the crate's JSON. The
+/// webview verifies every hub chain it is served through this command and
+/// never canonicalises, hashes or checks a link itself.
+#[tauri::command]
+pub fn hub_chain_call(request_json: String) -> Result<String, String> {
+    llamenos_core::hub_chain::call_json(&request_json).map_err(crypto_err)
+}
+
+/// Sign an unsigned hub-chain link (JSON) with this device's Ed25519 key, held
+/// in CryptoState. Returns the signed link JSON.
+#[tauri::command]
+pub fn hub_chain_sign_link_from_state(
+    state: tauri::State<'_, CryptoState>,
+    unsigned_json: String,
+) -> Result<String, String> {
+    state.with_secrets(|secrets| {
+        llamenos_core::hub_chain::sign_link_json(secrets, &unsigned_json).map_err(crypto_err)
+    })
+}
+
+/// Sign a recovery approval (JSON) with this holder device's key (D14).
+#[tauri::command]
+pub fn recovery_approval_sign_from_state(
+    state: tauri::State<'_, CryptoState>,
+    approval_json: String,
+) -> Result<String, String> {
+    state.with_secrets(|secrets| {
+        llamenos_core::hub_chain::sign_approval_json(secrets, &approval_json).map_err(crypto_err)
+    })
+}
+
 /// Verify a sigchain (stateless — no secrets needed).
 #[tauri::command]
 pub fn sigchain_verify(links_json: String) -> Result<serde_json::Value, String> {
@@ -1779,6 +1814,43 @@ mod v2_vector_tests {
     /// `CryptoError::code` is carried as the first word of the error string.
     fn code(err: &str) -> &str {
         err.split(':').next().unwrap_or(err)
+    }
+
+    /// hub-chain.json (#2963): every case through the `hub_chain_call` command,
+    /// the production reader the webview uses — each positive's head and state
+    /// hash, each negative's closed code.
+    #[test]
+    fn hub_chain_vectors_through_the_hub_chain_call_command() {
+        let f = load("hub-chain.json");
+        let chain = f["chain"].as_array().unwrap();
+        let input = |c: &serde_json::Value| {
+            let n = c["prefix"].as_u64().unwrap() as usize;
+            let mut links: Vec<serde_json::Value> = chain[..n].to_vec();
+            links.extend(c["append"].as_array().unwrap().iter().cloned());
+            let mut req =
+                serde_json::json!({"op": "verify", "links": links, "userChains": f["userChains"]});
+            if let Some(a) = c.get("anchor") {
+                req["anchor"] = a.clone();
+            }
+            req.to_string()
+        };
+        for p in f["positives"].as_array().unwrap() {
+            let v: serde_json::Value =
+                serde_json::from_str(&hub_chain_call(input(p)).unwrap()).unwrap();
+            assert_eq!(v["head"], p["expect"]["head"], "{}", p["name"]);
+            assert_eq!(v["stateHash"], p["expect"]["stateHash"], "{}", p["name"]);
+        }
+        let negatives = f["negatives"].as_array().unwrap();
+        assert_eq!(negatives.len(), 19);
+        for n in negatives {
+            let err = hub_chain_call(input(n)).unwrap_err();
+            assert_eq!(
+                code(&err),
+                n["expect"].as_str().unwrap(),
+                "{}: {err}",
+                n["name"]
+            );
+        }
     }
 
     /// device-binding.json (#2496): every case through the

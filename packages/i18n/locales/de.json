@@ -4802,5 +4802,13 @@
     "push": "Auf Ihrer Hotline gibt es Aktivität, die Sie sich ansehen sollten.",
     "signalAlert": "Hotline-Warnung — {{category}}: {{state}}. Details finden Sie in der App.",
     "title": "Aktive Vorfälle"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Das Berechtigungsprotokoll dieses Hubs hat sich gespalten",
+      "refusedTitle": "Das Berechtigungsprotokoll dieses Hubs enthält eine Änderung, die niemand autorisiert hat",
+      "sealingStopped": "In diesem Hub wird nichts Neues verschlüsselt, bis ein Admin das Problem behebt. Der Server zeigt Ihnen möglicherweise einen anderen Verlauf als anderen Mitgliedern.",
+      "staleSigner": "Eine kürzliche Änderung in diesem Hub wurde von einem Gerät signiert, das sein Besitzer inzwischen entfernt hat ({{count}})."
+    }
   }
 }
