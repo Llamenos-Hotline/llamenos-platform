@@ -256,7 +256,11 @@ fn put_lp(out: &mut Vec<u8>, b: &[u8]) -> Result<(), CryptoError> {
 }
 
 /// Lowercase hex of exactly `len` bytes, or `invalid_format`.
-fn decode_key_hex(hex_str: &str, len: usize, what: &str) -> Result<Vec<u8>, CryptoError> {
+pub(crate) fn decode_key_hex(
+    hex_str: &str,
+    len: usize,
+    what: &str,
+) -> Result<Vec<u8>, CryptoError> {
     if hex_str.len() != len * 2
         || !hex_str
             .bytes()
@@ -283,7 +287,10 @@ fn kem_public_key_len(format: u16) -> Result<usize, CryptoError> {
 
 /// Decode and validate a `format` encryption key: exact length, lowercase hex,
 /// and a well-formed key of the suite (an X-Wing key must parse as one).
-fn decode_kem_public_key(encryption_pk_hex: &str, format: u16) -> Result<Vec<u8>, CryptoError> {
+pub(crate) fn decode_kem_public_key(
+    encryption_pk_hex: &str,
+    format: u16,
+) -> Result<Vec<u8>, CryptoError> {
     let len = kem_public_key_len(format)?;
     let bytes = decode_key_hex(encryption_pk_hex, len, "encryptionPubkey")?;
     x_wing::EncapsulationKey::try_from(bytes.as_slice()).map_err(|_| {
@@ -500,6 +507,54 @@ impl NamedKeys {
 /// Returns the verified state including the set of active device pubkeys and
 /// their X-Wing keys.
 pub fn verify_sigchain(links: &[SigchainLink]) -> Result<SigchainVerifiedState, CryptoError> {
+    verify_sigchain_with(links, &NoRecoveryContext)
+}
+
+/// Verifies the evidence a `recovery_device_add` link carries (wire spec
+/// §5.8, D14). A recovery link is signed by the NEW device, which no earlier
+/// link authorised, so it is valid only on its approvals: at least `threshold`
+/// share holders of the hub's `recovery_group` as of `hubHead`. Checking them
+/// needs the hub's chain and the holders' user chains, which only the caller
+/// has; [`crate::hub_chain`] implements this over the chains it was given.
+pub trait RecoveryVerifier {
+    /// Accept `payload` (a `recovery_device_add`, already checked to be signed
+    /// by the device it names) for `user`, or refuse it with a closed code.
+    fn verify_recovery(
+        &self,
+        user: &str,
+        link: &SigchainLink,
+        payload: &serde_json::Value,
+    ) -> Result<(), CryptoError>;
+}
+
+/// The context of a verifier that holds no hub chain: every
+/// `recovery_device_add` is refused as `recovery_unverifiable`, never accepted
+/// on trust. A recovered user's chain is verified with the hub chains its
+/// recovery names ([`crate::hub_chain::verify_sigchain_in_context`]).
+pub struct NoRecoveryContext;
+
+impl RecoveryVerifier for NoRecoveryContext {
+    fn verify_recovery(
+        &self,
+        _user: &str,
+        link: &SigchainLink,
+        _payload: &serde_json::Value,
+    ) -> Result<(), CryptoError> {
+        Err(rejected(
+            "recovery_unverifiable",
+            format!(
+                "recovery_device_add at seq {} needs its hub chain and holders' chains to verify",
+                link.seq
+            ),
+        ))
+    }
+}
+
+/// [`verify_sigchain`], with `recovery` deciding each `recovery_device_add`.
+pub fn verify_sigchain_with(
+    links: &[SigchainLink],
+    recovery: &dyn RecoveryVerifier,
+) -> Result<SigchainVerifiedState, CryptoError> {
     if links.is_empty() {
         return Err(CryptoError::InvalidInput(
             "sigchain must have at least one link".into(),
@@ -598,8 +653,24 @@ pub fn verify_sigchain(links: &[SigchainLink]) -> Result<SigchainVerifiedState, 
             }
         }
 
-        // Signer must be in active device set
-        if !active_pubkeys.contains(&link.signer_pubkey) {
+        let payload: serde_json::Value =
+            serde_json::from_str(&link.payload_json).map_err(CryptoError::JsonError)?;
+        let is_recovery = str_field(&payload, "type") == Some("recovery_device_add");
+
+        // Signer must be in active device set — except a recovery link, which
+        // the new device signs itself and which stands on its approvals.
+        if is_recovery {
+            let device = required_str(&payload, "devicePubkey", link.seq)?;
+            if !ct_hex_eq(device, &link.signer_pubkey) {
+                return Err(rejected(
+                    "chain_unauthorised_signer",
+                    format!(
+                        "recovery_device_add at seq {} must be signed by the device it adds",
+                        link.seq
+                    ),
+                ));
+            }
+        } else if !active_pubkeys.contains(&link.signer_pubkey) {
             return Err(rejected(
                 "chain_unauthorised_signer",
                 format!(
@@ -615,9 +686,34 @@ pub fn verify_sigchain(links: &[SigchainLink]) -> Result<SigchainVerifiedState, 
         }
 
         // Process payload to update device set
-        let payload: serde_json::Value =
-            serde_json::from_str(&link.payload_json).map_err(CryptoError::JsonError)?;
         match str_field(&payload, "type") {
+            Some("recovery_device_add") => {
+                recovery.verify_recovery(&user_pubkey, link, &payload)?;
+                let device = required_str(&payload, "devicePubkey", link.seq)?;
+                let enc = required_str(&payload, "encryptionPubkey", link.seq)?;
+                let format = required_format(&payload, link.seq)?;
+                decode_kem_public_key(enc, format)?;
+                if named.0.contains_key(&device.to_ascii_lowercase()) {
+                    return Err(rejected(
+                        "chain_key_reused",
+                        format!(
+                            "recovery_device_add at seq {} names device {device}, already in this chain",
+                            link.seq
+                        ),
+                    ));
+                }
+                named.claim(device, device, link.seq)?;
+                named.claim(enc, device, link.seq)?;
+                active_pubkeys.push(device.to_string());
+                device_keys.insert(
+                    device.to_string(),
+                    ActiveDeviceKey {
+                        device_pubkey: device.to_string(),
+                        encryption_pubkey: enc.to_string(),
+                        format,
+                    },
+                );
+            }
             Some("device_add") => {
                 let device = required_str(&payload, "devicePubkey", link.seq)?;
                 let enc = required_str(&payload, "encryptionPubkey", link.seq)?;

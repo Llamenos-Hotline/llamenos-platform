@@ -128,3 +128,6 @@
 110	llamenos:offline-queue:v1
 111	llamenos:hub-key-rotation:v1
 112	llamenos:device-pop:v1
+113	llamenos:hub-chain-sig:v1
+114	llamenos:hub-bundle-perms:v1
+115	llamenos:recovery-approval:v1
