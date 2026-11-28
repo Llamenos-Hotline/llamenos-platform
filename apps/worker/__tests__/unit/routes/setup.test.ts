@@ -1,3 +1,4 @@
+import { VALID_HUB_FOUNDING } from '../../helpers/hub-genesis'
 /**
  * Unit tests for routes/setup.ts
  *
@@ -170,7 +171,7 @@ describe('POST /setup/complete', () => {
     const res = await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ hub: VALID_HUB_FOUNDING }),
     })
 
     expect(res.status).toBe(200)
@@ -180,7 +181,7 @@ describe('POST /setup/complete', () => {
       expect.objectContaining({ name: 'Test Hotline', phoneNumber: '+15550001234' }),
       // No role id: the founder gets the role the catalog designates by
       // permission (`hubFounderRoleIds`), never a hardcoded one (#1034).
-      { pubkey: 'a'.repeat(64) },
+      { pubkey: 'a'.repeat(64), genesis: VALID_HUB_FOUNDING.genesis },
     )
     expect(mockIdentity.setHubRole).not.toHaveBeenCalled()
     expect(auditLog).toHaveBeenCalledOnce()
@@ -198,13 +199,13 @@ describe('POST /setup/complete', () => {
     const res = await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ hub: VALID_HUB_FOUNDING }),
     })
 
     expect(res.status).toBe(200)
     expect(mockSettings.createHub).toHaveBeenCalledWith(
       expect.objectContaining({ phoneNumber: '+15557770001' }),
-      { pubkey: 'a'.repeat(64) },
+      { pubkey: 'a'.repeat(64), genesis: VALID_HUB_FOUNDING.genesis },
     )
   })
 
@@ -216,7 +217,7 @@ describe('POST /setup/complete', () => {
     await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ hub: VALID_HUB_FOUNDING }),
     })
 
     expect(mockSettings.createHub).toHaveBeenCalledWith(
@@ -236,11 +237,27 @@ describe('POST /setup/complete', () => {
     const res = await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ hub: VALID_HUB_FOUNDING }),
     })
 
     expect(res.status).toBe(409)
     expect(mockIdentity.getHpkeRecipients).toHaveBeenCalledWith('a'.repeat(64))
+    expect(mockSettings.createHub).not.toHaveBeenCalled()
+    expect(mockSettings.updateSetupState).not.toHaveBeenCalled()
+  })
+
+  // #2963: no hub is founded without its founder's signed genesis.
+  it('refuses to found the first hub without the setup admin\'s genesis, and never marks setup complete', async () => {
+    const { app, mockSettings } = makeApp()
+
+    const res = await app.request('/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('chain_genesis')
     expect(mockSettings.createHub).not.toHaveBeenCalled()
     expect(mockSettings.updateSetupState).not.toHaveBeenCalled()
   })
@@ -252,7 +269,7 @@ describe('POST /setup/complete', () => {
     const res = await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ hub: VALID_HUB_FOUNDING }),
     })
 
     expect(res.status).toBe(200)
@@ -267,7 +284,7 @@ describe('POST /setup/complete', () => {
     const res = await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ hub: VALID_HUB_FOUNDING }),
     })
 
     expect(res.status).toBe(500)
@@ -281,12 +298,12 @@ describe('POST /setup/complete', () => {
     await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ hub: VALID_HUB_FOUNDING }),
     })
 
     expect(mockSettings.createHub).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Hotline', slug: 'hotline' }),
-      { pubkey: 'a'.repeat(64) },
+      { pubkey: 'a'.repeat(64), genesis: VALID_HUB_FOUNDING.genesis },
     )
   })
 
@@ -296,7 +313,7 @@ describe('POST /setup/complete', () => {
     const res = await app.request('/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ hub: VALID_HUB_FOUNDING }),
     })
 
     expect(res.status).toBe(403)

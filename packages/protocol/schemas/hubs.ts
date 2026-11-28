@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { hubChainLinkSchema } from './hub-chain'
 import { DEFAULT_HUB_TIMEZONE, ianaTimezoneSchema, pubkeySchema, recipientEnvelopeSchema } from './common'
 
 // --- Response schemas ---
@@ -189,7 +190,18 @@ export type HubKeySetResponse = z.infer<typeof hubKeySetResponseSchema>
 
 // --- Input schemas ---
 
+/**
+ * A hub id under the identifier profile (wire spec §2.1): lowercase, 1–64
+ * characters, `[0-9a-z-]`, not starting with `-`. The client mints it (a
+ * lowercase UUID) because the founder's genesis names it before the hub exists.
+ */
+export const hubIdSchema = z.string().regex(/^[0-9a-z][0-9a-z-]{0,63}$/, 'Must be a lowercase id of 1-64 characters [0-9a-z-]')
+
 export const createHubBodySchema = z.object({
+  /** Minted by the creating client; the genesis names it (#2963). */
+  id: hubIdSchema,
+  /** The founder's signed new-hub genesis: the hub chain's first link (#2963, wire spec §5.6). */
+  genesis: hubChainLinkSchema,
   name: z.string().min(1).max(200),
   slug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/).optional(),
   description: z.string().max(500).optional(),

@@ -127,7 +127,13 @@ export const hubs = pgTable('hubs', {
     .notNull()
     .defaultNow(),
   cryptoFormat: cryptoFormatColumn(),
-}, (table) => [cryptoFormatCheck('hubs', table.cryptoFormat)])
+}, (table) => [
+  cryptoFormatCheck('hubs', table.cryptoFormat),
+  // The identifier profile (wire spec §2.1, #2963 `hub-id-profile`): every hub
+  // id enters AADs and hub-chain links, and the crate refuses anything outside
+  // it rather than normalising, so the database refuses it first.
+  check('hubs_id_profile', sql`${table.id} ~ '^[0-9a-z][0-9a-z-]{0,63}$' OR ${table.id} ~ '^[0-9a-f]{1,128}$'`),
+])
 
 // ---------------------------------------------------------------------------
 // hub_settings

@@ -251,6 +251,19 @@ function toCrateLink(link: {
 }
 
 /**
+ * A user's stored sigchain in the crate's `SigchainLink` shape, ascending — the
+ * form every crate verifier (`sigchainVerify`, `hubChainCall`) takes.
+ */
+export async function loadCrateSigchain(db: Pick<Database, 'select'>, userPubkey: string): Promise<SigchainLink[]> {
+  const rows = await db
+    .select()
+    .from(sigchainLinks)
+    .where(eq(sigchainLinks.userPubkey, userPubkey))
+    .orderBy(asc(sigchainLinks.seqNo))
+  return rows.map(r => toCrateLink(mapSigchainRow(r)))
+}
+
+/**
  * Link types whose acceptance needs the crate verifier: each names a device's
  * X-Wing key with a possession signature (`pop`) — the genesis for the first
  * device, a device_add for every later one — and device_add adds the device-set

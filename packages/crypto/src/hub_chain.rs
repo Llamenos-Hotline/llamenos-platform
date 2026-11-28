@@ -1781,6 +1781,133 @@ impl RecoveryVerifier for Context<'_> {
     }
 }
 
+// ── One JSON entry point for every host (ffi_server, Tauri, UniFFI) ──
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SigningMessageReq {
+    unsigned: UnsignedHubLink,
+    signer_device: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssembleReq {
+    unsigned: UnsignedHubLink,
+    signer_device: String,
+    sig: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SigchainReq {
+    links: Vec<SigchainLink>,
+    #[serde(default)]
+    user_chains: Vec<Vec<SigchainLink>>,
+    #[serde(default)]
+    hub_chains: Vec<Vec<HubChainLink>>,
+    #[serde(default)]
+    hub_anchors: Vec<HubAnchor>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApprovalMessageReq {
+    approval: UnsignedRecoveryApproval,
+    holder_device: String,
+}
+
+fn parse<T: serde::de::DeserializeOwned>(v: Value, op: &str) -> Result<T, CryptoError> {
+    serde_json::from_value(v).map_err(|e| CryptoError::InvalidFormat(format!("{op}: {e}")))
+}
+
+/// The stateless hub-chain operations, by name, JSON in and JSON out. Every host
+/// calls this one function — the server through `ffi_hub_chain`, desktop
+/// through a Tauri command, mobile through `mobile_hub_chain` — so the request
+/// and answer shapes are the crate's, never a host's:
+///
+/// | `op` | request | answer |
+/// |---|---|---|
+/// | `verify` | [`HubChainInput`] | [`HubChainVerified`] |
+/// | `signingMessage` | `{unsigned, signerDevice}` | `{entryHash, message}` (hex) |
+/// | `assemble` | `{unsigned, signerDevice, sig}` | [`HubChainLink`] |
+/// | `permsHash` | `{permissions}` | `{permsHash}` |
+/// | `verifySigchain` | `{links, userChains, hubChains, hubAnchors}` | [`SigchainVerifiedState`] |
+/// | `approvalMessage` | `{approval, holderDevice}` | `{message}` (hex) |
+pub fn call(op: &str, request: Value) -> Result<Value, CryptoError> {
+    Ok(match op {
+        "verify" => serde_json::to_value(verify_hub_chain(&parse(request, op)?)?)?,
+        "signingMessage" => {
+            let r: SigningMessageReq = parse(request, op)?;
+            let (entry_hash, msg) = hub_link_signing_message(&r.unsigned, &r.signer_device)?;
+            serde_json::json!({"entryHash": entry_hash, "message": hex::encode(msg)})
+        }
+        "assemble" => {
+            let r: AssembleReq = parse(request, op)?;
+            serde_json::to_value(assemble_hub_link(&r.unsigned, &r.signer_device, &r.sig)?)?
+        }
+        "permsHash" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct R {
+                permissions: Vec<String>,
+            }
+            let r: R = parse(request, op)?;
+            serde_json::json!({"permsHash": bundle_perms_hash(&r.permissions)?})
+        }
+        "verifySigchain" => {
+            let r: SigchainReq = parse(request, op)?;
+            serde_json::to_value(verify_sigchain_in_context(
+                &r.links,
+                &r.user_chains,
+                &r.hub_chains,
+                &r.hub_anchors,
+            )?)?
+        }
+        "approvalMessage" => {
+            let r: ApprovalMessageReq = parse(request, op)?;
+            let msg = recovery_approval_signing_message(&r.approval, &r.holder_device)?;
+            serde_json::json!({"message": hex::encode(msg)})
+        }
+        other => {
+            return Err(CryptoError::InvalidInput(format!(
+                "unknown hub-chain op {other}"
+            )))
+        }
+    })
+}
+
+/// [`call`] over a JSON request `{"op": …, …rest}`; the answer is JSON text.
+pub fn call_json(request_json: &str) -> Result<String, CryptoError> {
+    let mut v: Value = serde_json::from_str(request_json)
+        .map_err(|e| CryptoError::InvalidFormat(format!("hub-chain request: {e}")))?;
+    let op = v
+        .as_object_mut()
+        .and_then(|o| o.remove("op"))
+        .and_then(|o| o.as_str().map(str::to_string))
+        .ok_or_else(|| CryptoError::InvalidFormat("hub-chain request has no op".into()))?;
+    Ok(serde_json::to_string(&call(&op, v)?)?)
+}
+
+/// Sign an unsigned link (JSON) with this device; the link as JSON.
+pub fn sign_link_json(secrets: &DeviceSecrets, unsigned_json: &str) -> Result<String, CryptoError> {
+    let u: UnsignedHubLink = serde_json::from_str(unsigned_json)
+        .map_err(|e| CryptoError::InvalidFormat(format!("unsigned hub link: {e}")))?;
+    Ok(serde_json::to_string(&sign_hub_link(secrets, &u)?)?)
+}
+
+/// Sign a recovery approval (JSON) with this holder device; the approval as JSON.
+pub fn sign_approval_json(
+    secrets: &DeviceSecrets,
+    approval_json: &str,
+) -> Result<String, CryptoError> {
+    let a: UnsignedRecoveryApproval = serde_json::from_str(approval_json)
+        .map_err(|e| CryptoError::InvalidFormat(format!("recovery approval: {e}")))?;
+    Ok(serde_json::to_string(&sign_recovery_approval(
+        secrets, &a,
+    )?)?)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

@@ -116,6 +116,13 @@ export function mergeHubRole(
   return merged
 }
 
+/** `hubRoles` with the assignment in `hubId` replaced by `roleIds` (added if absent); every other hub is untouched */
+export function replaceHubRole(hubRoles: readonly HubRoleAssignment[], hubId: string, roleIds: readonly string[]): HubRoleAssignment[] {
+  return hubRoles.some(hr => hr.hubId === hubId)
+    ? hubRoles.map(hr => (hr.hubId === hubId ? { ...hr, roleIds: [...roleIds] } : hr))
+    : [...hubRoles, { hubId, roleIds: [...roleIds] }]
+}
+
 // ---------------------------------------------------------------------------
 // Pure predicate
 // ---------------------------------------------------------------------------

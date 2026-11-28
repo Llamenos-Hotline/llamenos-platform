@@ -20,6 +20,7 @@ import { ContactsService } from './contacts'
 import { CasesService } from './cases'
 import { TaskScheduler, type TaskSchedulerServiceDeps } from './scheduler'
 import { CryptoKeysService } from './crypto-keys'
+import { HubChainService } from './hub-chain'
 import { FirehoseService } from './firehose'
 import { FirehoseAgentService } from './firehose-agent'
 import { SignalContactsService } from './signal-contacts'
@@ -66,6 +67,8 @@ export interface Services extends SettingsDomainServices {
   scheduler: TaskScheduler
   /** Phase 6: sigchain, PUK envelope, and MLS message operations */
   cryptoKeys: CryptoKeysService
+  /** Hub authority chain storage, validated append and read (#2963) */
+  hubChain: HubChainService
   firehose: FirehoseService
   firehoseAgent?: FirehoseAgentService
   signalContacts: SignalContactsService
@@ -190,6 +193,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
       parseSignalQueueRetentionDays(opts?.env?.SIGNAL_QUEUE_RETENTION_DAYS),
     ),
     cryptoKeys: new CryptoKeysService(db),
+    hubChain: new HubChainService(db),
     firehose,
     signalContacts,
     signalIdentity: new SignalIdentityService(db),

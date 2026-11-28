@@ -30,6 +30,7 @@ import reportsRoutes from './routes/reports'
 import setupRoutes from './routes/setup'
 import provisioningRoutes from './routes/provisioning'
 import hubRoutes from './routes/hubs'
+import hubChainRoutes from './routes/hub-chain'
 import incidentsRoutes from './routes/incidents'
 import platformIncidentsRoutes from './routes/platform-incidents'
 import incidentsDevRoutes from './routes/incidents-dev'
@@ -313,6 +314,8 @@ hubScoped.use('*', hubContext)
 hubScoped.route('/users', usersRoutes)
 hubScoped.route('/volunteers', usersRoutes)
 hubScoped.route('/identity', identityRoutes)
+// Hub authority chain (#2963): read forward, append one signed link
+hubScoped.route('/chain', hubChainRoutes)
 hubScoped.route('/shifts', shiftsRoutes)
 hubScoped.route('/bans', bansRoutes)
 hubScoped.route('/notes', notesRoutes)

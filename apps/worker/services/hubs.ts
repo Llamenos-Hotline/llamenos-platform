@@ -6,6 +6,8 @@ import {
   or,
 } from 'drizzle-orm'
 import type { Database } from '../db'
+import type { HubChainLink } from '@protocol/schemas/hub-chain'
+import { HubChainService } from './hub-chain'
 import {
   hubs as hubsTable,
   hubSettings as hubSettingsTable,
@@ -81,6 +83,26 @@ function hubFromRow(row: typeof hubsTable.$inferSelect, numbers: readonly HubNum
 }
 
 /**
+ * The bundles a genesis gives its founder, after checking it is a genesis for
+ * THIS hub by THIS founder. The crate checks everything else when the link is
+ * appended (signature, the founder's user chain, migration 0, the profile).
+ */
+function genesisFounderBundles(genesis: HubChainLink, hubId: string, founderPubkey: string): string[] {
+  const body = genesis.body
+  if (genesis.seq !== 1 || body.type !== 'genesis' || genesis.hub !== hubId) {
+    throw new ServiceError(400, 'The genesis must be the first link of this hub\'s chain', 'chain_genesis')
+  }
+  if (body.founder !== founderPubkey || genesis.signerUser !== founderPubkey) {
+    throw new ServiceError(403, 'A hub\'s genesis is signed by its founder', 'chain_genesis')
+  }
+  const members = Array.isArray(body.members) ? body.members : []
+  const first = members[0] as { bundles?: unknown } | undefined
+  const bundles = Array.isArray(first?.bundles) ? first.bundles.filter((b): b is string => typeof b === 'string') : []
+  if (bundles.length === 0) throw new ServiceError(400, 'The genesis names the founder\'s bundles', 'chain_genesis')
+  return bundles
+}
+
+/**
  * The hub registry (`hubs`): listing, creation with its first admin, lifecycle (archive, delete,
  * purge) and lookup by phone number.
  */
@@ -110,8 +132,20 @@ export class HubService {
    */
   async createHub(
     hub: Hub,
-    founder: { pubkey: string; roleIds?: readonly string[] },
+    founder: {
+      pubkey: string
+      roleIds?: readonly string[]
+      /**
+       * The founder's signed new-hub genesis (#2963, wire spec §5.6). When
+       * given, it is the hub chain's first link, stored in this transaction
+       * after the crate validates it, and the founder's roles ARE its bundles.
+       * Every client-facing create path requires one; only the dev seeding
+       * route and service-level test fixtures create a hub without a chain.
+       */
+      genesis?: HubChainLink
+    },
   ): Promise<{ hub: Hub }> {
+    const genesisBundles = founder.genesis ? genesisFounderBundles(founder.genesis, hub.id, founder.pubkey) : undefined
     await this.db.transaction(async (tx) => {
       const [existing] = await tx
         .select({ id: hubsTable.id })
@@ -136,7 +170,7 @@ export class HubService {
       // hub's admin is committed (and be counted by its own guard).
       await lockHubAdminSets(tx, [hub.id])
       const catalog = await loadRoleCatalog(tx)
-      const founderRoleIds = founder.roleIds ?? hubFounderRoleIds(catalog)
+      const founderRoleIds = genesisBundles ?? founder.roleIds ?? hubFounderRoleIds(catalog)
       if (!rolesConferHubAdmin(founderRoleIds, catalog)) {
         throw new ServiceError(400, 'A hub must be created with an admin role for its founder')
       }
@@ -172,6 +206,8 @@ export class HubService {
           updatedAt: now,
         })
         .where(eq(users.pubkey, founder.pubkey))
+
+      if (founder.genesis) await new HubChainService(this.db).appendInTx(tx, hub.id, founder.genesis)
     })
 
     // What was stored, not what was typed: numbers come back in E.164.

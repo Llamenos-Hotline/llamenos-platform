@@ -137,7 +137,8 @@ routes.post('/',
     }
 
     const hub: Hub = {
-      id: crypto.randomUUID(),
+      // Minted by the client: the founder's genesis names it (#2963).
+      id: body.id,
       name,
       slug,
       description: body.description?.trim(),
@@ -152,10 +153,11 @@ routes.post('/',
 
     // The creator becomes the hub's first admin in the same transaction as the
     // hub itself (#2126): a hub never exists without one, and if the grant
-    // cannot be made the hub is not created. The founder's role is the one the
-    // role catalog designates for it by permission, not a role id.
+    // cannot be made the hub is not created. The founder's roles are the bundles
+    // their signed genesis names, and the genesis is the chain's first link —
+    // validated by the crate and stored in the same transaction (#2963).
     try {
-      await services.hubs.createHub(hub, { pubkey })
+      await services.hubs.createHub(hub, { pubkey, genesis: body.genesis })
     } catch (err) {
       if (err instanceof ServiceError) {
         return c.json(serviceErrorBody(err), err.status as 400 | 404 | 409 | 500)

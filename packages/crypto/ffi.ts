@@ -148,6 +148,13 @@ const lib = dlopen(LIB_PATH, {
     ],
     returns: FFIType.i32,
   },
+  ffi_hub_chain: {
+    args: [
+      FFIType.ptr, FFIType.u64, // request JSON ({op, ...})
+      FFIType.ptr, FFIType.u64, // out (answer JSON)
+    ],
+    returns: FFIType.i32,
+  },
   ffi_build_auth_message: {
     args: [
       FFIType.ptr, FFIType.u64, // pubkey_hex
@@ -551,6 +558,41 @@ export interface SigchainVerifiedState {
   namedKeys: string[]
 }
 
+import type {
+  ChainHead,
+  HubChainLink,
+  HubChainVerified,
+  RecoveryApproval,
+  UnsignedHubLink,
+  UnsignedRecoveryApproval,
+} from '../protocol/schemas/hub-chain'
+
+/** A trusted anchor for a hub other than the one being verified. */
+export interface HubAnchor { hub: string; head: ChainHead }
+
+/** `hub_chain::HubChainInput`. */
+export interface HubChainInput {
+  links: HubChainLink[]
+  userChains?: SigchainLink[][]
+  hubChains?: HubChainLink[][]
+  anchor?: ChainHead
+  hubAnchors?: HubAnchor[]
+}
+
+/** The request and answer of each `hub_chain::call` op. */
+export interface HubChainOps {
+  verify: { request: HubChainInput; answer: HubChainVerified }
+  signingMessage: { request: { unsigned: UnsignedHubLink; signerDevice: string }; answer: { entryHash: string; message: string } }
+  assemble: { request: { unsigned: UnsignedHubLink; signerDevice: string; sig: string }; answer: HubChainLink }
+  permsHash: { request: { permissions: string[] }; answer: { permsHash: string } }
+  verifySigchain: {
+    request: { links: SigchainLink[]; userChains?: SigchainLink[][]; hubChains?: HubChainLink[][]; hubAnchors?: HubAnchor[] }
+    answer: SigchainVerifiedState
+  }
+  approvalMessage: { request: { approval: UnsignedRecoveryApproval; holderDevice: string }; answer: { message: string } }
+}
+export type { RecoveryApproval }
+
 /** `check_output_size!` in ffi_server.rs: the buffer was too small; the message names the size needed. */
 const OUTPUT_TOO_SMALL = -2
 
@@ -579,6 +621,33 @@ export function sigchainVerify(links: readonly SigchainLink[]): SigchainVerified
   }
   if (written < 0) checkResult(written)
   return JSON.parse(new TextDecoder().decode(out.subarray(0, written))) as SigchainVerifiedState
+}
+
+/**
+ * One stateless hub-chain operation through `packages/crypto` `hub_chain::call`
+ * (#2963, wire spec §5). JSON in, JSON out; the request and answer shapes are
+ * the crate's (see `HubChainOps`). A refusal throws a `CryptoError` whose
+ * `reason` is the closed rejection code (`chain_prev_hash`, `chain_fork`,
+ * `chain_unauthorised_signer`, `recovery_threshold`, …).
+ */
+export function hubChainCall<Op extends keyof HubChainOps>(
+  op: Op,
+  request: HubChainOps[Op]['request'],
+): HubChainOps[Op]['answer'] {
+  const input = new TextEncoder().encode(JSON.stringify({ op, ...request }))
+  // Answers repeat the X-Wing keys the links name; the crate names the exact
+  // size when the first buffer is too small, as in sigchainVerify.
+  let out = new Uint8Array(input.length * 2 + 65536)
+  let written = lib.symbols.ffi_hub_chain(ptr(input), input.length, ptr(out), out.length)
+  if (written === OUTPUT_TOO_SMALL) {
+    const message = getLastError()
+    const need = /need (\d+)/.exec(message)
+    if (!need) throw new CryptoError(written, message)
+    out = new Uint8Array(Number(need[1]))
+    written = lib.symbols.ffi_hub_chain(ptr(input), input.length, ptr(out), out.length)
+  }
+  if (written < 0) checkResult(written)
+  return JSON.parse(new TextDecoder().decode(out.subarray(0, written))) as HubChainOps[Op]['answer']
 }
 
 export function ed25519PubkeyFromSeed(seed: Uint8Array): Uint8Array {
