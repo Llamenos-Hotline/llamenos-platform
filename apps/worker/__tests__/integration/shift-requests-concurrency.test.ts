@@ -29,55 +29,11 @@ import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { ShiftRequestsService } from '../../services/shift-requests'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables } from '../helpers/schema-ddl'
 
 const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_shift_requests_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-// Mirrors apps/worker/db/schema/shifts.ts + shift-requests.ts + ring-groups.ts.
-// FKs to hubs(id) are dropped — none of the exercised code paths validate
-// hub existence, and this isolated schema has no hubs table to reference.
-const DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.shifts (
-    id              TEXT PRIMARY KEY,
-    hub_id          TEXT,
-    encrypted_name  TEXT NOT NULL,
-    start_time      TEXT NOT NULL,
-    end_time        TEXT NOT NULL,
-    days            INT[] NOT NULL DEFAULT '{}'::int[],
-    ring_group_id   TEXT,
-    user_pubkeys    TEXT[] NOT NULL DEFAULT '{}'::text[],
-    created_by      TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-  CREATE TABLE ${TEST_SCHEMA}.ring_groups (
-    id              TEXT PRIMARY KEY,
-    hub_id          TEXT NOT NULL,
-    encrypted_name  TEXT NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-  CREATE TABLE ${TEST_SCHEMA}.ring_group_members (
-    ring_group_id  TEXT NOT NULL,
-    user_pubkey    TEXT NOT NULL,
-    added_by       TEXT NOT NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (ring_group_id, user_pubkey)
-  );
-  CREATE TABLE ${TEST_SCHEMA}.shift_join_requests (
-    id            TEXT PRIMARY KEY,
-    hub_id        TEXT NOT NULL,
-    shift_id      TEXT NOT NULL,
-    user_pubkey   TEXT NOT NULL,
-    type          TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'pending',
-    reviewed_by   TEXT,
-    reviewed_at   TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-  CREATE UNIQUE INDEX shift_join_requests_pending_unique_idx
-    ON ${TEST_SCHEMA}.shift_join_requests (shift_id, user_pubkey, type)
-    WHERE status = 'pending';
-`
 
 let adminSql: ReturnType<typeof postgres>
 let testSql: ReturnType<typeof postgres>
@@ -85,8 +41,12 @@ let service: ShiftRequestsService
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(DDL)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [
+    schema.shiftJoinRequests,
+    schema.shifts,
+    schema.ringGroups,
+    schema.ringGroupMembers,
+  ])
 
   // A multi-connection pool is required: the race only exists when the
   // concurrent approvals run on distinct connections.
@@ -105,10 +65,9 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await testSql`TRUNCATE TABLE shift_join_requests`
-  await testSql`TRUNCATE TABLE shifts`
-  await testSql`TRUNCATE TABLE ring_groups`
-  await testSql`TRUNCATE TABLE ring_group_members`
+  // One statement: the tables reference each other, and Postgres refuses to
+  // truncate a referenced table on its own.
+  await testSql`TRUNCATE TABLE shift_join_requests, shifts, ring_groups, ring_group_members`
 })
 
 async function makeShift(id: string, ringGroupId: string | null = null): Promise<void> {

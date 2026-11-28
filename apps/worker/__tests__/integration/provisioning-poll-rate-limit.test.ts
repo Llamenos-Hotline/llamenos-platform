@@ -42,30 +42,11 @@ import { createSettingsDomain } from '../../services/settings-domain'
 import { IdentityService } from '../../services/identity'
 import type { AppEnv } from '../../types'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables } from '../helpers/schema-ddl'
 
 const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_provision_poll_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-// Mirrors apps/worker/db/schema/settings.ts apiRateLimits +
-// apps/worker/db/schema/users.ts provisionRooms.
-const DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.api_rate_limits (
-    key           TEXT PRIMARY KEY,
-    count         INTEGER NOT NULL DEFAULT 1,
-    window_start  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-  CREATE TABLE ${TEST_SCHEMA}.provision_rooms (
-    room_id           TEXT PRIMARY KEY,
-    ephemeral_pubkey  TEXT NOT NULL,
-    token             TEXT NOT NULL,
-    status            TEXT NOT NULL DEFAULT 'waiting',
-    encrypted_nsec    TEXT,
-    primary_pubkey    TEXT,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at        TIMESTAMPTZ NOT NULL
-  );
-`
 
 const JSONB_TYPE = {
   to: 3802,
@@ -86,8 +67,7 @@ let app: Hono<AppEnv>
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(DDL)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [schema.apiRateLimits, schema.provisionRooms])
 
   testSql = postgres(DATABASE_URL, {
     max: 4,

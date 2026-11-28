@@ -15,6 +15,7 @@ import { ServiceError } from '../../services/service-error'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables } from '../helpers/schema-ddl'
 
 // CallsService seals §2.5 metadata via lib/crypto (#1684), which loads the
 // Rust library through bun:ffi — unavailable under Vitest's Node runtime.
@@ -24,55 +25,6 @@ vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-cryp
 const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_callvm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-const DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.active_calls (
-    crypto_format SMALLINT NOT NULL DEFAULT 1,
-    call_id TEXT PRIMARY KEY,
-    push_ref TEXT UNIQUE,
-    hub_id TEXT,
-    caller_number_sealed TEXT,
-    answered_by TEXT,
-    status TEXT NOT NULL DEFAULT 'ringing',
-    has_transcription BOOLEAN DEFAULT FALSE,
-    has_voicemail BOOLEAN DEFAULT FALSE,
-    has_recording BOOLEAN DEFAULT FALSE,
-    recording_sid TEXT,
-    reported_by TEXT,
-    ring_leg_sids TEXT[],
-    ring_set JSONB,
-    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    answered_at TIMESTAMPTZ,
-    ended_at TIMESTAMPTZ,
-    duration INTEGER
-  );
-  CREATE TABLE ${TEST_SCHEMA}.call_records (
-    crypto_format SMALLINT NOT NULL DEFAULT 1,
-    call_id TEXT PRIMARY KEY,
-    hub_id TEXT,
-    started_at TIMESTAMPTZ NOT NULL,
-    ended_at TIMESTAMPTZ,
-    duration INTEGER,
-    answered_by TEXT,
-    answered_at TIMESTAMPTZ,
-    status TEXT NOT NULL,
-    has_transcription BOOLEAN DEFAULT FALSE,
-    has_voicemail BOOLEAN DEFAULT FALSE,
-    has_recording BOOLEAN DEFAULT FALSE,
-    recording_sid TEXT,
-    encrypted_content TEXT NOT NULL,
-    admin_envelopes JSONB NOT NULL DEFAULT '[]',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-  -- endCall deletes the call's volunteer-leg tokens in the same transaction (#1073).
-  CREATE TABLE ${TEST_SCHEMA}.call_tokens (
-    token TEXT PRIMARY KEY,
-    call_sid TEXT NOT NULL,
-    volunteer_pubkey TEXT NOT NULL,
-    hub_id TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-`
 
 const JSONB_TYPE = {
   to: 3802,
@@ -100,8 +52,7 @@ let calls: CallsService
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(DDL)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [schema.activeCalls, schema.callRecords, schema.callTokens])
 
   testSql = postgres(DATABASE_URL, {
     max: 5,
