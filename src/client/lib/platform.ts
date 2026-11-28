@@ -66,6 +66,8 @@ export type TauriIpcCommand =
   | 'puk_unwrap_seed_from_state'
   | 'sigchain_create_link_from_state'
   | 'sigchain_verify'
+  | 'sigchain_verify_users'
+  | 'user_init_payload_from_state'
   | 'sigchain_verify_link'
   | 'sframe_derive_key'
   | 'hpke_unwrap_and_set_hub_key'
@@ -127,7 +129,13 @@ async function tauriInvoke<T>(cmd: TauriIpcCommand, args?: Record<string, unknow
 export interface DeviceKeyState {
   deviceId: string
   signingPubkeyHex: string      // Ed25519 (64 hex chars)
-  encryptionPubkeyHex: string   // X25519 (64 hex chars)
+  encryptionPubkeyHex: string   // X25519 (64 hex chars) — format-1 data, until the v2 cutover
+  /**
+   * X-Wing (2432 hex chars) — the device's crypto_format 2 key (wire spec D16),
+   * created once with the device, named in its `user_init` or `device_add`, and
+   * never redrawn.
+   */
+  kemPubkeyHex: string
 }
 
 /** PIN-encrypted device key blob for persistent storage. */
@@ -183,12 +191,24 @@ export interface SigchainLink {
   payloadJson: string    // Type-tagged JSON
 }
 
-/** Sigchain verification result. */
+/** An active device's X-Wing key, as its `user_init` / `device_add` link names it. */
+export interface ActiveDeviceKey {
+  devicePubkey: string
+  encryptionPubkey: string
+  format: number
+}
+
+/** Sigchain verification result (packages/crypto `SigchainVerifiedState`). */
 export interface SigchainVerifiedState {
+  userPubkey: string
   verifiedCount: number
   headSeq: number
   headHash: string
   activeDevicePubkeys: string[]
+  /** The X-Wing key of every active device (one each: user_init and device_add require it). */
+  activeDeviceKeys: ActiveDeviceKey[]
+  /** Every key the chain has ever named; another user's chain naming one is refused. */
+  namedKeys: string[]
 }
 
 // ── Device key management ───────────────────────────────────────────
@@ -503,6 +523,27 @@ export async function sigchainVerify(
   throw new Error('WASM sigchain verify not yet implemented')
 }
 
+/**
+ * This device's genesis `user_init` payload JSON (spec 2026-11-25 §5 as revised
+ * 2026-11-26): its Ed25519, X25519 and X-Wing keys, `format: 2` and the
+ * possession signature, made in Rust. Sign the link carrying it with
+ * `sigchainCreateLinkFromState`.
+ */
+export async function userInitPayloadFromState(): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('user_init_payload_from_state')
+  }
+  throw new Error('WASM user_init payload not yet implemented')
+}
+
+/** Verify several users' chains together, refusing cross-user key reuse (stateless). */
+export async function sigchainVerifyUsers(chains: SigchainLink[][]): Promise<SigchainVerifiedState[]> {
+  if (useTauri) {
+    return tauriInvoke<SigchainVerifiedState[]>('sigchain_verify_users', { chainsJson: JSON.stringify(chains) })
+  }
+  throw new Error('WASM sigchain verify not yet implemented')
+}
+
 /** Verify a single sigchain link (stateless). */
 export async function sigchainVerifyLink(
   link: SigchainLink,
@@ -769,6 +810,10 @@ export async function persistAndUnlockDeviceKeys(
   pin: string,
 ): Promise<DeviceKeyState | null> {
   const store = await getSecureStore()
+  // A head recorded for ANOTHER identity is not this one's; a restore or import
+  // of the same identity keeps it, so its rollback guard survives.
+  const head = await store.get<VerifiedSigchainHead>(SIGCHAIN_HEAD_KEY)
+  if (head && head.userPubkey !== encrypted.state.signingPubkeyHex) await store.delete(SIGCHAIN_HEAD_KEY)
   await store.set(STORE_KEY, encrypted)
   return unlockWithPin(encrypted, pin)
 }
@@ -784,6 +829,31 @@ export async function unlockStoredKeys(pin: string): Promise<DeviceKeyState | nu
   return unlockWithPin(data, pin)
 }
 
+const SIGCHAIN_HEAD_KEY = 'llamenos-verified-sigchain-head'
+
+/** The user-sigchain head this device last verified. */
+export interface VerifiedSigchainHead {
+  userPubkey: string
+  seq: number
+  hash: string
+}
+
+/**
+ * The last user-sigchain head this device verified (#2496), kept in the secure
+ * store with the device keys. A chain the server later serves that does not
+ * extend it — empty, shorter, or another hash at that seq — is a rollback or a
+ * fork, and is refused rather than re-initialised.
+ */
+export async function getVerifiedSigchainHead(): Promise<VerifiedSigchainHead | null> {
+  const store = await getSecureStore()
+  return (await store.get<VerifiedSigchainHead>(SIGCHAIN_HEAD_KEY)) ?? null
+}
+
+export async function setVerifiedSigchainHead(head: VerifiedSigchainHead): Promise<void> {
+  const store = await getSecureStore()
+  await store.set(SIGCHAIN_HEAD_KEY, head)
+}
+
 /** Check if encrypted device keys exist in store. */
 export async function hasStoredKey(): Promise<boolean> {
   const store = await getSecureStore()
@@ -795,6 +865,7 @@ export async function hasStoredKey(): Promise<boolean> {
 export async function clearStoredKey(): Promise<void> {
   const store = await getSecureStore()
   await store.delete(STORE_KEY)
+  await store.delete(SIGCHAIN_HEAD_KEY)
   await lockCrypto()
 }
 

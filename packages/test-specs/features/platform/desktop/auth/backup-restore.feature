@@ -4,7 +4,7 @@ Feature: Encrypted Backup Restore
   I want to restore my device key from the encrypted backup I downloaded
   So that I can sign in again without my old device
 
-  # The backup format itself (container v5, both KDFs, the cipher) is proven by
+  # The backup format itself (container v6, both KDFs, the cipher) is proven by
   # the round-trip tests over the real Rust codec in packages/crypto/src/backup.rs.
   # These scenarios prove the UI around it: that a backup written by the app can
   # be read back by the app, that a wrong credential is reported where it was
@@ -48,6 +48,13 @@ Feature: Encrypted Backup Restore
     Given I am on the login screen
     When I upload a version 3 backup file
     Then I should see "Invalid backup file"
+
+  # A v5 backup holds no X-Wing seed, so it cannot restore the key the user's
+  # chain names (#3053). It is refused by name, pointing at account recovery.
+  Scenario: A backup without the device's X-Wing key is refused by name
+    Given I am on the login screen
+    When I upload a version 5 backup file
+    Then I should see "This backup doesn't contain this device's post-quantum encryption key"
 
   # The same flow, with no pointer: every control is reached by Tab and operated
   # by Enter or typing, focus lands where the next input is, and each field

@@ -115,12 +115,9 @@ final class AuthService {
         let deviceId = UUID().uuidString
         let encrypted = try cryptoService.generateDeviceKeys(deviceId: deviceId, pin: pin)
 
-        // Persist the encrypted device key blob
-        let jsonData = try JSONEncoder().encode(encrypted)
-        try keychainService.store(key: KeychainKey.encryptedKeys, data: jsonData)
-
-        // Store device ID for sigchain
-        try keychainService.storeString(deviceId, key: KeychainKey.deviceID)
+        // A new device identity: the sigchain head recorded for a previous one
+        // is not its, and storeDeviceKeys clears it (#2496).
+        try storeDeviceKeys(encrypted)
 
         // Store biometric preference
         let biometricByte: Data = enableBiometric ? Data([1]) : Data([0])
@@ -134,6 +131,52 @@ final class AuthService {
         isBiometricEnabled = enableBiometric
 
         return encrypted.state
+    }
+
+    // MARK: - Restore (device backup, v6)
+
+    /// Restore this device's identity from a backup file under a new `pin`. Rust
+    /// opens the backup and loads the recovered seeds (the X-Wing one included,
+    /// #3053); only the re-encrypted blob comes back, and it is stored through
+    /// `storeDeviceKeys`, so a sigchain head a different identity left on this
+    /// device is cleared rather than failing the restored one's identity check
+    /// closed (#3051). A head for the same identity is kept. Biometric unlock is
+    /// left off: it is re-enabled against the new PIN.
+    ///
+    /// Returns the restored DeviceKeyState (public keys).
+    func restoreIdentity(
+        backupJson: String, credential: String, isRecoveryKey: Bool, pin: String
+    ) throws -> DeviceKeyState {
+        try validatePIN(pin)
+        let encrypted = try cryptoService.restoreBackup(
+            backupJson: backupJson, credential: credential, isRecoveryKey: isRecoveryKey,
+            newPin: pin, deviceId: UUID().uuidString
+        )
+        try storeDeviceKeys(encrypted)
+        try keychainService.store(key: KeychainKey.biometricEnabled, data: Data([0]))
+        keychainService.deleteBiometricPIN()
+        hasStoredKeys = true
+        isBiometricEnabled = false
+        return encrypted.state
+    }
+
+    /// Persist `encrypted` as this device's keys — the one write every identity
+    /// source goes through: a newly generated identity and a restored backup alike.
+    ///
+    /// The sigchain head recorded for ANOTHER identity is deleted: it is not this
+    /// identity's, and left in place it fails `DeviceIdentityService.ensureIdentity`
+    /// closed for good (#3051). A head for the SAME identity — a restore of it — is
+    /// kept, so its rollback guard survives the restore. A head that cannot be read
+    /// is treated as another identity's.
+    private func storeDeviceKeys(_ encrypted: EncryptedDeviceKeys) throws {
+        let headUser = (try? keychainService.retrieveString(key: KeychainKey.sigchainHead))?
+            .split(separator: ":").first.map(String.init)
+        if headUser != encrypted.state.signingPubkeyHex {
+            keychainService.delete(key: KeychainKey.sigchainHead)
+        }
+        try keychainService.store(key: KeychainKey.encryptedKeys, data: try JSONEncoder().encode(encrypted))
+        // Device ID for the sigchain.
+        try keychainService.storeString(encrypted.state.deviceId, key: KeychainKey.deviceID)
     }
 
     // MARK: - PIN Unlock

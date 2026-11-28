@@ -633,6 +633,7 @@ fn generate_and_verify_test_vectors() {
     let primary_secrets = llamenos_core::device_keys::DeviceSecrets {
         signing_seed: [0x11u8; 32],
         encryption_seed: [0x22u8; 32],
+        kem_seed: [0x44u8; 32],
     };
     let primary_signing_pubkey = hex::encode(primary_secrets.signing_pubkey().to_bytes());
     let primary_encryption_pubkey = hex::encode(primary_secrets.encryption_pubkey().to_bytes());

@@ -66,6 +66,7 @@ class CryptoServiceTest {
                 deviceId = "test",
                 signingPubkeyHex = "a".repeat(64),
                 encryptionPubkeyHex = "b".repeat(64),
+                kemPubkeyHex = "e".repeat(2432),
             ),
         )
         cryptoService.unlockWithPin(data, "1234")

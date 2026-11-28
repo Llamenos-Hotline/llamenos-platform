@@ -15,8 +15,6 @@ import org.llamenos.hotline.crypto.BiometricKeyInvalidatedException
 import org.llamenos.hotline.crypto.BiometricKeyStore
 import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
-import org.llamenos.hotline.crypto.DeviceKeyState
-import org.llamenos.hotline.crypto.EncryptedDeviceKeys
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.NativeCryptoLibraryMissingException
@@ -110,21 +108,7 @@ class BiometricSettingsViewModel @Inject constructor(
             }
 
             try {
-                val storedData = json.decodeFromString<StoredKeyData>(storedJson)
-                val encryptedData = EncryptedDeviceKeys(
-                    kdfVersion = storedData.kdfVersion,
-                    salt = storedData.salt,
-                    argon2MCost = storedData.argon2MCost,
-                    argon2TCost = storedData.argon2TCost,
-                    argon2PCost = storedData.argon2PCost,
-                    nonce = storedData.nonce,
-                    ciphertext = storedData.ciphertext,
-                    state = DeviceKeyState(
-                        deviceId = storedData.deviceId,
-                        signingPubkeyHex = storedData.signingPubkeyHex,
-                        encryptionPubkeyHex = storedData.encryptionPubkeyHex,
-                    ),
-                )
+                val encryptedData = json.decodeFromString<StoredKeyData>(storedJson).toEncrypted()
 
                 // Verifies the PIN by attempting the real decrypt — throws on a wrong PIN.
                 // This re-loads the same identity that's already unlocked in this session,

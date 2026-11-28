@@ -90,6 +90,18 @@ export const EXPECTED_CONSOLE_ERRORS: readonly ExpectedConsoleError[] = [
     reason: 'losing the hub-key compare-and-set is a 409 by contract; the key manager loads the winner\'s key',
   },
   {
+    // Chromium logs every non-2xx response, whether or not the app handles it.
+    // `POST /api/users/:pubkey/sigchain` refuses an append whose seq or prevHash
+    // is not the chain head with a 409 (`appendValidatedSigchainLink`): another
+    // window of the same user appended first. `retryOnChainConflict`
+    // (src/client/lib/user-identity.ts) re-reads the chain and either finds the
+    // link already there or appends after it (#2496: two windows of a user with
+    // no chain yet both running the genesis / first-PUK steps).
+    message: /^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    source: /\/api\/users\/[0-9a-f]{64}\/sigchain$/,
+    reason: 'losing the sigchain append race is a 409 by contract; the identity step re-reads the chain and retries',
+  },
+  {
     // Chromium aborts in-flight requests with this when ANY host network
     // interface changes (a container starting, a VPN reconnecting). It says
     // nothing about the page, and a load that genuinely needed the resource

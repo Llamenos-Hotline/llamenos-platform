@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "इस बैकअप में इस डिवाइस की पोस्ट-क्वांटम एन्क्रिप्शन कुंजी नहीं है, इसलिए यह डिवाइस को पुनर्स्थापित नहीं कर सकता। इसके बजाय नया डिवाइस सेट करने के लिए खाता पुनर्प्राप्ति का उपयोग करें।",
     "invalidKey": "अमान्य गुप्त कुंजी",
     "login": "लॉग इन करें",
     "loginDescription": "हॉटलाइन तक पहुंचने के लिए अपनी गुप्त कुंजी दर्ज करें",

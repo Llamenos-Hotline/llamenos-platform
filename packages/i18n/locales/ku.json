@@ -182,6 +182,7 @@
     "decryptFailed": "Şîfrevekirina hilanînê bi ser neket",
     "dropOrChoose": "Pelê hilanînê bavêje an hilbijêre",
     "invalidBackup": "Pelê hilanînê ne derbasdar e",
+    "backupMissingXwingSeed": "Ev paşeyî mifteya şîfrekirinê ya post-kuantûmê ya vê cîhazê nahewîne, ji ber vê yekê nikare cîhazê vegerîne. Li şûna wê, ji bo sazkirina cîhazeke nû vegerandina hesabê bi kar bîne.",
     "invalidKey": "Kilîda nepenî ne derbasdar e",
     "login": "Têkeve",
     "loginDescription": "Kilîda xwe ya nepenî binivîse da ku bigihîjî xeta alîkariyê",

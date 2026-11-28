@@ -14,6 +14,26 @@ private func ffiMobileUnlock(data: EncryptedDeviceKeys, pin: String) throws -> D
     try mobileUnlock(data: data, pin: pin)
 }
 
+private func ffiMobileUserInitPayload() throws -> String {
+    try mobileUserInitPayload()
+}
+
+private func ffiMobileSigchainVerifyUsers(chainsJson: String) throws -> [SigchainVerifiedState] {
+    try mobileSigchainVerifyUsers(chainsJson: chainsJson)
+}
+
+private func ffiMobileCreateBackup(pin: String, recoveryKey: String) throws -> String {
+    try mobileCreateBackup(pin: pin, recoveryKey: recoveryKey)
+}
+
+private func ffiMobileRestoreBackupAndLoad(
+    backupJson: String, credential: String, isRecoveryKey: Bool, newPin: String, deviceId: String
+) throws -> EncryptedDeviceKeys {
+    try mobileRestoreBackupAndLoad(
+        backupJson: backupJson, credential: credential, isRecoveryKey: isRecoveryKey, newPin: newPin, deviceId: deviceId
+    )
+}
+
 private func ffiMobileLock() {
     mobileLock()
 }
@@ -219,6 +239,8 @@ final class CryptoService: @unchecked Sendable {
     private(set) var signingPubkeyHex: String?
     private(set) var encryptionPubkeyHex: String?
     private(set) var deviceId: String?
+    /// This device's X-Wing public key, once unlocked (crypto_format 2, wire spec D16).
+    private(set) var kemPubkeyHex: String?
     var pubkey: String? { encryptionPubkeyHex }
     var isUnlocked: Bool { ffiMobileIsUnlocked() }
     var hasIdentity: Bool { signingPubkeyHex != nil }
@@ -228,20 +250,68 @@ final class CryptoService: @unchecked Sendable {
     func generateDeviceKeys(deviceId: String, pin: String) throws -> EncryptedDeviceKeys {
         guard ffiMobileIsValidPin(pin) else { throw CryptoServiceError.invalidPin }
         let encrypted = try ffiMobileGenerateAndLoad(deviceId: deviceId, pin: pin)
-        self.signingPubkeyHex = encrypted.state.signingPubkeyHex
-        self.encryptionPubkeyHex = encrypted.state.encryptionPubkeyHex
-        self.deviceId = encrypted.state.deviceId
+        adopt(encrypted.state)
         return encrypted
     }
 
     // MARK: - Unlock / Lock
 
+    /// Unlock the stored device keys. Unlocking only reads the device's X-Wing
+    /// seed; it is never redrawn (#2496).
     func unlockWithPin(data: EncryptedDeviceKeys, pin: String) throws -> DeviceKeyState {
         let ds = try ffiMobileUnlock(data: data, pin: pin)
+        adopt(ds)
+        return ds
+    }
+
+    private func adopt(_ ds: DeviceKeyState) {
         self.signingPubkeyHex = ds.signingPubkeyHex
         self.encryptionPubkeyHex = ds.encryptionPubkeyHex
+        self.kemPubkeyHex = ds.kemPubkeyHex
         self.deviceId = ds.deviceId
-        return ds
+    }
+
+    /// This device's genesis `user_init` payload JSON (spec 2026-11-25 §5 as
+    /// revised 2026-11-26): its Ed25519, X25519 and X-Wing keys, `format: 2` and
+    /// the possession signature, made in Rust. Sign the link carrying it with
+    /// `createSigchainLink`.
+    func userInitPayload() throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        return try ffiMobileUserInitPayload()
+    }
+
+    /// Verify several users' chains together (spec §6): each chain verified,
+    /// then any key named by two users' chains refused (`chain_key_reused`).
+    func verifySigchains(chainsJson: String) throws -> [SigchainVerifiedState] {
+        try ffiMobileSigchainVerifyUsers(chainsJson: chainsJson)
+    }
+
+    // MARK: - Device backup (packages/crypto backup.rs, v6)
+
+    /// A fresh recovery key for display: base32, dash-grouped.
+    func generateRecoveryKey() -> String {
+        mobileGenerateRecoveryKey()
+    }
+
+    /// The loaded device's backup file (JSON): its three seeds — signing, X25519
+    /// and X-Wing — sealed under `pin` and `recoveryKey`. The seeds never leave Rust.
+    func createBackup(pin: String, recoveryKey: String) throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        return try ffiMobileCreateBackup(pin: pin, recoveryKey: recoveryKey)
+    }
+
+    /// Restore a device from a backup file and load it, re-encrypted under
+    /// `newPin`. The X-Wing key comes back with the other two, so it is the one
+    /// the user's chain names (#3053). A backup without the X-Wing seed throws
+    /// `CryptoError.BackupMissingXwingSeed` — it is never half-restored.
+    func restoreBackup(
+        backupJson: String, credential: String, isRecoveryKey: Bool, newPin: String, deviceId: String
+    ) throws -> EncryptedDeviceKeys {
+        let encrypted = try ffiMobileRestoreBackupAndLoad(
+            backupJson: backupJson, credential: credential, isRecoveryKey: isRecoveryKey, newPin: newPin, deviceId: deviceId
+        )
+        adopt(encrypted.state)
+        return encrypted
     }
 
     /// Lock the crypto state — zeroize device secrets, hub keys, and server event keys in Rust.
@@ -440,6 +510,12 @@ final class CryptoService: @unchecked Sendable {
     func createSigchainLink(id: String, seq: UInt64, prevHash: String?, timestamp: String, payloadJson: String) throws -> SigchainLink {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
         return try ffiMobileSigchainCreateLink(id: id, seq: seq, prevHash: prevHash, timestamp: timestamp, payloadJson: payloadJson)
+    }
+
+    /// Verify a whole user sigchain through packages/crypto `verify_sigchain`
+    /// (stateless). `linksJson` is a JSON array of the crate's `SigchainLink`.
+    func verifySigchain(linksJson: String) throws -> SigchainVerifiedState {
+        try mobileSigchainVerify(linksJson: linksJson)
     }
 
     /// Verify a single sigchain link's Ed25519 signature against an expected signer pubkey.

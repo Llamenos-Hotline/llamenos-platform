@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "Walang post-quantum na encryption key ng device na ito ang backup na ito, kaya hindi nito maibabalik ang device. Gamitin na lang ang account recovery para mag-set up ng bagong device.",
     "invalidKey": "Hindi valid ang secret key",
     "login": "Mag-log in",
     "loginDescription": "Ilagay ang iyong secret key para ma-access ang hotline",

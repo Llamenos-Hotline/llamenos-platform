@@ -218,6 +218,10 @@ val copyCryptoVectors by tasks.registering(CopyCryptoVectors::class) {
         // The crate-generated v2 vectors (spec D15), read by ServerEventInteropTest.
         file("$fixtures/v2/server-event.json"),
         file("$fixtures/v2/hpke-wrap.json"),
+        // Device key binding (#2496), read by DeviceBindingVectorTest.
+        file("$fixtures/v2/device-binding.json"),
+        // A v5 backup, which holds no X-Wing seed: refused by DeviceBackupTest (#3053).
+        file("$fixtures/backup-v5-without-xwing-seed.json"),
     )
 }
 

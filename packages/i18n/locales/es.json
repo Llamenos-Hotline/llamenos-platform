@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "Esta copia de seguridad no contiene la clave de cifrado poscuántica de este dispositivo, por lo que no puede restaurarlo. Usa la recuperación de cuenta para configurar un dispositivo nuevo.",
     "invalidKey": "Clave secreta inválida",
     "login": "Iniciar sesión",
     "loginDescription": "Ingrese su clave secreta para acceder a la línea de ayuda",

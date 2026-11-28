@@ -5,7 +5,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -14,6 +13,7 @@ import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.PinLockoutState
 import org.llamenos.hotline.steps.BaseSteps
+import org.llamenos.hotline.ui.auth.StoredKeyData
 
 /**
  * Step definitions for pin-lockout.feature scenarios.
@@ -36,19 +36,6 @@ class PinLockoutSteps : BaseSteps() {
         InstrumentationRegistry.getInstrumentation().targetContext
     )
 
-    @Serializable
-    private data class StoredKeyData(
-        val ciphertext: String,
-        val salt: String,
-        val nonce: String,
-        val signingPubkeyHex: String,
-        val encryptionPubkeyHex: String,
-        val deviceId: String,
-        val kdfVersion: UByte = 2u,
-        val argon2MCost: UInt = 65_536u,
-        val argon2TCost: UInt = 3u,
-        val argon2PCost: UInt = 4u,
-    )
 
     /**
      * Pre-seed the failed attempt counter to a specific count.
@@ -71,18 +58,7 @@ class PinLockoutSteps : BaseSteps() {
                     val deviceId = java.util.UUID.randomUUID().toString()
                     val encrypted = cryptoService.generateDeviceKeys(deviceId, "12345678")
                     val stored = Json.encodeToString(
-                        StoredKeyData(
-                            kdfVersion = encrypted.kdfVersion,
-                            salt = encrypted.salt,
-                            argon2MCost = encrypted.argon2MCost,
-                            argon2TCost = encrypted.argon2TCost,
-                            argon2PCost = encrypted.argon2PCost,
-                            nonce = encrypted.nonce,
-                            ciphertext = encrypted.ciphertext,
-                            signingPubkeyHex = encrypted.state.signingPubkeyHex,
-                            encryptionPubkeyHex = encrypted.state.encryptionPubkeyHex,
-                            deviceId = encrypted.state.deviceId,
-                        )
+                        StoredKeyData.of(encrypted)
                     )
                     keystoreService.store(KeystoreService.KEY_ENCRYPTED_KEYS, stored)
                     keystoreService.store(KeystoreService.KEY_SIGNING_PUBKEY, cryptoService.signingPubkeyHex!!)

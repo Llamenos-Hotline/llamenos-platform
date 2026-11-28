@@ -11,9 +11,35 @@ import type { SigchainLinkType } from '@protocol/schemas/sigchain'
 
 // Mock ed25519Verify for sigchain signature validation
 const mockEd25519Verify = vi.fn().mockReturnValue(true)
-vi.mock('@llamenos/crypto/ffi', () => ({
-  ed25519Verify: (...args: unknown[]) => mockEd25519Verify(...args),
-}))
+// A genesis / device_add is verified with the whole chain by the crate. Here the
+// verifier is a spy: what the service hands it and how it surfaces a refusal are
+// asserted; the crate's own rules run under bun:ffi against the shared vectors
+// (integration-bun/device-key-binding.test.ts).
+const mockSigchainVerify = vi.fn()
+vi.mock('@llamenos/crypto/ffi', () => {
+  // The real class's shape: `reason` is the crate's code, parsed off the message.
+  class CryptoError extends Error {
+    readonly reason: string | null
+    constructor(readonly code: number, message: string) {
+      super(message)
+      this.reason = /^([a-z_]+): /.exec(message)?.[1] ?? null
+    }
+  }
+  return {
+    ed25519Verify: (...args: unknown[]) => mockEd25519Verify(...args),
+    sigchainVerify: (...args: unknown[]) => mockSigchainVerify(...args),
+    CryptoError,
+  }
+})
+
+// Device key claims (#2496) write to their own table; here they are a spy, and
+// what each append claims is asserted. The real claim runs against Postgres in
+// integration-bun/device-key-binding.test.ts.
+const mockClaimDeviceKeys = vi.fn().mockResolvedValue(undefined)
+vi.mock('../../lib/device-key-claims', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/device-key-claims')>()
+  return { ...actual, claimDeviceKeys: (...args: unknown[]) => mockClaimDeviceKeys(...args) }
+})
 
 const mockHexToBytes = vi.fn().mockImplementation((hex: string) =>
   new Uint8Array(hex.match(/.{2}/g)?.map(b => parseInt(b, 16)) ?? [])
@@ -127,11 +153,17 @@ const SIGNER_DEVICE_ID = 'dev-1'
 const SIGNER_PUBKEY = 'aa'.repeat(32)
 // Every generic link is signed by the user's identity key, so the signer IS the user.
 const USER_PUBKEY = SIGNER_PUBKEY
+/** Shape-valid X-Wing key and pop: the crate verifier that checks them is a spy here. */
+const XWING = 'ee'.repeat(1216)
+const POP = 'ff'.repeat(64)
 const GENESIS_PAYLOAD = {
   type: 'user_init',
   deviceId: SIGNER_DEVICE_ID,
   devicePubkey: SIGNER_PUBKEY,
   deviceEncryptionPubkey: 'bb'.repeat(32),
+  encryptionPubkey: XWING,
+  format: 2,
+  pop: POP,
 }
 const DEVICE_ADD_PAYLOAD = {
   type: 'device_add',
@@ -139,6 +171,8 @@ const DEVICE_ADD_PAYLOAD = {
   devicePubkey: 'cc'.repeat(32),
   deviceEncryptionPubkey: 'dd'.repeat(32),
 }
+/** A continuity test's link: any type the crate need not verify with the chain. */
+const PUK_EPOCH_PAYLOAD = { type: 'puk_epoch', generation: 1, signPubkey: '11'.repeat(32), dhPubkey: '22'.repeat(32) }
 const TIMESTAMP = '2026-01-01T00:00:00Z'
 
 function makeLinkBody(overrides: {
@@ -360,8 +394,8 @@ describe('CryptoKeysService — Sigchain', () => {
 
       const body = makeLinkBody({
         seqNo: 2,
-        linkType: 'device_add',
-        payload: DEVICE_ADD_PAYLOAD,
+        linkType: 'puk_epoch',
+        payload: PUK_EPOCH_PAYLOAD,
         prevHash: 'aa'.repeat(32),
       })
 
@@ -414,8 +448,8 @@ describe('CryptoKeysService — Sigchain', () => {
 
       const body = makeLinkBody({
         seqNo: 5, // should be 2
-        linkType: 'device_add',
-        payload: DEVICE_ADD_PAYLOAD,
+        linkType: 'puk_epoch',
+        payload: PUK_EPOCH_PAYLOAD,
         prevHash: 'h1',
       })
 
@@ -449,8 +483,8 @@ describe('CryptoKeysService — Sigchain', () => {
 
       const body = makeLinkBody({
         seqNo: 2,
-        linkType: 'device_add',
-        payload: DEVICE_ADD_PAYLOAD,
+        linkType: 'puk_epoch',
+        payload: PUK_EPOCH_PAYLOAD,
         prevHash: 'wrong-hash', // should be 'h1'
       })
 
@@ -577,6 +611,117 @@ describe('CryptoKeysService — Sigchain', () => {
       })
       const svc = new CryptoKeysService(makeHeadDb([makeLink({ seqNo: 1, hash: 'h1' })]) as never)
       await expect(svc.appendSigchainLink(USER_PUBKEY, body)).resolves.toMatchObject({ seqNo: 2 })
+    })
+  })
+
+  describe('appendSigchainLink — device key binding (#2496)', () => {
+    function headDb(head: MockLink[]) {
+      return withTx({
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(head) }),
+            }),
+          }),
+        }),
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([makeLink({ seqNo: 1, hash: 'x' })]),
+          }),
+        }),
+      })
+    }
+    beforeEach(() => {
+      mockClaimDeviceKeys.mockReset().mockResolvedValue(undefined)
+      mockSigchainVerify.mockReset()
+    })
+
+    it('verifies a genesis through the crate, as the chain\'s only link', async () => {
+      const body = makeLinkBody({ seqNo: 1, linkType: 'genesis', payload: GENESIS_PAYLOAD, prevHash: null })
+      await new CryptoKeysService(headDb([]) as never).appendSigchainLink(USER_PUBKEY, body)
+      expect(mockSigchainVerify).toHaveBeenCalledTimes(1)
+      const [chain] = mockSigchainVerify.mock.calls[0] as [Array<{ seq: number; prevHash: string | null; payloadJson: string }>]
+      expect(chain).toHaveLength(1)
+      expect(chain[0].seq).toBe(1)
+      expect(chain[0].prevHash).toBeNull()
+      expect(JSON.parse(chain[0].payloadJson)).toEqual(GENESIS_PAYLOAD)
+    })
+
+    it('surfaces the crate\'s refusal of a genesis pop as 400 with its code, writing nothing', async () => {
+      const { CryptoError } = await import('@llamenos/crypto/ffi')
+      mockSigchainVerify.mockImplementationOnce(() => {
+        throw new CryptoError(-5, 'chain_device_pop: possession signature does not verify')
+      })
+      const db = headDb([])
+      const body = makeLinkBody({ seqNo: 1, linkType: 'genesis', payload: GENESIS_PAYLOAD, prevHash: null })
+      const err = await new CryptoKeysService(db as never).appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect(err).toBeInstanceOf(CryptoKeyError)
+      expect((err as CryptoKeyError).status).toBe(400)
+      expect((err as CryptoKeyError).code).toBe('chain_device_pop')
+      expect(db.insert).not.toHaveBeenCalled()
+    })
+
+    it('refuses the pre-v2 genesis shape, which names no X-Wing key', async () => {
+      const { encryptionPubkey: _k, format: _f, pop: _p, ...preV2 } = GENESIS_PAYLOAD
+      const body = makeLinkBody({ seqNo: 1, linkType: 'genesis', payload: preV2, prevHash: null })
+      const err = await new CryptoKeysService(headDb([]) as never).appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect((err as CryptoKeyError).status).toBe(400)
+      expect((err as CryptoKeyError).message).toContain('invalid genesis payload')
+      expect(mockSigchainVerify).not.toHaveBeenCalled()
+    })
+
+    it('refuses a genesis naming an X25519 key where its X-Wing key goes', async () => {
+      const body = makeLinkBody({
+        seqNo: 1, linkType: 'genesis', prevHash: null,
+        payload: { ...GENESIS_PAYLOAD, encryptionPubkey: 'bb'.repeat(32) },
+      })
+      const err = await new CryptoKeysService(headDb([]) as never).appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect((err as CryptoKeyError).status).toBe(400)
+      expect((err as CryptoKeyError).message).toContain('invalid genesis payload')
+    })
+
+    it('claims the genesis device\'s signing, X25519 and X-Wing keys for the user', async () => {
+      const body = makeLinkBody({ seqNo: 1, linkType: 'genesis', payload: GENESIS_PAYLOAD, prevHash: null })
+      await new CryptoKeysService(headDb([]) as never).appendSigchainLink(USER_PUBKEY, body)
+      expect(mockClaimDeviceKeys).toHaveBeenCalledTimes(1)
+      const [, user, claimed] = mockClaimDeviceKeys.mock.calls[0]
+      expect(user).toBe(USER_PUBKEY)
+      expect(claimed).toEqual([
+        { key: SIGNER_PUBKEY, kind: 'signing' },
+        { key: SIGNER_PUBKEY, kind: 'signing' },
+        { key: 'bb'.repeat(32), kind: 'encryption' },
+        { key: XWING, kind: 'encryption' },
+      ])
+    })
+
+    it('refuses a key another user holds with 409 key_reused, writing nothing', async () => {
+      const { DeviceKeyReusedError } = await import('../../lib/device-key-claims')
+      mockClaimDeviceKeys.mockRejectedValueOnce(new DeviceKeyReusedError())
+      const db = headDb([])
+      const body = makeLinkBody({ seqNo: 1, linkType: 'genesis', payload: GENESIS_PAYLOAD, prevHash: null })
+      const err = await new CryptoKeysService(db as never).appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect(err).toBeInstanceOf(CryptoKeyError)
+      expect((err as CryptoKeyError).status).toBe(409)
+      expect((err as CryptoKeyError).code).toBe('key_reused')
+      expect(db.insert).not.toHaveBeenCalled()
+    })
+
+    it('refuses a device_add without the new device\'s X-Wing key and pop', async () => {
+      const body = makeLinkBody({ seqNo: 2, linkType: 'device_add', payload: DEVICE_ADD_PAYLOAD, prevHash: 'h1' })
+      const err = await new CryptoKeysService(headDb([makeLink({ seqNo: 1, hash: 'h1' })]) as never)
+        .appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect((err as CryptoKeyError).status).toBe(400)
+      expect((err as CryptoKeyError).message).toContain('invalid device_add payload')
+    })
+
+    it('refuses a link type it does not define', async () => {
+      const payload = { type: 'not_a_link_type', devicePubkey: SIGNER_PUBKEY, format: 2, encryptionPubkey: XWING, pop: POP }
+      const body = makeLinkBody({ seqNo: 2, linkType: ('not_a_link_type' as string) as SigchainLinkType, payload, prevHash: 'h1' })
+      const err = await new CryptoKeysService(headDb([makeLink({ seqNo: 1, hash: 'h1' })]) as never)
+        .appendSigchainLink(USER_PUBKEY, body).catch(e => e)
+      expect(err).toBeInstanceOf(CryptoKeyError)
+      expect((err as CryptoKeyError).status).toBe(400)
+      expect((err as CryptoKeyError).message).toContain('unknown sigchain link type')
     })
   })
 

@@ -10,6 +10,8 @@
 import { describe, expect, it } from 'vitest'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { x25519 } from '@noble/curves/ed25519.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js'
 import { computeEntryHash } from '@worker/services/crypto-keys'
 import { hpkeOpenMock } from '../../../../tests/mocks/hpke-mock'
 import {
@@ -17,12 +19,20 @@ import {
   createInitialPukMock,
   createSigchainLinkMock,
   derivePukSubkeysMock,
+  DEVICE_KEM_FORMAT,
+  devicePopMessageMock,
   pukWrapAad,
+  signDevicePopMock,
+  userInitPayloadMock,
+  verifyUserSigchainsMock,
   verifySigchainLinkMock,
   verifySigchainMock,
   type MockSigchainLink,
 } from '../../../../tests/mocks/sigchain-mock'
 import { LABEL_PUK_WRAP_TO_DEVICE } from '@shared/crypto-labels'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { hexToBytes } from '@noble/hashes/utils.js'
 import { sigchainGenesisPayloadSchema, sigchainPukEpochPayloadSchema } from '@protocol/schemas/sigchain'
 
 // ── packages/crypto/src/sigchain.rs test_cross_language_vectors ──────────
@@ -47,6 +57,7 @@ const CROSS_LANGUAGE = [
 // ── packages/crypto/tests/identity_init.rs ────────────────────────────
 const DEVICE_SIGNING_SEED = new Uint8Array(32).fill(0x11)
 const DEVICE_ENCRYPTION_SEED = new Uint8Array(32).fill(0x22)
+const DEVICE_KEM_SEED = new Uint8Array(32).fill(0x44)
 const PUK_SEED = new Uint8Array(32).fill(0x33)
 const DEVICE_ID = 'device-genesis-001'
 const GENESIS_TIMESTAMP = '2026-09-26T00:00:00.000Z'
@@ -56,18 +67,27 @@ const DEVICE_SIGNING_PUBKEY = 'd04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8
 const DEVICE_ENCRYPTION_PUBKEY = '0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20'
 const PUK_SIGN_PUBKEY = 'a4ed4a7ec643c741dbba79154761afa9eefd736e41de49cbe7eca73f45c10372'
 const PUK_DH_PUBKEY = '9022243e22195ddbe4e0953be4bb6e7dab8f9b39b45a910e8b038e177add7949'
-const GENESIS_ENTRY_HASH = '1e8fd94271f2843d67dffb611360e52900886edfaadb1aa4fa425d3dd3a49b72'
-const GENESIS_SIGNATURE = '5e7564725530af584275e656c3449615b09c4ad6c882815e193cacff32e939881ed79c331018340f7f2ebcfad3b9d9a0b40f150f92a98ea5f15c3db5dbd4e90d'
-const PUK_EPOCH_ENTRY_HASH = '3d3335d5be5d50e7544ae84758dc99457447cd0e59cfcb640f1abcecbfc83272'
-const PUK_EPOCH_SIGNATURE = '0b00c9314d162e5ab14be0dea45178580e0af158d27ca1e54756c28547af4b5c489f8383c0fc166dda06478a09a7d0ef2c703644a9cba48f1e9fd86cb4d78f08'
+const DEVICE_KEM_PUBKEY_SHA256 = '0d952cc4e7f6d0c663756af1e9bd03f3df4112f62909eb8e8ea575703a130809'
+const GENESIS_POP = '646c84c3c43ffb8d14614e72b17e3eb2ddd736ce0c10c065f5c3c1dad7fed617e735b05aa3defc088e7409790ad0443697871fcd185dd74611777eeb46a3b704'
+const GENESIS_ENTRY_HASH = '7dfa75be549821b49ad6ee398762b708ab107a73c4d316cb4d424db2e018ee22'
+const GENESIS_SIGNATURE = '52754e1361a6003f963c2ac48ab9646c3285ebc52836b785c589326a65bbe01271616406b60c35a5674f91a3e6914b988e1cb9e5f6f386145c09842ada80060f'
+const PUK_EPOCH_ENTRY_HASH = 'cc2a325f75a1d8bd8fb51817e1d1fc3a90f78c40fc6de71498977e251169ea93'
+const PUK_EPOCH_SIGNATURE = 'ff725cfdaa519bd2a17468ad1d49b74b823d554d28fe354651231bad6276478a1fee2be8752dbe22e66ebafc791a6ea8aea17574546f16c06130bad739b1d804'
+
+/** The device's X-Wing public key, as `device_keys::xwing_public_key` derives it from its seed. */
+const DEVICE_KEM_PUBKEY = bytesToHex(ml_kem768_x25519.keygen(DEVICE_KEM_SEED).publicKey)
 
 /** The identity-init chain exactly as identity_init.rs builds it (same payload key order). */
 function buildIdentityInitChain(): MockSigchainLink[] {
   const devicePubkey = DEVICE_SIGNING_PUBKEY
   const deviceEncryptionPubkey = bytesToHex(x25519.getPublicKey(DEVICE_ENCRYPTION_SEED))
+  const pop = signDevicePopMock(DEVICE_SIGNING_SEED, devicePubkey, DEVICE_KEM_PUBKEY, DEVICE_KEM_FORMAT)
   const genesis = createSigchainLinkMock(
     DEVICE_SIGNING_SEED, 'link-genesis', DEVICE_ID, 1, null, GENESIS_TIMESTAMP,
-    JSON.stringify({ type: 'user_init', deviceId: DEVICE_ID, devicePubkey, deviceEncryptionPubkey }),
+    JSON.stringify({
+      type: 'user_init', deviceId: DEVICE_ID, devicePubkey, deviceEncryptionPubkey,
+      encryptionPubkey: DEVICE_KEM_PUBKEY, format: DEVICE_KEM_FORMAT, pop,
+    }),
   )
   const puk = derivePukSubkeysMock(PUK_SEED, 1)
   const epoch = createSigchainLinkMock(
@@ -90,6 +110,8 @@ describe('sigchain entry hash — Rust cross-language vectors', () => {
 describe('identity initialisation — Rust identity_init.rs vectors', () => {
   it('derives the same device and PUK public keys', () => {
     expect(bytesToHex(x25519.getPublicKey(DEVICE_ENCRYPTION_SEED))).toBe(DEVICE_ENCRYPTION_PUBKEY)
+    // noble's X-Wing keygen from a 32-byte seed is the crate's.
+    expect(bytesToHex(sha256(hexToBytes(DEVICE_KEM_PUBKEY)))).toBe(DEVICE_KEM_PUBKEY_SHA256)
     expect(derivePukSubkeysMock(PUK_SEED, 1)).toEqual({
       generation: 1,
       signPubkeyHex: PUK_SIGN_PUBKEY,
@@ -109,6 +131,13 @@ describe('identity initialisation — Rust identity_init.rs vectors', () => {
     })
   })
 
+  it('signs the same genesis pop, and builds the same user_init as the crate', () => {
+    expect(signDevicePopMock(DEVICE_SIGNING_SEED, DEVICE_SIGNING_PUBKEY, DEVICE_KEM_PUBKEY, DEVICE_KEM_FORMAT)).toBe(GENESIS_POP)
+    const [genesis] = buildIdentityInitChain()
+    expect(JSON.parse(userInitPayloadMock(DEVICE_SIGNING_SEED, DEVICE_ID, DEVICE_ENCRYPTION_PUBKEY, DEVICE_KEM_PUBKEY)))
+      .toEqual(JSON.parse(genesis.payloadJson))
+  })
+
   it('payloads match the protocol wire schemas', () => {
     const [genesis, epoch] = buildIdentityInitChain()
     expect(sigchainGenesisPayloadSchema.safeParse(JSON.parse(genesis.payloadJson)).success).toBe(true)
@@ -125,10 +154,13 @@ describe('identity initialisation — Rust identity_init.rs vectors', () => {
   it('verifies like Rust verify_sigchain', () => {
     const chain = buildIdentityInitChain()
     expect(verifySigchainMock(chain)).toEqual({
+      userPubkey: DEVICE_SIGNING_PUBKEY,
       verifiedCount: 2,
       headSeq: 2,
       headHash: PUK_EPOCH_ENTRY_HASH,
       activeDevicePubkeys: [DEVICE_SIGNING_PUBKEY],
+      activeDeviceKeys: [{ devicePubkey: DEVICE_SIGNING_PUBKEY, encryptionPubkey: DEVICE_KEM_PUBKEY, format: DEVICE_KEM_FORMAT }],
+      namedKeys: [DEVICE_SIGNING_PUBKEY, DEVICE_ENCRYPTION_PUBKEY, DEVICE_KEM_PUBKEY].sort(),
     })
     // Same rejections identity_init.rs asserts.
     expect(() => verifySigchainMock([chain[1]])).toThrow('first sigchain link must have seq=1')
@@ -152,12 +184,13 @@ describe('mock verifier rejects what Rust rejects', () => {
     expect(() => verifySigchainMock([genesis, outsider])).toThrow('not in active device set')
   })
 
-  it('genesis authorises its signer, not payload.devicePubkey', () => {
+  it('a genesis naming a device other than its signer is refused', () => {
+    const payload = JSON.parse(userInitPayloadMock(DEVICE_SIGNING_SEED, DEVICE_ID, DEVICE_ENCRYPTION_PUBKEY, DEVICE_KEM_PUBKEY)) as Record<string, unknown>
     const genesis = createSigchainLinkMock(
       DEVICE_SIGNING_SEED, 'g', DEVICE_ID, 1, null, GENESIS_TIMESTAMP,
-      JSON.stringify({ type: 'user_init', deviceId: DEVICE_ID, devicePubkey: 'ff'.repeat(32) }),
+      JSON.stringify({ ...payload, devicePubkey: 'ff'.repeat(32) }),
     )
-    expect(verifySigchainMock([genesis]).activeDevicePubkeys).toEqual([DEVICE_SIGNING_PUBKEY])
+    expect(() => verifySigchainMock([genesis])).toThrow(/^chain_unauthorised_signer: /)
   })
 
   it('rejects a first link that is not user_init', () => {
@@ -180,5 +213,34 @@ describe('PUK seed envelope', () => {
     // Bound to the device ID: opening with another device's AAD fails.
     await expect(hpkeOpenMock(envelope, bytesToHex(DEVICE_ENCRYPTION_SEED), LABEL_PUK_WRAP_TO_DEVICE, pukWrapAad('other-device')))
       .rejects.toThrow()
+  })
+})
+
+// ── packages/crypto/tests/fixtures/v2/device-binding.json (#2496) ─────────
+describe('device binding: the mock against the crate\'s vectors', () => {
+  const f = JSON.parse(
+    readFileSync(join(__dirname, '../../../../packages/crypto/tests/fixtures/v2/device-binding.json'), 'utf8'),
+  ) as {
+    popMessage: { user: string; signingPk: string; encryptionPk: string; format: number; messageHex: string }
+    positives: Array<{ name: string; chains: MockSigchainLink[][]; expect: unknown }>
+    negatives: Array<{ name: string; chains: MockSigchainLink[][]; expect: string }>
+  }
+
+  it('builds the pop message byte for byte', () => {
+    const m = f.popMessage
+    expect(bytesToHex(devicePopMessageMock(m.user, hexToBytes(m.signingPk), hexToBytes(m.encryptionPk), m.format))).toBe(m.messageHex)
+  })
+
+  it.each(f.positives.map(p => [p.name, p] as const))('accepts %s with the same active device keys', (_n, p) => {
+    expect(verifyUserSigchainsMock(p.chains).map(st => st.activeDeviceKeys)).toEqual(p.expect)
+  })
+
+  it.each(f.negatives.map(n => [n.name, n] as const))('refuses %s with the same code', (_n, n) => {
+    expect(() => verifyUserSigchainsMock(n.chains)).toThrow(new RegExp(`^${n.expect}: `))
+  })
+
+  it('covers every vector', () => {
+    expect(f.positives).toHaveLength(3)
+    expect(f.negatives).toHaveLength(9)
   })
 })

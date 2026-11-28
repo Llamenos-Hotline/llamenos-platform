@@ -1,8 +1,20 @@
-//! Device key management — Ed25519 signing + X25519 encryption keypairs.
+//! Device key management — Ed25519 signing, X25519 and X-Wing encryption keypairs.
 //!
-//! Each device generates two independent keypairs on first launch:
+//! Each device generates independent keypairs on first launch:
 //! - Ed25519 for signing (sigchain entries, auth tokens, MLS leaf credentials)
-//! - X25519 for encryption (HPKE decapsulation, PUK seed wrapping)
+//! - X25519 for encryption (HPKE decapsulation, PUK seed wrapping) — the key
+//!   format-1 data is sealed to, kept until the v2 wire cutover (wire spec §3.5)
+//! - X-Wing (ML-KEM-768 + X25519) for format-2 data (wire spec D16), named in
+//!   the user sigchain by the device's `user_init` (the first device) or by the
+//!   `device_add` that authorises it (`crate::sigchain`)
+//!
+//! **A device's X-Wing key is fixed for its life** (spec
+//! 2026-11-25-v2-device-linking-and-recovery §5, as revised 2026-11-26). Its
+//! seed is drawn once, when the device is created ([`generate_device_keys`], or
+//! [`DeviceSecrets::with_fresh_kem_seed`] for a device whose other two seeds
+//! come from elsewhere), stored with the other two seeds, and never redrawn:
+//! unlocking only ever reads it. Rotating it means removing the device and
+//! linking it again (L6); there is no replacement link.
 //!
 //! Key material is credential-encrypted for storage using Argon2id + AES-256-GCM.
 //! Credentials can be numeric PINs (min 8 digits) or alphanumeric passphrases (min 8 chars).
@@ -14,6 +26,7 @@ use aes_gcm::{
 };
 use argon2::Argon2;
 use ed25519_dalek::{SigningKey, VerifyingKey};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519Secret};
 use zeroize::{Zeroize, Zeroizing};
@@ -33,6 +46,10 @@ pub struct DeviceKeyState {
     pub signing_pubkey_hex: String,
     /// X25519 public key, hex-encoded (32 bytes / 64 hex chars)
     pub encryption_pubkey_hex: String,
+    /// X-Wing encapsulation (public) key, hex-encoded (1216 bytes / 2432 hex
+    /// chars) — the device's crypto_format 2 encryption key (wire spec D16),
+    /// fixed for the device's life.
+    pub kem_pubkey_hex: String,
 }
 
 /// Encrypted device key blob for credential-protected storage.
@@ -56,7 +73,8 @@ pub struct EncryptedDeviceKeys {
     pub argon2_p_cost: u32,
     /// AES-256-GCM nonce, hex-encoded (12 bytes)
     pub nonce: String,
-    /// AES-256-GCM ciphertext of (signing_seed || encryption_seed), hex-encoded
+    /// AES-256-GCM ciphertext of `signing_seed || encryption_seed || kem_seed`
+    /// (96 bytes), hex-encoded
     pub ciphertext: String,
     /// Device state (public info for identification)
     pub state: DeviceKeyState,
@@ -81,6 +99,31 @@ fn default_argon2_p_cost() -> u32 {
 pub struct DeviceSecrets {
     pub signing_seed: [u8; 32],
     pub encryption_seed: [u8; 32],
+    /// The X-Wing decapsulation key, which is a 32-byte seed (draft-06 §5).
+    pub kem_seed: [u8; 32],
+}
+
+/// Byte length of the stored seed blob: signing, X25519 and X-Wing seeds.
+pub const DEVICE_SEEDS_LEN: usize = 96;
+
+/// Byte length of an X-Wing encapsulation (public) key.
+pub const XWING_PUBLIC_KEY_LEN: usize = x_wing::ENCAPSULATION_KEY_SIZE;
+
+/// The X-Wing decapsulation key for a 32-byte seed. Built from a reference to
+/// the seed, so no `Copy` of it is left on the stack; the key itself zeroizes
+/// on drop.
+pub fn xwing_decapsulation_key(seed: &[u8; 32]) -> x_wing::DecapsulationKey {
+    use x_wing::KeyInit;
+    <x_wing::DecapsulationKey as KeyInit>::new(seed.into())
+}
+
+/// The X-Wing encapsulation key for a 32-byte decapsulation seed.
+pub fn xwing_public_key(seed: &[u8; 32]) -> Vec<u8> {
+    use x_wing::{Decapsulator, KeyExport};
+    xwing_decapsulation_key(seed)
+        .encapsulation_key()
+        .to_bytes()
+        .to_vec()
 }
 
 /// Redacting `Debug`: prints the public keys only, never a seed, so a
@@ -101,6 +144,51 @@ impl std::fmt::Debug for DeviceSecrets {
 }
 
 impl DeviceSecrets {
+    /// The X-Wing encapsulation key.
+    pub fn kem_pubkey(&self) -> Vec<u8> {
+        xwing_public_key(&self.kem_seed)
+    }
+
+    /// Secrets whose signing and X25519 seeds come from elsewhere (an imported
+    /// signing seed, or the seeds a provisioning bundle carries), completed
+    /// with a freshly drawn X-Wing seed. This is how such a device is created:
+    /// it is the one moment its X-Wing key is drawn.
+    pub fn with_fresh_kem_seed(signing_seed: &[u8; 32], encryption_seed: &[u8; 32]) -> Self {
+        DeviceSecrets {
+            signing_seed: *signing_seed,
+            encryption_seed: *encryption_seed,
+            kem_seed: rand::rngs::OsRng.gen(),
+        }
+    }
+
+    /// A new device's secrets: all three seeds drawn from the OS RNG, each
+    /// straight into its field.
+    pub fn generate() -> Self {
+        DeviceSecrets {
+            signing_seed: rand::rngs::OsRng.gen(),
+            encryption_seed: rand::rngs::OsRng.gen(),
+            kem_seed: rand::rngs::OsRng.gen(),
+        }
+    }
+
+    /// Secrets read back from a stored seed blob: signing, X25519 and X-Wing
+    /// seeds, 32 bytes each, in that order.
+    ///
+    /// Each field is built from its own 32 bytes of `seeds`, so no zeroed or
+    /// partly filled `DeviceSecrets` exists at any point, and the length is in
+    /// the type — a short blob (the 64-byte, pre-X-Wing shape) cannot be
+    /// passed, so no field can be left unset. Callers decrypt into a
+    /// `Zeroizing` buffer and convert it with `try_into`, which is where the
+    /// wrong-length refusal happens.
+    pub fn from_seeds(seeds: &[u8; DEVICE_SEEDS_LEN]) -> Self {
+        let seed = |n: usize| -> [u8; 32] { std::array::from_fn(|i| seeds[32 * n + i]) };
+        DeviceSecrets {
+            signing_seed: seed(0),
+            encryption_seed: seed(1),
+            kem_seed: seed(2),
+        }
+    }
+
     /// Derive the Ed25519 signing key from the seed.
     pub fn signing_key(&self) -> SigningKey {
         SigningKey::from_bytes(&self.signing_seed)
@@ -135,25 +223,27 @@ pub fn generate_device_keys(
         return Err(CryptoError::InvalidPin);
     }
 
-    // Generate random seeds
     // `DeviceSecrets` is zeroize-on-drop and owns the only copy: seeds are
-    // generated straight into it, so no `Copy` array is left behind on any path
-    // (including the `?` on the encrypt below).
-    let mut secrets = DeviceSecrets {
-        signing_seed: [0u8; 32],
-        encryption_seed: [0u8; 32],
-    };
-    getrandom::getrandom(&mut secrets.signing_seed).expect("getrandom failed");
-    getrandom::getrandom(&mut secrets.encryption_seed).expect("getrandom failed");
+    // drawn straight into it, so it is wiped on every path (including the `?`
+    // on the encrypt below).
+    let secrets = DeviceSecrets::generate();
 
-    let state = DeviceKeyState {
-        device_id: device_id.to_string(),
-        signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-        encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-    };
+    let state = DeviceKeyState::of(device_id, &secrets);
 
     // Encrypt the secret seeds with credential
     encrypt_device_secrets(&secrets, credential, &state)
+}
+
+impl DeviceKeyState {
+    /// The public state of `secrets`, under `device_id`.
+    pub fn of(device_id: &str, secrets: &DeviceSecrets) -> Self {
+        DeviceKeyState {
+            device_id: device_id.to_string(),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
+        }
+    }
 }
 
 /// Decrypt device keys from a credential-encrypted blob.
@@ -184,23 +274,21 @@ pub fn unlock_device_keys(
             .map_err(|_| CryptoError::WrongPin)?,
     );
 
-    if plaintext.len() != 64 {
-        return Err(CryptoError::InvalidFormat(
-            "decrypted device key blob must be 64 bytes".into(),
-        ));
-    }
+    // Exactly three seeds. A 64-byte blob (signing and X25519 seeds only)
+    // predates X-Wing keys and is refused: an X-Wing key is never drawn at
+    // unlock, so such a device could never hold the key its chain names.
+    let seeds: &[u8; DEVICE_SEEDS_LEN] = plaintext.as_slice().try_into().map_err(|_| {
+        CryptoError::InvalidFormat(format!(
+            "decrypted device key blob must be {DEVICE_SEEDS_LEN} bytes (signing, X25519 and X-Wing seeds), got {}",
+            plaintext.len()
+        ))
+    })?;
 
-    let mut signing_seed = [0u8; 32];
-    let mut encryption_seed = [0u8; 32];
-    signing_seed.copy_from_slice(&plaintext[..32]);
-    encryption_seed.copy_from_slice(&plaintext[32..]);
+    // Built field by field from the decrypted blob into the zeroize-on-drop
+    // owner, which wipes the seeds on the mismatch return below.
+    let secrets = DeviceSecrets::from_seeds(seeds);
 
     // Verify the derived public keys match the stored state
-    let secrets = DeviceSecrets {
-        signing_seed,
-        encryption_seed,
-    };
-
     let derived_signing_pubkey = hex::encode(secrets.signing_pubkey().to_bytes());
     let derived_encryption_pubkey = hex::encode(secrets.encryption_pubkey().to_bytes());
 
@@ -209,8 +297,12 @@ pub fn unlock_device_keys(
         &derived_encryption_pubkey,
         &encrypted.state.encryption_pubkey_hex,
     );
+    let kem_match = ct_hex_eq(
+        &hex::encode(secrets.kem_pubkey()),
+        &encrypted.state.kem_pubkey_hex,
+    );
 
-    if !(sign_match && enc_match) {
+    if !(sign_match && enc_match && kem_match) {
         return Err(CryptoError::InvalidFormat(
             "derived public keys do not match stored state".into(),
         ));
@@ -261,7 +353,7 @@ pub fn verify_signature(
 
 // --- Internal helpers ---
 
-fn encrypt_device_secrets(
+pub(crate) fn encrypt_device_secrets(
     secrets: &DeviceSecrets,
     credential: &str,
     state: &DeviceKeyState,
@@ -289,10 +381,11 @@ pub(crate) fn encrypt_device_secrets_with(
     let cipher = Aes256Gcm::new_from_slice(kek.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
-    // Concatenate signing_seed || encryption_seed
-    let mut plaintext = Zeroizing::new(Vec::with_capacity(64));
+    // Concatenate signing_seed || encryption_seed || kem_seed
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(DEVICE_SEEDS_LEN));
     plaintext.extend_from_slice(&secrets.signing_seed);
     plaintext.extend_from_slice(&secrets.encryption_seed);
+    plaintext.extend_from_slice(&secrets.kem_seed);
 
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_ref())
@@ -362,6 +455,110 @@ mod tests {
         assert_eq!(
             hex::encode(secrets.encryption_pubkey().to_bytes()),
             encrypted.state.encryption_pubkey_hex
+        );
+    }
+
+    #[test]
+    fn a_new_device_has_an_xwing_key() {
+        let encrypted = generate_device_keys("kem-dev", "12345678").unwrap();
+        let kem = encrypted.state.kem_pubkey_hex.clone();
+        assert_eq!(kem.len(), XWING_PUBLIC_KEY_LEN * 2);
+        assert_eq!(
+            encrypted.ciphertext.len(),
+            (DEVICE_SEEDS_LEN + 16) * 2,
+            "three seeds + GCM tag"
+        );
+        let secrets = unlock_device_keys(&encrypted, "12345678").unwrap();
+        assert_eq!(hex::encode(secrets.kem_pubkey()), kem);
+    }
+
+    /// The X-Wing key is fixed for the device's life: every unlock reads the
+    /// same seed back, and no unlock draws one.
+    #[test]
+    fn unlock_never_redraws_the_xwing_key() {
+        let encrypted = generate_device_keys("kem-dev", "12345678").unwrap();
+        let first = unlock_device_keys(&encrypted, "12345678").unwrap();
+        let second = unlock_device_keys(&encrypted, "12345678").unwrap();
+        assert_eq!(first.kem_seed, second.kem_seed);
+        assert_eq!(
+            hex::encode(second.kem_pubkey()),
+            encrypted.state.kem_pubkey_hex
+        );
+    }
+
+    #[test]
+    fn a_blob_without_an_xwing_seed_is_refused() {
+        // A 64-byte blob — signing and X25519 seeds only, the shape written
+        // before X-Wing keys existed — is never completed at unlock.
+        let secrets = DeviceSecrets::generate();
+        let state = DeviceKeyState::of("two-seed-dev", &secrets);
+        let salt: [u8; 32] = rand::rngs::OsRng.gen();
+        let nonce: [u8; 12] = rand::rngs::OsRng.gen();
+        let kek = derive_kek("12345678", &salt).unwrap();
+        let cipher = Aes256Gcm::new_from_slice(kek.as_slice()).unwrap();
+        let mut two_seeds = Vec::with_capacity(64);
+        two_seeds.extend_from_slice(&secrets.signing_seed);
+        two_seeds.extend_from_slice(&secrets.encryption_seed);
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce), two_seeds.as_ref())
+            .unwrap();
+        let blob = EncryptedDeviceKeys {
+            kdf_version: KDF_VERSION,
+            salt: hex::encode(salt),
+            argon2_m_cost: ARGON2_M_COST_KIB,
+            argon2_t_cost: ARGON2_T_COST,
+            argon2_p_cost: ARGON2_P_COST,
+            nonce: hex::encode(nonce),
+            ciphertext: hex::encode(ciphertext),
+            state,
+        };
+        assert!(matches!(
+            unlock_device_keys(&blob, "12345678"),
+            Err(CryptoError::InvalidFormat(_))
+        ));
+    }
+
+    #[test]
+    fn a_stored_state_that_misnames_the_xwing_key_is_refused() {
+        let mut new = generate_device_keys("kem-dev", "12345678").unwrap();
+        new.state.kem_pubkey_hex = "00".repeat(XWING_PUBLIC_KEY_LEN);
+        assert!(matches!(
+            unlock_device_keys(&new, "12345678"),
+            Err(CryptoError::InvalidFormat(_))
+        ));
+    }
+
+    /// `from_seeds` is the only way a stored blob becomes `DeviceSecrets`
+    /// (unlock and backup restore both go through it): every field must come
+    /// from its own 32 bytes, in blob order, and none may come back unset.
+    #[test]
+    fn from_seeds_fills_every_field_from_its_own_bytes() {
+        let blob: [u8; DEVICE_SEEDS_LEN] = std::array::from_fn(|i| i as u8 + 1);
+        let secrets = DeviceSecrets::from_seeds(&blob);
+        for (name, field, at) in [
+            ("signing", &secrets.signing_seed, 0),
+            ("encryption", &secrets.encryption_seed, 32),
+            ("kem", &secrets.kem_seed, 64),
+        ] {
+            assert_eq!(
+                field[..],
+                blob[at..at + 32],
+                "the {name} seed is not bytes {at}..{} of the blob",
+                at + 32
+            );
+            assert_ne!(*field, [0u8; 32], "the {name} seed came back zeroed");
+        }
+    }
+
+    #[test]
+    fn with_fresh_kem_seed_keeps_the_given_seeds_and_draws_the_third() {
+        let a = DeviceSecrets::with_fresh_kem_seed(&[1u8; 32], &[2u8; 32]);
+        let b = DeviceSecrets::with_fresh_kem_seed(&[1u8; 32], &[2u8; 32]);
+        assert_eq!(a.signing_seed, [1u8; 32]);
+        assert_eq!(a.encryption_seed, [2u8; 32]);
+        assert_ne!(
+            a.kem_seed, b.kem_seed,
+            "the X-Wing seed is drawn, not derived"
         );
     }
 

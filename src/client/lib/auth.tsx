@@ -1,6 +1,7 @@
 import type { RelayEventKey } from '@protocol/schemas'
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { ensureDeviceRegistered, resetDeviceRegistrationCache } from '@/lib/device-registration'
+import { ensureDeviceIdentity } from '@/lib/user-identity'
 import { useTranslation } from 'react-i18next'
 import {
   deviceImportAndLoad,
@@ -198,6 +199,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Loud, not fatal: the session is usable, but E2EE content written while
       // this is failing will not be readable on this device.
       console.error('[auth] device encryption key registration failed', err)
+    })
+    // Verify this device's identity in the user's chain (genesis for a user
+    // with no chain yet). Loud, not fatal: a chain that does not authorise this
+    // device under the X-Wing key it holds is reported, never re-keyed (#2496).
+    ensureDeviceIdentity(state.publicKey).catch((err) => {
+      if (cancelled) return
+      console.error('[auth] device identity verification failed', err)
     })
     return () => { cancelled = true }
   }, [state.publicKey, state.isKeyUnlocked])

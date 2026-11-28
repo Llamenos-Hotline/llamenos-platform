@@ -210,7 +210,7 @@ async function authorisePukDevice(
   const identityDevice = isFirst ? device : Object.values(s.pukDevices)[0]
   const body = isFirst
     ? buildSigchainLink(identityDevice, null, 'genesis', genesisPayload(device))
-    : buildSigchainLink(identityDevice, s.pukSigchainHead!, 'device_add', deviceAddPayload(device))
+    : buildSigchainLink(identityDevice, s.pukSigchainHead!, 'device_add', deviceAddPayload(device, s.pukUserPubkey!))
   const res = await apiPost<SigchainLinkRecord>(request, `/users/${s.pukUserPubkey}/sigchain`, { ...body }, s.pukUserSeed)
   expect(res.status).toBe(201)
   s.pukSigchainHead = { seqNo: res.data.seqNo, hash: res.data.hash }

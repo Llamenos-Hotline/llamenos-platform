@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "لا تحتوي هذه النسخة الاحتياطية على مفتاح التشفير ما بعد الكمّي الخاص بهذا الجهاز، لذا لا يمكنها استعادة الجهاز. استخدم استرداد الحساب لإعداد جهاز جديد بدلاً من ذلك.",
     "invalidKey": "مفتاح سري غير صالح",
     "login": "تسجيل الدخول",
     "loginDescription": "أدخل مفتاحك السري للوصول إلى خط المساعدة",

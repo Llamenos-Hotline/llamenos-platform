@@ -156,6 +156,61 @@ pub fn mobile_unlock(
     Ok(ds)
 }
 
+// ── Device backup (the one canonical file format, `crate::backup`) ─────
+
+/// A fresh 128-bit recovery key for display: base32, dash-grouped — the exact
+/// string [`mobile_create_backup`] expects back.
+#[uniffi::export]
+pub fn mobile_generate_recovery_key() -> String {
+    crate::backup::generate_recovery_key()
+}
+
+/// The loaded device's backup file (JSON): its three seeds, sealed under both
+/// `pin` (Argon2id) and `recovery_key` (HKDF). The seeds never leave Rust.
+#[uniffi::export]
+pub fn mobile_create_backup(pin: String, recovery_key: String) -> Result<String, CryptoError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let file =
+        with_secrets(|secrets, _| crate::backup::create_backup(secrets, &pin, &recovery_key, now))?;
+    Ok(serde_json::to_string(&file)?)
+}
+
+/// Restore a device from a backup file and load it. The restored seeds — all
+/// three, so the X-Wing key is the one the user's chain names (#3053) — go
+/// straight into the mobile state; the returned blob is the device re-encrypted
+/// under `new_pin`, for the caller to store. A backup without the X-Wing seed
+/// is refused as `BackupMissingXwingSeed`, never half-restored.
+#[uniffi::export]
+pub fn mobile_restore_backup_and_load(
+    backup_json: String,
+    credential: String,
+    is_recovery_key: bool,
+    new_pin: String,
+    device_id: String,
+) -> Result<EncryptedDeviceKeys, CryptoError> {
+    if !device_keys::is_valid_credential(&new_pin) {
+        return Err(CryptoError::InvalidPin);
+    }
+    let file: crate::backup::BackupFile = serde_json::from_str(&backup_json)?;
+    let credential = if is_recovery_key {
+        crate::backup::BackupCredential::RecoveryKey(&credential)
+    } else {
+        crate::backup::BackupCredential::Pin(&credential)
+    };
+    let secrets = crate::backup::open_backup(&file, credential)?;
+    let ds = DeviceKeyState::of(&device_id, &secrets);
+    let encrypted = device_keys::encrypt_device_secrets(&secrets, &new_pin, &ds)?;
+
+    let mut guard = state().lock().unwrap();
+    guard.secrets = Some(secrets);
+    guard.device_state = Some(ds);
+
+    Ok(encrypted)
+}
+
 /// Lock the mobile crypto state — zeroize device secrets, hub keys, and server event keys.
 #[uniffi::export]
 pub fn mobile_lock() {
@@ -709,6 +764,27 @@ pub fn mobile_sigchain_verify(links_json: String) -> Result<SigchainVerifiedStat
     sigchain::verify_sigchain(&links)
 }
 
+/// This device's genesis `user_init` payload JSON (spec
+/// 2026-11-25-v2-device-linking-and-recovery §5 as revised 2026-11-26): its
+/// Ed25519, X25519 and X-Wing keys, `format: 2` and the possession signature,
+/// made in Rust. Sign the link carrying it with [`mobile_sigchain_create_link`].
+#[uniffi::export]
+pub fn mobile_user_init_payload() -> Result<String, CryptoError> {
+    with_secrets(|secrets, ds| sigchain::user_init_payload(secrets, &ds.device_id))
+}
+
+/// Verify several users' chains together, refusing any key named by two
+/// users' chains (`chain_key_reused`). `chains_json` is a JSON array of link
+/// arrays.
+#[uniffi::export]
+pub fn mobile_sigchain_verify_users(
+    chains_json: String,
+) -> Result<Vec<SigchainVerifiedState>, CryptoError> {
+    let chains: Vec<Vec<SigchainLink>> =
+        serde_json::from_str(&chains_json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+    sigchain::verify_user_sigchains(&chains)
+}
+
 /// Verify a single sigchain link (stateless).
 #[uniffi::export]
 pub fn mobile_sigchain_verify_link(
@@ -1098,17 +1174,11 @@ mod tests {
     use crate::encryption::{seal_record_for_readers, RecordReader};
     use crate::labels::{LABEL_CALL_META, LABEL_MESSAGE};
 
-    /// A device whose Ed25519 and X25519 keys are, as always, different keys.
-    fn fixed_device() -> (DeviceSecrets, DeviceKeyState) {
-        let secrets = DeviceSecrets {
-            signing_seed: [7u8; 32],
-            encryption_seed: [9u8; 32],
-        };
-        let ds = DeviceKeyState {
-            device_id: "stored-record-dev".into(),
-            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-        };
+    /// A freshly generated device whose Ed25519 and X25519 keys are, as
+    /// always, different keys.
+    fn a_device() -> (DeviceSecrets, DeviceKeyState) {
+        let secrets = DeviceSecrets::generate();
+        let ds = DeviceKeyState::of("stored-record-dev", &secrets);
         assert_ne!(ds.signing_pubkey_hex, ds.encryption_pubkey_hex);
         (secrets, ds)
     }
@@ -1117,7 +1187,7 @@ mod tests {
 
     #[test]
     fn call_metadata_opens_whichever_device_key_the_envelope_is_addressed_to() {
-        let (secrets, ds) = fixed_device();
+        let (secrets, ds) = a_device();
         let (_, other_pk) = crate::hpke_envelope::generate_x25519_keypair();
         // The server and desktop address envelopes by the account (Ed25519) key;
         // iOS and Android address their own by the X25519 key. Either way the
@@ -1153,7 +1223,7 @@ mod tests {
     fn a_wrap_sealed_to_the_ed25519_key_does_not_open() {
         // Both keys are 64 hex chars; sealing to the signing key as though it were
         // X25519 (#1021, #1283) yields an envelope nobody can open.
-        let (secrets, ds) = fixed_device();
+        let (secrets, ds) = a_device();
         let record = seal_record_for_readers(
             CALL_META.as_bytes(),
             &[RecordReader {
@@ -1176,7 +1246,7 @@ mod tests {
 
     #[test]
     fn call_metadata_and_message_readers_are_bound_to_their_labels() {
-        let (secrets, ds) = fixed_device();
+        let (secrets, ds) = a_device();
         let reader = [RecordReader {
             address: ds.signing_pubkey_hex.clone(),
             encryption_pubkey: ds.encryption_pubkey_hex.clone(),
@@ -1949,15 +2019,58 @@ mod tests {
     }
 
     #[test]
+    fn backup_restores_the_chain_named_xwing_key_and_refuses_a_backup_without_it() {
+        let encrypted = mobile_generate_and_load("bk-dev".into(), "12345678".into()).unwrap();
+        let recovery_key = mobile_generate_recovery_key();
+        let backup = mobile_create_backup("12345678".into(), recovery_key.clone()).unwrap();
+        mobile_lock();
+
+        let restored = mobile_restore_backup_and_load(
+            backup.clone(),
+            recovery_key.clone(),
+            true,
+            "87654321".into(),
+            "bk-dev-restored".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            restored.state.kem_pubkey_hex,
+            encrypted.state.kem_pubkey_hex
+        );
+        assert_eq!(
+            restored.state.encryption_pubkey_hex,
+            encrypted.state.encryption_pubkey_hex
+        );
+        assert!(mobile_is_unlocked());
+        mobile_lock();
+
+        let mut v5: serde_json::Value = serde_json::from_str(&backup).unwrap();
+        v5["v"] = 5.into();
+        let err = mobile_restore_backup_and_load(
+            v5.to_string(),
+            recovery_key,
+            true,
+            "87654321".into(),
+            "bk-dev-restored".into(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CryptoError::BackupMissingXwingSeed),
+            "got {err}"
+        );
+        assert!(!mobile_is_unlocked(), "a refused backup loads nothing");
+    }
+
+    #[test]
     fn sigchain_create_and_verify() {
-        let _encrypted = mobile_generate_and_load("sig-dev".into(), "12345678".into()).unwrap();
+        let encrypted = mobile_generate_and_load("sig-dev".into(), "12345678".into()).unwrap();
 
         let link = mobile_sigchain_create_link(
             "link-1".into(),
             1,
             None,
             "2026-04-27T00:00:00Z".into(),
-            r#"{"type":"user_init","deviceId":"sig-dev"}"#.into(),
+            mobile_user_init_payload().unwrap(),
         )
         .unwrap();
 
@@ -1978,6 +2091,11 @@ mod tests {
         let verified = mobile_sigchain_verify(links_json).unwrap();
         assert_eq!(verified.verified_count, 1);
         assert_eq!(verified.head_seq, 1);
+        // The genesis names this device's own X-Wing key.
+        assert_eq!(
+            verified.active_device_keys[0].encryption_pubkey,
+            encrypted.state.kem_pubkey_hex
+        );
 
         mobile_lock();
     }
@@ -2043,18 +2161,20 @@ mod stored_record_vector_tests {
     }
 
     /// Load `reader` into this thread's mobile state, as an unlocked device.
+    /// The fixture publishes only the reader's X25519 secret; the device's
+    /// signing and X-Wing seeds play no part in opening a stored record, so
+    /// they are drawn fresh.
     fn load_reader(reader: &FixtureReader) {
-        let mut encryption_seed = [0u8; 32];
-        encryption_seed.copy_from_slice(&hex::decode(&reader.x25519_secret_hex).unwrap());
+        use rand::Rng;
         let secrets = DeviceSecrets {
-            signing_seed: [0x5au8; 32],
-            encryption_seed,
+            signing_seed: rand::rngs::OsRng.gen(),
+            encryption_seed: hex::decode(&reader.x25519_secret_hex)
+                .unwrap()
+                .try_into()
+                .expect("a fixture X25519 secret is 32 bytes"),
+            kem_seed: rand::rngs::OsRng.gen(),
         };
-        let ds = DeviceKeyState {
-            device_id: format!("vector-{}", reader.name),
-            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-        };
+        let ds = DeviceKeyState::of(&format!("vector-{}", reader.name), &secrets);
         // The fixture's published pubkey must be the one its secret derives.
         assert_eq!(ds.encryption_pubkey_hex, reader.x25519_pubkey_hex);
         let mut guard = state().lock().unwrap();

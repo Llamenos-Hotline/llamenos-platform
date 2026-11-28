@@ -35,6 +35,8 @@ final class AppState {
     let authService: AuthService
     let webSocketService: WebSocketService
     let wakeKeyService: WakeKeyService
+    /// This device's sigchain identity: genesis/PUK if missing, then verification that the chain names its X-Wing key (#2496).
+    let deviceIdentityService: DeviceIdentityService
     let transcriptionService: TranscriptionService
     let crashReportingService: CrashReportingService
     let offlineQueue: OfflineQueue
@@ -123,6 +125,7 @@ final class AppState {
         self.authService = auth
         self.webSocketService = ws
         self.wakeKeyService = wake
+        self.deviceIdentityService = DeviceIdentityService(apiService: api, cryptoService: crypto, keychainService: keychain)
         self.transcriptionService = transcription
         self.crashReportingService = crashReporting
         self.offlineQueue = offline
@@ -426,6 +429,9 @@ final class AppState {
         offlineQueue.startMonitoring()
         // Registration is signed, so it can only happen now (#2201).
         wakeKeyService.registerDeviceIfUnlocked()
+        // Genesis/PUK if the chain is empty, then check the chain names this
+        // device's X-Wing key (spec 2026-11-25 §5, #2496).
+        deviceIdentityService.ensureIdentityInBackground()
         // Replay any queued operations now that we're authenticated
         Task { await offlineQueue.replay() }
         // Retry any queued security events (e.g. a cert pin mismatch seen while
@@ -466,6 +472,7 @@ final class AppState {
         loadMemberHubs()
         offlineQueue.startMonitoring()
         wakeKeyService.registerDeviceIfUnlocked()
+        deviceIdentityService.ensureIdentityInBackground()
         Task { await SecurityEventService.shared.flush() }
     }
 

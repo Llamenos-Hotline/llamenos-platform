@@ -23,6 +23,11 @@ x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 # HPKE: DHKEM(X25519, HKDF-SHA256) + HKDF-SHA256 + AES-256-GCM
 hpke = { version = "0.13", default-features = false, features = ["x25519", "alloc"] }
 
+# X-Wing KEM (draft-connolly-cfrg-xwing-kem-06: ML-KEM-768 + X25519), the KEM suite
+# of crypto_format 2 (wire spec D16). Device encryption keys under format 2 are
+# X-Wing keys (`device_keys`, `sigchain` `user_init` / `device_add`). Pure Rust, no C dependency.
+x-wing = { version = "0.1.1", features = ["zeroize"] }
+
 # AES-256-GCM (standalone symmetric operations — PIN encryption, items_key)
 aes-gcm = { version = "0.10", features = ["zeroize"] }
 # aes-gcm's own `zeroize` feature only wipes the GHASH subkey. The expanded AES

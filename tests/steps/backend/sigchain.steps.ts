@@ -72,7 +72,7 @@ function payloadFor(linkType: SigchainLinkType, device: TestDevice): Record<stri
     case 'genesis':
       return genesisPayload(device)
     case 'device_add':
-      return deviceAddPayload(randomTestDevice(`added-${crypto.randomUUID()}`))
+      return deviceAddPayload(randomTestDevice(`added-${crypto.randomUUID()}`), device.signingPubkeyHex)
     case 'device_remove': {
       const removed = randomTestDevice(`removed-${crypto.randomUUID()}`)
       return { type: 'device_remove', deviceId: removed.deviceId, devicePubkey: removed.signingPubkeyHex }
@@ -273,4 +273,58 @@ Then('the first link has linkType {string}', async ({ request, world }, linkType
   const user = requireUser(getS(world))
   const links = await getSigchainViaApi(request, user.pubkey, user.deviceKey)
   expect(links[0].linkType).toBe(linkType)
+})
+
+// ── Device key binding (#2496) ──────────────────────────────────────
+
+When('the user appends a genesis link with a corrupted possession signature', async ({ request, world }) => {
+  const user = requireUser(getS(world))
+  const payload = genesisPayload(user.device)
+  const pop = payload.pop as string
+  payload.pop = (pop[0] === '0' ? '1' : '0') + pop.slice(1)
+  await appendAndTrack(request, world, buildSigchainLink(user.device, null, 'genesis', payload))
+})
+
+When('the user appends a genesis link naming only an X25519 key', async ({ request, world }) => {
+  const user = requireUser(getS(world))
+  // The pre-v2 genesis shape: no X-Wing key, format or pop.
+  const { encryptionPubkey: _k, format: _f, pop: _p, ...preV2 } = genesisPayload(user.device)
+  await appendAndTrack(request, world, buildSigchainLink(user.device, null, 'genesis', preV2))
+})
+
+When('the user appends a device_add link with no possession signature', async ({ request, world }) => {
+  const s = getS(world)
+  const user = requireUser(s)
+  const { pop: _pop, ...payload } = deviceAddPayload(randomTestDevice(`no-pop-${crypto.randomUUID()}`), user.pubkey)
+  await appendAndTrack(request, world, buildSigchainLink(user.device, s.head!, 'device_add', payload))
+})
+
+Then('the stored sigchain names the device\'s X-Wing key', async ({ request, world }) => {
+  const user = requireUser(getS(world))
+  const links = await getSigchainViaApi(request, user.pubkey, user.deviceKey)
+  const verified = verifySigchainMock(links.map(toMockSigchainLink))
+  expect(verified.activeDeviceKeys).toEqual([{ devicePubkey: user.pubkey, encryptionPubkey: user.device.kemPubkeyHex, format: 2 }])
+})
+
+When('the second user\'s genesis names the first user\'s X-Wing key', async ({ request, world }) => {
+  const s = getS(world)
+  const first = requireUser(s)
+  const second = s.secondUser!
+  // The second user CAN sign a valid pop over the first user's key (it holds
+  // its own signing key): only the cross-user uniqueness refuses it.
+  const stolen = { ...second.device, kemPubkeyHex: first.device.kemPubkeyHex }
+  const body = buildSigchainLink(second.device, null, 'genesis', genesisPayload(stolen))
+  setLastResponse(world, await postLink(request, second.deviceKey, second.pubkey, body))
+})
+
+When('the second user registers a device with the first user\'s X25519 key', async ({ request, world }) => {
+  const s = getS(world)
+  const first = requireUser(s)
+  const second = s.secondUser!
+  const res = await apiPost(request, '/devices/register', {
+    platform: 'desktop',
+    ed25519Pubkey: second.pubkey,
+    x25519Pubkey: first.device.encryptionPubkeyHex,
+  }, second.deviceKey)
+  setLastResponse(world, res)
 })

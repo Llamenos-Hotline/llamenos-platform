@@ -182,6 +182,7 @@
     "decryptFailed": "Ñá ni̱ kúu descifrar respaldo",
     "dropOrChoose": "Sandátuu xi kaji iin archivo de respaldo",
     "invalidBackup": "Archivo de respaldo ña va̱ꞌa",
+    "backupMissingXwingSeed": "Respaldo yo'o ñá kúmí llave cifrado post-cuántico kaa yo'o, saá ñá kúu na̱sa̱a̱ña. Kuachi recuperación cuenta tu'un nasaa iin kaa xa'a.",
     "invalidKey": "Llave secreta ña va̱ꞌa",
     "login": "Kivi",
     "loginDescription": "Chikaa llave secreta miíún ña kivi nu̱ú línea de ayuda",

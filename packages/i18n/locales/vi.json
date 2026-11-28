@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "Bản sao lưu này không chứa khóa mã hóa hậu lượng tử của thiết bị này nên không thể khôi phục thiết bị. Hãy dùng tính năng khôi phục tài khoản để thiết lập thiết bị mới.",
     "invalidKey": "Khóa bí mật không hợp lệ",
     "login": "Đăng nhập",
     "loginDescription": "Nhập khóa bí mật để truy cập đường dây nóng",

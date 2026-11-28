@@ -9,7 +9,8 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { sigchainLinks, pukEnvelopes, mlsPendingMessages } from '../db/schema'
-import { ed25519Verify } from '@llamenos/crypto/ffi'
+import { claimDeviceKeys, deviceKeysNamedBy, DeviceKeyReusedError } from '../lib/device-key-claims'
+import { CryptoError, ed25519Verify, sigchainVerify, type SigchainLink } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { timingSafeCompare } from '../lib/timing-safe'
@@ -224,6 +225,41 @@ function toPukEnvelopeRecord(r: typeof pukEnvelopes.$inferSelect): PukEnvelopeRe
   }
 }
 
+/** A stored or candidate link in the crate's `SigchainLink` shape. */
+function toCrateLink(link: {
+  id: string
+  seqNo: number
+  prevHash: string | null
+  hash: string
+  signerDeviceId: string
+  signerPubkey: string
+  signature: string
+  timestamp: string
+  payload: unknown
+}): SigchainLink {
+  return {
+    id: link.id,
+    seq: link.seqNo,
+    prevHash: link.prevHash === '' ? null : link.prevHash,
+    entryHash: link.hash,
+    signerDeviceId: link.signerDeviceId,
+    signerPubkey: link.signerPubkey,
+    signature: link.signature,
+    timestamp: link.timestamp,
+    payloadJson: JSON.stringify(link.payload),
+  }
+}
+
+/**
+ * Link types whose acceptance needs the crate verifier: each names a device's
+ * X-Wing key with a possession signature (`pop`) — the genesis for the first
+ * device, a device_add for every later one — and device_add adds the device-set
+ * rules (a device is added once). The server runs the crate's `verify_sigchain`
+ * over stored chain + candidate, so it accepts exactly what every client
+ * verifier accepts (#2496).
+ */
+const CHAIN_VERIFIED_LINK_TYPES = new Set(['genesis', 'device_add'])
+
 /**
  * Validate hash-chain continuity and signature, then insert a sigchain link.
  * MUST be called with a transaction (`tx`) already holding the advisory lock
@@ -351,6 +387,36 @@ export async function appendValidatedSigchainLink(
     )
   }
 
+  if (CHAIN_VERIFIED_LINK_TYPES.has(link.linkType)) {
+    // A genesis is the whole chain: the continuity check above found no head.
+    const stored = link.linkType === 'genesis'
+      ? []
+      : await tx
+        .select()
+        .from(sigchainLinks)
+        .where(eq(sigchainLinks.userPubkey, userPubkey))
+        .orderBy(asc(sigchainLinks.seqNo))
+    const chain = [
+      ...stored.map(r => toCrateLink(mapSigchainRow(r))),
+      toCrateLink({ id: 'candidate', ...link, prevHash: normalizedPrevHash, signerDeviceId, signerPubkey, timestamp }),
+    ]
+    try {
+      sigchainVerify(chain)
+    } catch (e) {
+      if (e instanceof CryptoError) {
+        throw new CryptoKeyError(`sigchain ${link.linkType} refused: ${e.message}`, 400, e.reason ?? undefined)
+      }
+      throw e
+    }
+  }
+
+  try {
+    await claimDeviceKeys(tx, userPubkey, deviceKeysNamedBy({ signerPubkey, payload: link.payload }))
+  } catch (e) {
+    if (e instanceof DeviceKeyReusedError) throw new CryptoKeyError(e.message, 409, 'key_reused')
+    throw e
+  }
+
   const [inserted] = await tx
     .insert(sigchainLinks)
     .values({
@@ -428,6 +494,11 @@ function validateLinkSemantics(userPubkey: string, link: AppendLink): void {
     )
   }
 
+  // The route's schema already refuses an unknown type; the service refuses it
+  // too rather than comparing payload.type against `undefined`.
+  if (!Object.hasOwn(SIGCHAIN_PAYLOAD_TYPE_FOR_LINK, link.linkType)) {
+    throw new CryptoKeyError(`unknown sigchain link type "${link.linkType}"`, 400)
+  }
   const expectedType = SIGCHAIN_PAYLOAD_TYPE_FOR_LINK[link.linkType]
   if (link.payload.type !== expectedType) {
     throw new CryptoKeyError(`sigchain payload.type must be "${expectedType}" for a ${link.linkType} link`, 400)
@@ -742,6 +813,8 @@ export class CryptoKeyError extends Error {
   constructor(
     message: string,
     readonly status: 400 | 403 | 404 | 409 | 500 = 500,
+    /** The crate's closed rejection code, when packages/crypto refused the link. */
+    readonly code?: string,
   ) {
     super(message)
     this.name = 'CryptoKeyError'

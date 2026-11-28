@@ -98,6 +98,7 @@ test.describe('onboarding provisions sigchain genesis + PUK (#1050)', () => {
     expect(asVolunteer.status, 'volunteer cannot read their own sigchain').toBe(200)
     expect(asVolunteer.data?.integrityBreak).toBeNull()
     const links = asVolunteer.data?.links ?? []
+    // Genesis (naming this device's X-Wing key, #2496) and the first PUK.
     expect(links.map((l) => `${l.seqNo}:${l.linkType}`)).toEqual(['1:genesis', '2:puk_epoch'])
     expect(links[0].prevHash).toBeNull()
     // The read-back carries every field of the hashed form, so the second
@@ -106,6 +107,9 @@ test.describe('onboarding provisions sigchain genesis + PUK (#1050)', () => {
     const verified = verifySigchainMock(links.map(toMockSigchainLink))
     expect(verified.activeDevicePubkeys).toEqual([volunteerPubkey])
     expect(verified.headHash).toBe(links[1].hash)
+    // The genesis named the X-Wing key this device holds, with its pop.
+    expect(verified.activeDeviceKeys).toEqual([{ devicePubkey: volunteerPubkey, encryptionPubkey: identity.kemPubkeyHex, format: 2 }])
+    expect(identity.kemPubkeyHex).toHaveLength(2432)
 
     // ── Read-back as a DIFFERENT identity (admin) ───────────────────────
     const asAdmin = await readSigchain(request, `/users/${volunteerPubkey}/sigchain`, ADMIN_SEED)

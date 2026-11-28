@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, act, waitFor } from '@testing-library/react'
+import { renderHook, act, waitFor, cleanup } from '@testing-library/react'
 import { AuthProvider, useAuth } from './auth'
 import * as keyManager from './key-manager'
 
-const { getMyHubPermissionsMock, MockApiError, configState } = vi.hoisted(() => {
+const { getMyHubPermissionsMock, ensureDeviceIdentityMock, MockApiError, configState } = vi.hoisted(() => {
   class MockApiError extends Error {
     constructor(public status: number, public body: string) {
       super(`API error ${status}: ${body}`)
@@ -12,6 +12,7 @@ const { getMyHubPermissionsMock, MockApiError, configState } = vi.hoisted(() => 
   }
   return {
     getMyHubPermissionsMock: vi.fn(),
+    ensureDeviceIdentityMock: vi.fn(),
     MockApiError,
     configState: { currentHubId: undefined as string | undefined },
   }
@@ -72,6 +73,13 @@ vi.mock('./config', () => ({
   forgetHubPreference: vi.fn(),
 }))
 
+// Unlocking runs the sign-in identity check, which reads the user's sigchain
+// from the server; its behaviour is covered by user-identity.test.ts. Here only
+// the hand-off is asserted, so no request leaves the test.
+vi.mock('./user-identity', () => ({
+  ensureDeviceIdentity: ensureDeviceIdentityMock,
+}))
+
 vi.mock('./webauthn', () => ({
   loginWithPasskey: vi.fn(async () => ({ token: 'passkey-token', pubkey: 'passkey-pubkey' })),
 }))
@@ -86,7 +94,14 @@ beforeEach(() => {
   localStorage.clear()
   configState.currentHubId = undefined
   getMyHubPermissionsMock.mockReset()
+  ensureDeviceIdentityMock.mockReset()
+  ensureDeviceIdentityMock.mockResolvedValue(undefined)
 })
+
+// No vitest globals, so Testing Library does not unmount on its own: without
+// this every earlier test's provider stays mounted and reacts to the next
+// test's unlock.
+afterEach(() => cleanup())
 
 describe('useAuth initial state', () => {
   it('starts with loading state', () => {
@@ -125,6 +140,9 @@ describe('useAuth hasPermission', () => {
     await act(async () => {})
     await act(async () => {})
     expect(result.current.hasPermission('notes:read')).toBe(true)
+    // The unlock hands the signed-in user to the identity check, exactly once.
+    expect(ensureDeviceIdentityMock).toHaveBeenCalledTimes(1)
+    expect(ensureDeviceIdentityMock).toHaveBeenCalledWith('mock-pubkey')
   })
 })
 

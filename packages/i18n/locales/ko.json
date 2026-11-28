@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "이 백업에는 이 기기의 양자 내성 암호화 키가 없어 기기를 복원할 수 없습니다. 대신 계정 복구를 사용해 새 기기를 설정하세요.",
     "invalidKey": "유효하지 않은 비밀 키",
     "login": "로그인",
     "loginDescription": "비밀 키를 입력하여 핫라인에 접속하세요",

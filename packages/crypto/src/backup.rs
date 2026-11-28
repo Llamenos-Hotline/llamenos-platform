@@ -22,7 +22,7 @@
 //! duplication is what produced the three-way split, and the webview must not
 //! handle device key material at all (desktop-security-audit wave 2, HIGH).
 //!
-//! # Canonical format (v5)
+//! # Canonical format (v6)
 //!
 //! Field names are short and generic so a backup found on a seized device does
 //! not advertise which application wrote it, and no plaintext device identifier
@@ -34,18 +34,34 @@
 //!
 //! ```json
 //! {
-//!   "v": 5,
+//!   "v": 6,
 //!   "id": "a1b2c3",
 //!   "t": 1760000000,
 //!   "d": { "kv": 2, "s": "<32B hex>", "m": 65536, "i": 3, "p": 4,
-//!          "n": "<12B hex>", "c": "<80B hex>" },
-//!   "r": { "kv": 1, "s": "<32B hex>", "n": "<12B hex>", "c": "<80B hex>" }
+//!          "n": "<12B hex>", "c": "<112B hex>" },
+//!   "r": { "kv": 1, "s": "<32B hex>", "n": "<12B hex>", "c": "<112B hex>" }
 //! }
 //! ```
 //!
-//! Both blocks encrypt the **same 64-byte plaintext**: the Ed25519 signing seed
-//! followed by the X25519 encryption seed (`signing_seed || encryption_seed`,
-//! the same layout as the on-disk device-key blob in [`crate::device_keys`]).
+//! Both blocks encrypt the **same 96-byte plaintext**: the Ed25519 signing seed,
+//! the X25519 encryption seed and the X-Wing seed (`signing_seed ||
+//! encryption_seed || kem_seed`, the same layout as the on-disk device-key blob
+//! in [`crate::device_keys`]).
+//!
+//! ## Why the X-Wing seed (v6, #3053)
+//!
+//! A device's X-Wing key is fixed for its life: it is named once in the user
+//! sigchain (`user_init` or `device_add`) and never redrawn. A restore that
+//! brought back only the signing and X25519 seeds would leave the restored
+//! device active under its Ed25519 identity while the X-Wing key its chain
+//! names has no private half anywhere — it would sign in and decrypt nothing.
+//! Re-keying is remove-and-relink, which needs a second device to sign it, so
+//! for a single-device user that is a lockout. v6 therefore carries the third
+//! seed, and a backup without it is refused by name
+//! ([`CryptoError::BackupMissingXwingSeed`]) rather than half-restored. The
+//! backup already held this device's private seeds under the user's PIN; the
+//! third changes nothing about what it is trusted with. (A provisioning payload
+//! in flight is a different question, and never carries a seed.)
 //!
 //! ## Why both seeds (#2140)
 //!
@@ -92,12 +108,16 @@
 //!
 //! ## Compatibility
 //!
-//! v5 is a clean break. No `v:1`, `v:3` or `v:4` file is readable. v1/v3 were
+//! v6 is a clean break. A `v:5` file holds no X-Wing seed and is refused as
+//! [`CryptoError::BackupMissingXwingSeed`], pointing the user at recovery onto
+//! a new device identity (L7); older versions are refused as unsupported. After
+//! the pre-M2 reset, older backups hold only test data.
+//! Before v6: no `v:1`, `v:3` or `v:4` file is readable. v1/v3 were
 //! never readable by anything. A v4 file holds only a signing seed, and the only
 //! way to "restore" one is to invent an encryption key — precisely the #2140
 //! defect — so it is refused loudly rather than half-restored. The project is
 //! pre-production and v4 never left internal testing, so a v4 holder makes a
-//! fresh v5 backup from a device that still holds the key.
+//! fresh backup from a device that still holds the key.
 
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
@@ -116,7 +136,10 @@ use crate::labels::{LABEL_BACKUP, LABEL_BACKUP_HKDF_INFO};
 
 /// Container version written by [`create_backup`] and the only one
 /// [`open_backup`] accepts.
-pub const BACKUP_FORMAT_VERSION: u8 = 5;
+pub const BACKUP_FORMAT_VERSION: u8 = 6;
+
+/// The last container version without the X-Wing seed. Refused by name.
+const LAST_VERSION_WITHOUT_XWING_SEED: u8 = 5;
 
 /// KDF version recorded in the recovery-key block (1 = HKDF-SHA256).
 const RECOVERY_KDF_VERSION: u8 = 1;
@@ -135,9 +158,11 @@ const MAX_BACKUP_ARGON2_P_COST: u32 = 255;
 const BACKUP_SALT_LEN: usize = 32;
 /// AES-256-GCM nonce length, in bytes.
 const BACKUP_NONCE_LEN: usize = 12;
-/// Sealed plaintext length: the 32-byte signing seed then the 32-byte
-/// encryption seed.
-const BACKUP_PLAINTEXT_LEN: usize = 64;
+/// Sealed plaintext length: the 32-byte signing seed, the 32-byte X25519
+/// encryption seed, then the 32-byte X-Wing seed.
+const BACKUP_PLAINTEXT_LEN: usize = crate::device_keys::DEVICE_SEEDS_LEN;
+/// A payload of only the first two seeds — what v5 sealed.
+const TWO_SEED_PLAINTEXT_LEN: usize = 64;
 /// Sealed payload length: the plaintext plus the 16-byte GCM tag.
 const BACKUP_CIPHERTEXT_LEN: usize = BACKUP_PLAINTEXT_LEN + 16;
 
@@ -165,7 +190,7 @@ pub struct PinBlock {
     pub p: u32,
     /// AES-256-GCM nonce, hex (12 bytes).
     pub n: String,
-    /// AES-256-GCM ciphertext of `signing_seed || encryption_seed`, hex.
+    /// AES-256-GCM ciphertext of `signing_seed || encryption_seed || kem_seed`, hex.
     pub c: String,
 }
 
@@ -178,7 +203,7 @@ pub struct RecoveryBlock {
     pub s: String,
     /// AES-256-GCM nonce, hex (12 bytes).
     pub n: String,
-    /// AES-256-GCM ciphertext of `signing_seed || encryption_seed`, hex.
+    /// AES-256-GCM ciphertext of `signing_seed || encryption_seed || kem_seed`, hex.
     pub c: String,
 }
 
@@ -191,9 +216,9 @@ pub struct BackupFile {
     pub id: String,
     /// Creation time, unix seconds, rounded to the nearest hour.
     pub t: u64,
-    /// PIN-protected copy of both device seeds.
+    /// PIN-protected copy of the three device seeds.
     pub d: PinBlock,
-    /// Recovery-key-protected copy of both device seeds.
+    /// Recovery-key-protected copy of the three device seeds.
     pub r: RecoveryBlock,
 }
 
@@ -391,7 +416,7 @@ fn seal(kek: &[u8; 32], plaintext: &[u8], aad: &str) -> Result<(String, String),
     Ok((hex::encode(nonce_bytes), hex::encode(ciphertext)))
 }
 
-/// AES-256-GCM open, returning both device seeds.
+/// AES-256-GCM open, returning the three device seeds.
 fn open_secrets(
     kek: &[u8; 32],
     nonce_hex: &str,
@@ -406,8 +431,12 @@ fn open_secrets(
         )));
     }
     let ciphertext = hex::decode(ciphertext_hex)?;
-    // Exactly one sealed seed pair. v5 stores nothing else, so holding the
+    // Exactly one sealed seed triple. v6 stores nothing else, so holding the
     // length here keeps a crafted file from handing AES-GCM a large buffer.
+    // A sealed seed PAIR is a payload without the X-Wing seed: refused by name.
+    if ciphertext.len() == TWO_SEED_PLAINTEXT_LEN + 16 {
+        return Err(CryptoError::BackupMissingXwingSeed);
+    }
     if ciphertext.len() != BACKUP_CIPHERTEXT_LEN {
         return Err(CryptoError::InvalidFormat(format!(
             "Backup payload must be {BACKUP_CIPHERTEXT_LEN} bytes, got {}",
@@ -427,24 +456,18 @@ fn open_secrets(
             )
             .map_err(|_| CryptoError::DecryptionFailed)?,
     );
-    if plaintext.len() != BACKUP_PLAINTEXT_LEN {
-        return Err(CryptoError::InvalidFormat(format!(
+    let seeds: &[u8; BACKUP_PLAINTEXT_LEN] = plaintext.as_slice().try_into().map_err(|_| {
+        CryptoError::InvalidFormat(format!(
             "Backup payload must be {BACKUP_PLAINTEXT_LEN} bytes of device seeds, got {}",
             plaintext.len()
-        )));
-    }
-    // Seeds are copied straight into the zeroize-on-drop struct; no `Copy`
-    // array is left behind on any path.
-    let mut secrets = DeviceSecrets {
-        signing_seed: [0u8; 32],
-        encryption_seed: [0u8; 32],
-    };
-    secrets.signing_seed.copy_from_slice(&plaintext[..32]);
-    secrets.encryption_seed.copy_from_slice(&plaintext[32..]);
-    Ok(secrets)
+        ))
+    })?;
+    // Each seed is built from its own bytes of the zeroizing plaintext; no
+    // zeroed or partly filled `DeviceSecrets` exists on any path.
+    Ok(DeviceSecrets::from_seeds(seeds))
 }
 
-/// Write a v5 backup of a device's secrets — both seeds — protected by both
+/// Write a v6 backup of a device's secrets — all three seeds — protected by both
 /// `pin` and `recovery_key`.
 ///
 /// `recovery_key` is accepted exactly as [`generate_recovery_key`] produced it —
@@ -460,7 +483,8 @@ pub fn create_backup(
     let signing_pubkey_hex = hex::encode(secrets.signing_pubkey().to_bytes());
     let mut plaintext = Zeroizing::new([0u8; BACKUP_PLAINTEXT_LEN]);
     plaintext[..32].copy_from_slice(&secrets.signing_seed);
-    plaintext[32..].copy_from_slice(&secrets.encryption_seed);
+    plaintext[32..64].copy_from_slice(&secrets.encryption_seed);
+    plaintext[64..].copy_from_slice(&secrets.kem_seed);
 
     // Independent per-backup salts, both random. Nothing in this file derives a
     // KEK under a fixed salt.
@@ -502,11 +526,15 @@ pub fn create_backup(
     })
 }
 
-/// Recover a device's secrets — both seeds — from a v5 backup.
+/// Recover a device's secrets — all three seeds — from a v6 backup.
 ///
-/// The returned [`DeviceSecrets`] is the exact key pair the backup was written
-/// from, so the restored device's X25519 pubkey equals the original's and
-/// everything sealed to it before the backup still opens (#2140).
+/// The returned [`DeviceSecrets`] is exactly the seeds the backup was written
+/// from, so the restored device's X25519 and X-Wing keys equal the original's
+/// (the X-Wing key is the one its chain names) and everything sealed to it
+/// before the backup still opens (#2140, #3053).
+///
+/// A backup without the X-Wing seed — a v5 file, or a two-seed payload — is
+/// refused as [`CryptoError::BackupMissingXwingSeed`], never half-restored.
 ///
 /// A wrong credential is indistinguishable from a corrupted file: both surface
 /// as [`CryptoError::DecryptionFailed`] from the AEAD tag check.
@@ -514,6 +542,9 @@ pub fn open_backup(
     backup: &BackupFile,
     credential: BackupCredential<'_>,
 ) -> Result<DeviceSecrets, CryptoError> {
+    if backup.v == LAST_VERSION_WITHOUT_XWING_SEED {
+        return Err(CryptoError::BackupMissingXwingSeed);
+    }
     if backup.v != BACKUP_FORMAT_VERSION {
         return Err(CryptoError::InvalidFormat(format!(
             "Unsupported backup version {} (this build reads v{})",
@@ -559,17 +590,11 @@ mod tests {
     /// key has. A fixture whose encryption seed were derived from its signing
     /// seed could not tell a working backup from the #2140 defect.
     fn secrets() -> DeviceSecrets {
-        let mut s = DeviceSecrets {
-            signing_seed: [0u8; 32],
-            encryption_seed: [0u8; 32],
-        };
-        for (i, b) in s.signing_seed.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(7).wrapping_add(13);
+        DeviceSecrets {
+            signing_seed: std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(13)),
+            encryption_seed: std::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(101)),
+            kem_seed: std::array::from_fn(|i| (i as u8).wrapping_mul(5).wrapping_add(37)),
         }
-        for (i, b) in s.encryption_seed.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(11).wrapping_add(101);
-        }
-        s
     }
 
     fn signing_pubkey_hex() -> String {
@@ -590,6 +615,10 @@ mod tests {
         assert_eq!(
             recovered.encryption_seed, original.encryption_seed,
             "encryption seed — a mismatch here is #2140"
+        );
+        assert_eq!(
+            recovered.kem_seed, original.kem_seed,
+            "X-Wing seed — a mismatch here is #3053"
         );
     }
 
@@ -756,10 +785,10 @@ mod tests {
     fn rejects_other_container_versions() {
         let key = generate_recovery_key();
         let mut backup = write(&key);
-        for version in [1u8, 3, 4, 6] {
+        for version in [1u8, 3, 4, 7] {
             backup.v = version;
             let err = open_backup(&backup, BackupCredential::RecoveryKey(&key))
-                .expect_err("only v5 is readable");
+                .expect_err("only v6 is readable");
             assert!(
                 matches!(err, CryptoError::InvalidFormat(_)),
                 "v{version} gave {err}"
@@ -768,9 +797,53 @@ mod tests {
     }
 
     #[test]
+    fn refuses_a_v5_backup_by_name() {
+        // v5 carried the signing and X25519 seeds but no X-Wing seed. Its
+        // refusal names what is missing rather than reading as "unsupported".
+        let key = generate_recovery_key();
+        let mut backup = write(&key);
+        backup.v = 5;
+        for credential in [
+            BackupCredential::RecoveryKey(&key),
+            BackupCredential::Pin(PIN),
+        ] {
+            let err = open_backup(&backup, credential).expect_err("v5 must be refused");
+            assert!(
+                matches!(err, CryptoError::BackupMissingXwingSeed),
+                "got {err}"
+            );
+            assert_eq!(err.code(), "backup_missing_xwing_seed");
+            assert!(err.to_string().contains("X-Wing seed"), "{err}");
+        }
+    }
+
+    #[test]
+    fn refuses_a_two_seed_payload_by_name() {
+        // The v5 payload shape — signing and X25519 seeds, no X-Wing seed —
+        // relabelled as v6 and sealed under the right key, is refused by name:
+        // never restored with an invented or missing X-Wing key.
+        let key = generate_recovery_key();
+        let mut backup = write(&key);
+        let salt = decode_salt(&backup.r.s).unwrap();
+        let kek = derive_recovery_kek(&key, &salt).unwrap();
+        let mut two = [0u8; TWO_SEED_PLAINTEXT_LEN];
+        two[..32].copy_from_slice(&secrets().signing_seed);
+        two[32..].copy_from_slice(&secrets().encryption_seed);
+        let (nonce, ciphertext) = seal(&kek, &two, LABEL_BACKUP_HKDF_INFO).unwrap();
+        backup.r.n = nonce;
+        backup.r.c = ciphertext;
+        let err = open_backup(&backup, BackupCredential::RecoveryKey(&key))
+            .expect_err("a two-seed payload must be refused");
+        assert!(
+            matches!(err, CryptoError::BackupMissingXwingSeed),
+            "got {err}"
+        );
+    }
+
+    #[test]
     fn refuses_a_signing_seed_only_payload() {
         // The v4 shape — one 32-byte seed — must never be half-restored by
-        // inventing the encryption seed, even if relabelled as v5 and sealed
+        // inventing the encryption seed, even if relabelled as v6 and sealed
         // under the right recovery key. That invention is #2140.
         let key = generate_recovery_key();
         let mut backup = write(&key);
@@ -859,8 +932,8 @@ mod tests {
 
     #[test]
     fn rejects_fields_that_are_not_the_written_length() {
-        // Everything but the ciphertext is fixed-length in v5, and the
-        // ciphertext is exactly one sealed seed pair. Nothing variable reaches a
+        // Everything but the ciphertext is fixed-length in v6, and the
+        // ciphertext is exactly one sealed seed triple. Nothing variable reaches a
         // primitive.
         let key = generate_recovery_key();
         let base = write(&key);

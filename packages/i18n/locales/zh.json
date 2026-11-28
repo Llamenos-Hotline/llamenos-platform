@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "此备份不包含本设备的后量子加密密钥，因此无法恢复该设备。请改用账户恢复来设置新设备。",
     "invalidKey": "密钥无效",
     "login": "登录",
     "loginDescription": "输入您的密钥以访问热线",

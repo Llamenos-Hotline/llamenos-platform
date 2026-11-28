@@ -2,7 +2,7 @@
  * Key backup & recovery — container types and the restore-side file reader.
  *
  * The backup format, both KDFs and the cipher are defined once, in Rust:
- * `packages/crypto/src/backup.rs` (container v5). That module's doc comment is
+ * `packages/crypto/src/backup.rs` (container v6). That module's doc comment is
  * the specification; read it before changing anything here.
  *
  * This file deliberately contains **no cryptography**. It used to hold a second,
@@ -27,7 +27,14 @@
  */
 
 /** Container version this build reads and writes. Must match Rust's `BACKUP_FORMAT_VERSION`. */
-export const BACKUP_FORMAT_VERSION = 5
+export const BACKUP_FORMAT_VERSION = 6
+
+/**
+ * The last container version that carried no X-Wing seed. A v5 file cannot
+ * restore the X-Wing key the user's chain names for the device, so it is
+ * refused by name — the user recovers onto a new device instead (#3053).
+ */
+export const LAST_VERSION_WITHOUT_XWING_SEED = 5
 
 /** PIN-protected block: Argon2id over the credential, AES-256-GCM. */
 interface PinBlock {
@@ -52,8 +59,8 @@ export interface BackupFile {
   v: typeof BACKUP_FORMAT_VERSION
   id: string // first 6 hex chars of SHA-256(signing pubkey hex) — identification only
   t: number // unix seconds, rounded to the nearest hour
-  d: PinBlock // PIN-protected copy of both device seeds (signing || encryption)
-  r: RecoveryBlock // recovery-key-protected copy of both device seeds
+  d: PinBlock // PIN-protected copy of the three device seeds (signing || X25519 || X-Wing)
+  r: RecoveryBlock // recovery-key-protected copy of the three device seeds
 }
 
 function isHex(value: unknown): value is string {
@@ -73,26 +80,36 @@ function isRecoveryBlock(block: unknown): block is RecoveryBlock {
   return typeof b.kv === 'number' && isHex(b.s) && isHex(b.n) && isHex(b.c)
 }
 
+/** What reading a user-selected backup file found. */
+export type BackupFileRead =
+  | { kind: 'backup'; backup: BackupFile }
+  /** A v5 file: it holds no X-Wing seed, so it cannot restore this device. */
+  | { kind: 'missing-xwing-seed' }
+  | { kind: 'invalid' }
+
 /**
  * Parse a user-selected backup file.
  *
  * Shape and version are validated here so a wrong or truncated file is rejected
  * before a credential is asked for; the credential itself is checked in Rust.
- * Returns null for anything that is not a v5 backup — including the v1, v3 and
+ * A v5 file is reported as `missing-xwing-seed` — it holds the signing and
+ * X25519 seeds but not the X-Wing seed, so restoring it would leave a device
+ * that signs in and decrypts nothing (#3053); Rust refuses it by the same name.
+ * Anything else that is not a v6 backup is `invalid` — including the v1, v3 and
  * v4 files older builds could produce. v1/v3 were never readable; v4 held only
- * the signing seed, so restoring it would invent a different decryption key
- * (#2140). See `packages/crypto/src/backup.rs`, "Compatibility".
+ * the signing seed (#2140). See `packages/crypto/src/backup.rs`, "Compatibility".
  */
-export async function readBackupFile(file: File): Promise<BackupFile | null> {
+export async function readBackupFile(file: File): Promise<BackupFileRead> {
   try {
     const data: unknown = JSON.parse(await file.text())
-    if (typeof data !== 'object' || data === null) return null
+    if (typeof data !== 'object' || data === null) return { kind: 'invalid' }
     const candidate = data as Record<string, unknown>
-    if (candidate.v !== BACKUP_FORMAT_VERSION) return null
-    if (typeof candidate.id !== 'string' || typeof candidate.t !== 'number') return null
-    if (!isPinBlock(candidate.d) || !isRecoveryBlock(candidate.r)) return null
-    return candidate as unknown as BackupFile
+    if (candidate.v === LAST_VERSION_WITHOUT_XWING_SEED) return { kind: 'missing-xwing-seed' }
+    if (candidate.v !== BACKUP_FORMAT_VERSION) return { kind: 'invalid' }
+    if (typeof candidate.id !== 'string' || typeof candidate.t !== 'number') return { kind: 'invalid' }
+    if (!isPinBlock(candidate.d) || !isRecoveryBlock(candidate.r)) return { kind: 'invalid' }
+    return { kind: 'backup', backup: candidate as unknown as BackupFile }
   } catch {
-    return null
+    return { kind: 'invalid' }
   }
 }

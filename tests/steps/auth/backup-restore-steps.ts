@@ -9,7 +9,7 @@
  * that builds its own backup proves only that the test agrees with itself
  * (#1709: that is exactly how three incompatible implementations survived).
  */
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect } from '@playwright/test'
@@ -91,6 +91,16 @@ When('I upload a version 3 backup file', async ({ page }) => {
   })
   await page.getByTestId(TestIds.BACKUP_FILE_INPUT)
     .setInputFiles(writeTempBackup('backup-legacy-v3.json', legacy))
+})
+
+When('I upload a version 5 backup file', async ({ page }) => {
+  // A real v5 backup, written by packages/crypto before backups carried the
+  // X-Wing seed (#3053) — the crate's own refusal vector.
+  const fixture = JSON.parse(readFileSync(
+    join(process.cwd(), 'packages/crypto/tests/fixtures/backup-v5-without-xwing-seed.json'), 'utf-8',
+  )) as { backup: unknown }
+  await page.getByTestId(TestIds.BACKUP_FILE_INPUT)
+    .setInputFiles(writeTempBackup('backup-v5.json', JSON.stringify(fixture.backup)))
 })
 
 When('I enter my recovery key', async ({ page, backupWorld }) => {

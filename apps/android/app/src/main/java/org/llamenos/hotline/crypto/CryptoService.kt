@@ -26,7 +26,29 @@ data class DeviceKeyState(
     val deviceId: String,
     val signingPubkeyHex: String,
     val encryptionPubkeyHex: String,
-)
+    /**
+     * X-Wing (ML-KEM-768 + X25519) public key, 2432 hex chars — the device's
+     * crypto_format 2 key (wire spec D16). Created once with the device, named
+     * in its `user_init` or `device_add`, and never redrawn (#2496).
+     */
+    val kemPubkeyHex: String,
+) {
+    internal fun toFfi() = org.llamenos.core.DeviceKeyState(
+        deviceId = deviceId,
+        signingPubkeyHex = signingPubkeyHex,
+        encryptionPubkeyHex = encryptionPubkeyHex,
+        kemPubkeyHex = kemPubkeyHex,
+    )
+
+    internal companion object {
+        fun fromFfi(s: org.llamenos.core.DeviceKeyState) = DeviceKeyState(
+            deviceId = s.deviceId,
+            signingPubkeyHex = s.signingPubkeyHex,
+            encryptionPubkeyHex = s.encryptionPubkeyHex,
+            kemPubkeyHex = s.kemPubkeyHex,
+        )
+    }
+}
 
 data class EncryptedDeviceKeys(
     val kdfVersion: UByte,
@@ -37,7 +59,31 @@ data class EncryptedDeviceKeys(
     val nonce: String,
     val ciphertext: String,
     val state: DeviceKeyState,
-)
+) {
+    internal fun toFfi() = org.llamenos.core.EncryptedDeviceKeys(
+        kdfVersion = kdfVersion,
+        salt = salt,
+        argon2MCost = argon2MCost,
+        argon2TCost = argon2TCost,
+        argon2PCost = argon2PCost,
+        nonce = nonce,
+        ciphertext = ciphertext,
+        state = state.toFfi(),
+    )
+
+    internal companion object {
+        fun fromFfi(e: org.llamenos.core.EncryptedDeviceKeys) = EncryptedDeviceKeys(
+            kdfVersion = e.kdfVersion,
+            salt = e.salt,
+            argon2MCost = e.argon2MCost,
+            argon2TCost = e.argon2TCost,
+            argon2PCost = e.argon2PCost,
+            nonce = e.nonce,
+            ciphertext = e.ciphertext,
+            state = DeviceKeyState.fromFfi(e.state),
+        )
+    }
+}
 
 data class AuthToken(
     val pubkey: String,
@@ -179,6 +225,14 @@ data class EphemeralKeyResult(
 class CryptoException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
+ * A device backup that holds no X-Wing seed (a v5 file): refused by name, never
+ * half-restored to a device that would sign in and decrypt nothing (#3053).
+ * The message is the crate's, naming the missing seed; the user recovers onto a
+ * new device identity instead (spec 2026-11-25 L7).
+ */
+class BackupMissingXwingSeedException(cause: Throwable) : Exception(cause.message, cause)
+
+/**
  * CryptoService wraps the llamenos-core native library via JNI/UniFFI.
  *
  * ## V3 Device Key Model
@@ -210,6 +264,10 @@ class CryptoService @Inject constructor() {
 
     /** X25519 encryption public key (hex). Used for HPKE. */
     var encryptionPubkeyHex: String? = null
+        private set
+
+    /** This device's X-Wing public key, once unlocked (see [DeviceKeyState.kemPubkeyHex]). */
+    var kemPubkeyHex: String? = null
         private set
 
     /** Device identifier (UUID). */
@@ -267,25 +325,9 @@ class CryptoService @Inject constructor() {
                     deviceId = deviceId,
                     pin = pin,
                 )
-                val state = DeviceKeyState(
-                    deviceId = ffiResult.state.deviceId,
-                    signingPubkeyHex = ffiResult.state.signingPubkeyHex,
-                    encryptionPubkeyHex = ffiResult.state.encryptionPubkeyHex,
-                )
-                this@CryptoService.signingPubkeyHex = state.signingPubkeyHex
-                this@CryptoService.encryptionPubkeyHex = state.encryptionPubkeyHex
-                this@CryptoService.deviceId = state.deviceId
-                _unlockedState.value = true
-                EncryptedDeviceKeys(
-                    kdfVersion = ffiResult.kdfVersion,
-                    salt = ffiResult.salt,
-                    argon2MCost = ffiResult.argon2MCost,
-                    argon2TCost = ffiResult.argon2TCost,
-                    argon2PCost = ffiResult.argon2PCost,
-                    nonce = ffiResult.nonce,
-                    ciphertext = ffiResult.ciphertext,
-                    state = state,
-                )
+                val encrypted = EncryptedDeviceKeys.fromFfi(ffiResult)
+                adopt(encrypted.state)
+                encrypted
             } catch (e: org.llamenos.core.CryptoException) {
                 throw CryptoException("Device key generation failed: ${e.message}", e)
             }
@@ -301,35 +343,22 @@ class CryptoService @Inject constructor() {
             NativeCryptoLibrary.require()
 
             try {
-                val ffiData = org.llamenos.core.EncryptedDeviceKeys(
-                    kdfVersion = data.kdfVersion,
-                    salt = data.salt,
-                    argon2MCost = data.argon2MCost,
-                    argon2TCost = data.argon2TCost,
-                    argon2PCost = data.argon2PCost,
-                    nonce = data.nonce,
-                    ciphertext = data.ciphertext,
-                    state = org.llamenos.core.DeviceKeyState(
-                        deviceId = data.state.deviceId,
-                        signingPubkeyHex = data.state.signingPubkeyHex,
-                        encryptionPubkeyHex = data.state.encryptionPubkeyHex,
-                    ),
-                )
-                val ffiState = org.llamenos.core.mobileUnlock(data = ffiData, pin = pin)
-                val state = DeviceKeyState(
-                    deviceId = ffiState.deviceId,
-                    signingPubkeyHex = ffiState.signingPubkeyHex,
-                    encryptionPubkeyHex = ffiState.encryptionPubkeyHex,
-                )
-                this@CryptoService.signingPubkeyHex = state.signingPubkeyHex
-                this@CryptoService.encryptionPubkeyHex = state.encryptionPubkeyHex
-                this@CryptoService.deviceId = state.deviceId
-                _unlockedState.value = true
+                // Unlocking only reads the device's X-Wing seed; it is never redrawn.
+                val state = DeviceKeyState.fromFfi(org.llamenos.core.mobileUnlock(data = data.toFfi(), pin = pin))
+                adopt(state)
                 state
             } catch (e: org.llamenos.core.CryptoException) {
                 throw CryptoException("Decryption failed: incorrect PIN", e)
             }
         }
+
+    private fun adopt(state: DeviceKeyState) {
+        signingPubkeyHex = state.signingPubkeyHex
+        encryptionPubkeyHex = state.encryptionPubkeyHex
+        kemPubkeyHex = state.kemPubkeyHex
+        deviceId = state.deviceId
+        _unlockedState.value = true
+    }
 
     /**
      * Lock by zeroizing device secrets in Rust memory.
@@ -735,6 +764,55 @@ class CryptoService @Inject constructor() {
         }
     }
 
+    // ---- Device backup (packages/crypto backup.rs, v6) ----
+
+    /** A fresh recovery key for display: base32, dash-grouped. */
+    fun generateRecoveryKey(): String {
+        NativeCryptoLibrary.require()
+        return org.llamenos.core.mobileGenerateRecoveryKey()
+    }
+
+    /**
+     * The loaded device's backup file (JSON): its three seeds — signing, X25519
+     * and X-Wing — sealed under [pin] and [recoveryKey]. The seeds never leave Rust.
+     */
+    suspend fun createBackup(pin: String, recoveryKey: String): String = withContext(computeDispatcher) {
+        NativeCryptoLibrary.require()
+        if (!isUnlocked) throw CryptoException("No key loaded")
+        try {
+            org.llamenos.core.mobileCreateBackup(pin, recoveryKey)
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Backup failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Restore a device from a backup file and load it, re-encrypted under
+     * [newPin]. The X-Wing key comes back with the other two, so it is the one
+     * the user's chain names (#3053). A backup without the X-Wing seed is refused
+     * as [BackupMissingXwingSeedException] — never half-restored.
+     */
+    suspend fun restoreBackup(
+        backupJson: String,
+        credential: String,
+        isRecoveryKey: Boolean,
+        newPin: String,
+        deviceId: String,
+    ): EncryptedDeviceKeys = withContext(computeDispatcher) {
+        NativeCryptoLibrary.require()
+        try {
+            val encrypted = EncryptedDeviceKeys.fromFfi(
+                org.llamenos.core.mobileRestoreBackupAndLoad(backupJson, credential, isRecoveryKey, newPin, deviceId),
+            )
+            adopt(encrypted.state)
+            encrypted
+        } catch (e: org.llamenos.core.CryptoException.BackupMissingXwingSeed) {
+            throw BackupMissingXwingSeedException(e)
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Backup restore failed: ${e.message}", e)
+        }
+    }
+
     // ---- Sigchain Operations ----
 
     /** Create a new sigchain link signed by this device. */
@@ -772,6 +850,36 @@ class CryptoService @Inject constructor() {
             throw CryptoException("Sigchain link verification failed: ${e.message}", e)
         }
     }
+
+    /**
+     * This device's genesis `user_init` payload JSON (spec 2026-11-25 §5 as
+     * revised 2026-11-26): its Ed25519, X25519 and X-Wing keys, `format: 2` and
+     * the possession signature, made in Rust. Sign the link carrying it with
+     * [createSigchainLink].
+     */
+    suspend fun userInitPayload(): String = withContext(computeDispatcher) {
+        NativeCryptoLibrary.require()
+        if (!isUnlocked) throw CryptoException("No key loaded")
+        try {
+            org.llamenos.core.mobileUserInitPayload()
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("user_init payload failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Verify several users' chains together (spec §6): each chain verified, then
+     * any key named by two users' chains refused (`chain_key_reused`).
+     */
+    suspend fun verifySigchains(chainsJson: String): List<org.llamenos.core.SigchainVerifiedState> =
+        withContext(computeDispatcher) {
+            NativeCryptoLibrary.require()
+            try {
+                org.llamenos.core.mobileSigchainVerifyUsers(chainsJson)
+            } catch (e: org.llamenos.core.CryptoException) {
+                throw CryptoException("Sigchain verification refused: ${e.message}", e)
+            }
+        }
 
     /** Verify a complete sigchain (all links). */
     suspend fun verifySigchain(

@@ -19,6 +19,7 @@ import { gcm } from '@noble/ciphers/aes.js'
 import { concatBytes } from '@noble/hashes/utils.js'
 import { ristretto255_oprf } from '@noble/curves/ed25519.js'
 import { LABEL_BAN_KEY_DERIVE, HMAC_BAN_PREFIX } from '@shared/crypto-labels'
+import { verifySigchainMock, type MockSigchainVerifiedState } from '../../../../tests/mocks/sigchain-mock'
 
 export function randomBytes(len: number): Uint8Array {
   const out = new Uint8Array(len)
@@ -81,6 +82,37 @@ export class CryptoError extends Error {
 }
 
 export { SHAPES, type Shape } from '@shared/crypto-shapes'
+
+export interface SigchainLink {
+  id: string
+  seq: number
+  prevHash: string | null
+  entryHash: string
+  signerDeviceId: string
+  signerPubkey: string
+  signature: string
+  timestamp: string
+  payloadJson: string
+}
+
+/**
+ * The server verifies a genesis / device_add with the WHOLE chain through the
+ * crate (`ffi_sigchain_verify`): possession signatures, the active-signer rule
+ * and in-chain key reuse. This tier runs that through the Playwright mock's
+ * line-for-line mirror of `verify_sigchain` (tests/mocks/sigchain-mock.ts),
+ * which is pinned against the crate's own vectors — identity_init.rs and
+ * device-binding.json — in unit/sigchain-mock-parity.test.ts. It checks an
+ * X-Wing key's shape, not that it parses; the real crate runs these appends
+ * under bun:ffi (`__tests__/integration-bun/device-key-binding.test.ts`).
+ * A refusal carries the crate's `"{code}: {detail}"` message, as the real one.
+ */
+export function sigchainVerify(links: readonly SigchainLink[]): MockSigchainVerifiedState {
+  try {
+    return verifySigchainMock([...links])
+  } catch (e) {
+    throw new CryptoError(-5, e instanceof Error ? e.message : String(e))
+  }
+}
 import type { Shape } from '@shared/crypto-shapes'
 export interface HpkeEnvelope { enc: string; ct: string }
 

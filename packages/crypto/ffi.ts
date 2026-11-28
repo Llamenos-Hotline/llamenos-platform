@@ -141,6 +141,13 @@ const lib = dlopen(LIB_PATH, {
     args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
     returns: FFIType.i32,
   },
+  ffi_sigchain_verify: {
+    args: [
+      FFIType.ptr, FFIType.u64, // links (JSON array of SigchainLink)
+      FFIType.ptr, FFIType.u64, // out (verified state JSON)
+    ],
+    returns: FFIType.i32,
+  },
   ffi_build_auth_message: {
     args: [
       FFIType.ptr, FFIType.u64, // pubkey_hex
@@ -190,7 +197,7 @@ const lib = dlopen(LIB_PATH, {
   },
 })
 
-class CryptoError extends Error {
+export class CryptoError extends Error {
   /**
    * The crate's closed rejection code (`CryptoError::code` in Rust —
    * `invalid_format`, `decryption_failed`, `invalid_id`, …) when the failure
@@ -204,8 +211,6 @@ class CryptoError extends Error {
     this.reason = m ? m[1] : null
   }
 }
-
-export { CryptoError }
 
 function getLastError(): string {
   const buf = new Uint8Array(512)
@@ -513,6 +518,67 @@ export function recoveryLivenessVerify(
   if (code === 0) return true
   if (code === -1) return false
   throw new CryptoError(code, getLastError())
+}
+
+/** One user-sigchain link as the crate hashes and signs it (`sigchain::SigchainLink`). */
+export interface SigchainLink {
+  id: string
+  seq: number
+  prevHash: string | null
+  entryHash: string
+  signerDeviceId: string
+  signerPubkey: string
+  signature: string
+  timestamp: string
+  payloadJson: string
+}
+
+/** An active device's format-2 (X-Wing) encryption key, as its `user_init` / `device_add` names it. */
+export interface ActiveDeviceKey {
+  devicePubkey: string
+  encryptionPubkey: string
+  format: number
+}
+
+/** `sigchain::SigchainVerifiedState`. */
+export interface SigchainVerifiedState {
+  userPubkey: string
+  verifiedCount: number
+  headSeq: number
+  headHash: string
+  activeDevicePubkeys: string[]
+  activeDeviceKeys: ActiveDeviceKey[]
+  namedKeys: string[]
+}
+
+/** `check_output_size!` in ffi_server.rs: the buffer was too small; the message names the size needed. */
+const OUTPUT_TOO_SMALL = -2
+
+/**
+ * Verify a whole user sigchain through `packages/crypto` `verify_sigchain` —
+ * hash chain, signatures, device set, the `user_init` / `device_add`
+ * possession signatures and in-chain key reuse (#2496). A refusal throws a
+ * `CryptoError` whose `reason` is the closed rejection code
+ * (`chain_device_pop`, `chain_key_reused`, `chain_unauthorised_signer`, …).
+ */
+export function sigchainVerify(links: readonly SigchainLink[]): SigchainVerifiedState {
+  const input = new TextEncoder().encode(JSON.stringify(links))
+  // The state repeats keys the links name (each active device's 2432-hex X-Wing
+  // key appears in `activeDeviceKeys` and again in `namedKeys`), so no fixed
+  // multiple of the input is a safe size. Start at the input's size; when the
+  // crate reports the buffer too small, it names the exact size, and the
+  // (deterministic) verification runs once more into a buffer of that size.
+  let out = new Uint8Array(input.length + 4096)
+  let written = lib.symbols.ffi_sigchain_verify(ptr(input), input.length, ptr(out), out.length)
+  if (written === OUTPUT_TOO_SMALL) {
+    const message = getLastError()
+    const need = /need (\d+)/.exec(message)
+    if (!need) throw new CryptoError(written, message)
+    out = new Uint8Array(Number(need[1]))
+    written = lib.symbols.ffi_sigchain_verify(ptr(input), input.length, ptr(out), out.length)
+  }
+  if (written < 0) checkResult(written)
+  return JSON.parse(new TextDecoder().decode(out.subarray(0, written))) as SigchainVerifiedState
 }
 
 export function ed25519PubkeyFromSeed(seed: Uint8Array): Uint8Array {

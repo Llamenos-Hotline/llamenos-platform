@@ -54,6 +54,10 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'sigchain_create_link_from_state',
     'sigchain_verify',
     'sigchain_verify_link',
+    // Multi-user verification, refusing cross-user key reuse (stateless, #2496)
+    'sigchain_verify_users',
+    // This device's genesis user_init payload: its keys + possession signature (#2496)
+    'user_init_payload_from_state',
     // Hub key management (stateful — key never enters JS)
     'hpke_unwrap_and_set_hub_key',
     'generate_hub_key_in_state',

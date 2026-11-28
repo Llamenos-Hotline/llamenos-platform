@@ -475,6 +475,15 @@ pub const LABEL_OFFLINE_QUEUE: &str = "llamenos:offline-queue:v1";
 /// key only once the statement opens under the key it already holds.
 pub const LABEL_HUB_KEY_ROTATION: &str = "llamenos:hub-key-rotation:v1";
 
+// --- Device key binding (#2496) ---
+
+/// Possession signature on a user-sigchain `user_init` or `device_add` link
+/// (spec 2026-11-25-v2-device-linking-and-recovery §6): the device's own
+/// Ed25519 key signs `L_DEVICE_POP ‖ 0x00 ‖ H(lp(utf8(user)) ‖ lp(signingPk) ‖
+/// lp(encryptionPk) ‖ u16be(format))`, binding its encryption key to it and to
+/// the user (`sigchain::device_pop_message`).
+pub const LABEL_DEVICE_POP: &str = "llamenos:device-pop:v1";
+
 // =============================================================================
 // LABEL REGISTRY — maps numeric IDs (u8) to label strings.
 //
@@ -508,6 +517,7 @@ pub const LABEL_HUB_KEY_ROTATION: &str = "llamenos:hub-key-rotation:v1";
 // Index 109: Case comment (#2499)
 // Index 110: Device-local offline write queue
 // Index 111: Hub key rotation statement
+// Index 112: Device possession signature (#2496)
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -667,6 +677,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_OFFLINE_QUEUE, // 110
     // 111: Hub key rotation statement (PROTOCOL.md §2.7)
     LABEL_HUB_KEY_ROTATION, // 111
+    // 112: Device possession signature on user_init / device_add (#2496)
+    LABEL_DEVICE_POP, // 112
 ];
 
 /// Look up a label string by its numeric ID.

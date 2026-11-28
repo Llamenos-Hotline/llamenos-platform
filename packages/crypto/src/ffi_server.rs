@@ -1150,6 +1150,50 @@ pub extern "C" fn ffi_recovery_liveness_verify(
     }
 }
 
+// ── User sigchain (`crate::sigchain`) ──────────────────────────────────
+
+/// Verify a whole user sigchain (`crate::sigchain::verify_sigchain`): hash
+/// chain, signatures, the device set, `user_init` / `device_add` possession
+/// signatures (#2496) and in-chain key reuse. The server runs it over the
+/// stored chain plus a candidate link before appending, so the server accepts
+/// exactly the chains every client verifier accepts.
+///
+/// `links` is a UTF-8 JSON array of `SigchainLink` (camelCase). Writes the
+/// verified state as JSON to `out` and returns the byte count; on refusal
+/// returns -5 with `"{code}: {detail}"` as the last error.
+#[no_mangle]
+pub extern "C" fn ffi_sigchain_verify(
+    links: *const u8,
+    links_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(links, out);
+    check_input_size!(links_len);
+    let slice = unsafe { std::slice::from_raw_parts(links, links_len) };
+    let parsed: Vec<crate::sigchain::SigchainLink> = match serde_json::from_slice(slice) {
+        Ok(v) => v,
+        Err(e) => {
+            return set_crypto_error(&crate::errors::CryptoError::InvalidFormat(format!(
+                "sigchain links JSON is malformed: {e}"
+            )))
+        }
+    };
+    let state = match crate::sigchain::verify_sigchain(&parsed) {
+        Ok(s) => s,
+        Err(e) => return set_crypto_error(&e),
+    };
+    let json = match serde_json::to_vec(&state) {
+        Ok(j) => j,
+        Err(e) => return set_crypto_error(&crate::errors::CryptoError::JsonError(e)),
+    };
+    check_output_size!(out_len, json.len());
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, json.len()) };
+    out_slice.copy_from_slice(&json);
+    json.len() as i32
+}
+
 // ── Ban digest (RFC 9497 OPRF, `crate::ban_digest`) ────────────────────
 
 /// Read the 32-byte BAN_HASH_KEY, a UTF-8 scope string, and a UTF-8 phone/element argument.

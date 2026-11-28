@@ -74,6 +74,21 @@ pub enum CryptoError {
     #[error("No event key held for this hub and epoch")]
     NoEventKey,
 
+    /// A user sigchain refused by one of its closed rules. `code` is the
+    /// rejection code the vectors name (`chain_device_pop`, `chain_key_reused`,
+    /// `chain_unauthorised_signer`, …); see [`crate::sigchain`].
+    #[error("sigchain rejected ({code}): {detail}")]
+    SigchainRejected { code: &'static str, detail: String },
+
+    /// A device backup that does not carry the device's X-Wing seed — a v5 or
+    /// older file, or a payload holding only the signing and X25519 seeds. It
+    /// is never half-restored: the X-Wing key the user's chain names for the
+    /// device would have no private half, so the restored device would sign in
+    /// and decrypt nothing. Recover onto a new device identity instead
+    /// (spec 2026-11-25-v2-device-linking-and-recovery L7; #3053).
+    #[error("This backup does not contain the device's X-Wing seed, so it cannot restore the device. Recover your account onto a new device instead.")]
+    BackupMissingXwingSeed,
+
     /// The hub has no admin reader to seal to. See [`crate::readers`].
     #[error("No admin reader: the hub has no admin with a registered device and no escrow key, so nobody could read what is about to be written")]
     NoAdminReader,
@@ -94,6 +109,8 @@ impl CryptoError {
             Self::DecryptionFailed => "decryption_failed",
             Self::InvalidIdentifier(_) => "invalid_id",
             Self::NoEventKey => "no_event_key",
+            Self::SigchainRejected { code, .. } => code,
+            Self::BackupMissingXwingSeed => "backup_missing_xwing_seed",
             _ => "invalid_input",
         }
     }

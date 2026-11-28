@@ -45,6 +45,7 @@ class InviteViewModelEnrollmentTest {
         deviceRegistration = mockk()
         coEvery { invites.validate(code) } returns InviteValidationResponse(valid = true)
         coEvery { deviceRegistration.register() } returns Result.success(Unit)
+        coEvery { deviceRegistration.ensureIdentity() } returns Result.success(Unit)
         viewModel = InviteViewModel(invites, deviceRegistration)
     }
 
@@ -73,9 +74,11 @@ class InviteViewModelEnrollmentTest {
         viewModel.redeem()
 
         assertEquals(InviteStage.REDEEMED, redeemed().stage)
+        // Then the user's sigchain identity, its genesis naming this device's X-Wing key (#2496).
         coVerifyOrder {
             invites.redeemInvite(code)
             deviceRegistration.register()
+            deviceRegistration.ensureIdentity()
         }
     }
 
@@ -83,6 +86,7 @@ class InviteViewModelEnrollmentTest {
     fun `a failed device registration does not undo a spent invite`() = runTest {
         coEvery { invites.redeemInvite(code) } returns Result.success(Unit)
         coEvery { deviceRegistration.register() } returns Result.failure(java.io.IOException("offline"))
+        coEvery { deviceRegistration.ensureIdentity() } returns Result.failure(java.io.IOException("offline"))
         validated()
 
         viewModel.redeem()
@@ -99,5 +103,6 @@ class InviteViewModelEnrollmentTest {
 
         redeemed()
         coVerify(exactly = 0) { deviceRegistration.register() }
+        coVerify(exactly = 0) { deviceRegistration.ensureIdentity() }
     }
 }

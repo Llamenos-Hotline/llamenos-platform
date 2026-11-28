@@ -511,6 +511,7 @@
     "decryptFailed": "Failed to decrypt backup",
     "dropOrChoose": "Drop or choose a backup file",
     "invalidBackup": "Invalid backup file",
+    "backupMissingXwingSeed": "Cette sauvegarde ne contient pas la clé de chiffrement post-quantique de cet appareil : elle ne peut donc pas le restaurer. Utilisez la récupération de compte pour configurer un nouvel appareil.",
     "invalidKey": "Clé secrète invalide",
     "login": "Se connecter",
     "loginDescription": "Entrez votre clé secrète pour accéder à la ligne d'aide",

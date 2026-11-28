@@ -35,7 +35,12 @@ import org.llamenos.hotline.model.RecoveryVerifyResponse
 import org.llamenos.hotline.model.VoipTokenRequest
 import org.llamenos.hotline.service.OfflineQueue
 import org.llamenos.hotline.telephony.SipConnectionParams
+import org.llamenos.protocol.AppendSigchainLinkBody
+import org.llamenos.protocol.DistributePukEnvelopesBody
+import org.llamenos.protocol.DistributePukEnvelopesResponse
 import org.llamenos.protocol.HubIncidentListResponse
+import org.llamenos.protocol.SigchainLinkRecord
+import org.llamenos.protocol.SigchainResponse
 import org.llamenos.protocol.HubKeyEnvelopeResponse
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -415,6 +420,22 @@ class ApiService @Inject constructor(
      */
     suspend fun registerDevice(body: RegisterDeviceRequest): Unit =
         requestNoContent("POST", "/api/devices/register", body)
+
+    /** The user's sigchain, as the server stores it (`GET /api/users/:pubkey/sigchain`). */
+    suspend fun getSigchain(userPubkey: String): SigchainResponse =
+        request("GET", "/api/users/$userPubkey/sigchain")
+
+    /**
+     * Append a signed link to the caller's own sigchain. The server verifies
+     * continuity, the canonical hash and the signature, and — for a genesis
+     * or device_add — the whole chain through packages/crypto (#2496).
+     */
+    suspend fun appendSigchainLink(userPubkey: String, body: AppendSigchainLinkBody): SigchainLinkRecord =
+        request("POST", "/api/users/$userPubkey/sigchain", body)
+
+    /** Store PUK seed envelopes for devices the caller's sigchain authorises. */
+    suspend fun distributePukEnvelopes(body: DistributePukEnvelopesBody): DistributePukEnvelopesResponse =
+        request("POST", "/api/puk/envelopes", body)
 
     /**
      * Remove this device's push endpoint from the backend.

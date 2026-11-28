@@ -25,11 +25,16 @@ import { MOCK_PIN_LOCKOUT_STORAGE_KEY } from './pin-lockout'
 import {
   createInitialPukMock,
   createSigchainLinkMock,
+  userInitPayloadMock,
   rotatePukMock,
   verifySigchainLinkMock,
   verifySigchainMock,
+  verifyUserSigchainsMock,
   type MockSigchainLink,
 } from './sigchain-mock'
+// X-Wing (ML-KEM-768 + X25519): the mock only has to name a real X-Wing public
+// key the server's crate accepts; it never decapsulates.
+import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js'
 import type { TauriIpcCommand } from '@/lib/platform'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { x25519 } from '@noble/curves/ed25519.js'
@@ -80,12 +85,30 @@ function requireRegisteredLabel(label: string): void {
 interface MockDeviceSecrets {
   signingSeed: Uint8Array    // 32 bytes
   encryptionSeed: Uint8Array // 32 bytes
+  /** X-Wing seed (32 bytes), drawn once with the device and never redrawn. */
+  kemSeed: Uint8Array
 }
 
 interface MockDeviceKeyState {
   deviceId: string
   signingPubkeyHex: string
   encryptionPubkeyHex: string
+  kemPubkeyHex: string
+}
+
+/** X-Wing public key of a 32-byte seed (mirror of `device_keys::xwing_public_key`). */
+function xwingPubkeyHex(kemSeed: Uint8Array): string {
+  return bytesToHex(ml_kem768_x25519.keygen(kemSeed).publicKey)
+}
+
+/** Mirror of `DeviceKeyState::of`. */
+function mockDeviceStateOf(deviceId: string, secrets: MockDeviceSecrets): MockDeviceKeyState {
+  return {
+    deviceId,
+    signingPubkeyHex: bytesToHex(deriveEd25519Pubkey(secrets.signingSeed)),
+    encryptionPubkeyHex: bytesToHex(deriveX25519Pubkey(secrets.encryptionSeed)),
+    kemPubkeyHex: xwingPubkeyHex(secrets.kemSeed),
+  }
 }
 
 let mockSecrets: MockDeviceSecrets | null = null
@@ -266,10 +289,16 @@ const ARGON2_M_COST_KIB = 4_096   // 4 MiB (production Rust uses 65_536)
 const ARGON2_T_COST = 3
 const ARGON2_P_COST = 4
 
-// ── Backup container (v5) — mirrors packages/crypto/src/backup.rs ───
-// Plaintext is signing_seed || encryption_seed: restore must yield the SAME
-// X25519 key the device had, never one re-derived from the signing seed (#2140).
-const BACKUP_FORMAT_VERSION = 5
+// ── Backup container (v6) — mirrors packages/crypto/src/backup.rs ───
+// Plaintext is signing_seed || encryption_seed || kem_seed: restore must yield
+// the SAME X25519 key the device had, never one re-derived from the signing seed
+// (#2140), and the SAME X-Wing key its chain names (#3053).
+const BACKUP_FORMAT_VERSION = 6
+/** The last version without the X-Wing seed: refused by name, like the crate. */
+const LAST_VERSION_WITHOUT_XWING_SEED = 5
+/** `CryptoError::BackupMissingXwingSeed`'s message. */
+const BACKUP_MISSING_XWING_SEED =
+  'This backup does not contain the device\'s X-Wing seed, so it cannot restore the device. Recover your account onto a new device instead.'
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 
 /** Base32-encode (RFC 4648, no padding) and group into dash-separated quads. */
@@ -300,15 +329,18 @@ function deriveRecoveryKek(recoveryKey: string, salt: Uint8Array): Uint8Array {
     utf8ToBytes(LABEL_BACKUP_HKDF_INFO), 32)
 }
 
-/** Open a v5 backup with either credential, returning both device seeds. */
+/** Open a v6 backup with either credential, returning the three device seeds. */
 async function openMockBackup(
   backupJson: string, credential: string, isRecoveryKey: boolean,
-): Promise<{ signingSeed: Uint8Array; encryptionSeed: Uint8Array }> {
+): Promise<MockDeviceSecrets> {
   const file = JSON.parse(backupJson)
+  if (file.v === LAST_VERSION_WITHOUT_XWING_SEED) throw new Error(BACKUP_MISSING_XWING_SEED)
   if (file.v !== BACKUP_FORMAT_VERSION) {
     throw new Error(`Unsupported backup version ${file.v} (this build reads v${BACKUP_FORMAT_VERSION})`)
   }
   const block = isRecoveryKey ? file.r : file.d
+  // A sealed seed PAIR (64 + 16-byte tag) carries no X-Wing seed.
+  if (typeof block.c === 'string' && block.c.length === (64 + 16) * 2) throw new Error(BACKUP_MISSING_XWING_SEED)
   const kek = isRecoveryKey
     ? deriveRecoveryKek(credential, hexToBytes(block.s))
     : await deriveKek(credential, hexToBytes(block.s))
@@ -319,8 +351,8 @@ async function openMockBackup(
   } catch {
     throw new Error('Decryption failed: authentication tag mismatch')
   }
-  if (seed.length !== 64) throw new Error('Backup payload must be 64 bytes of device seeds')
-  return { signingSeed: seed.slice(0, 32), encryptionSeed: seed.slice(32) }
+  if (seed.length !== 96) throw new Error('Backup payload must be 96 bytes of device seeds')
+  return { signingSeed: seed.slice(0, 32), encryptionSeed: seed.slice(32, 64), kemSeed: seed.slice(64) }
 }
 
 async function deriveKek(pin: string, salt: Uint8Array): Promise<Uint8Array> {
@@ -336,6 +368,7 @@ async function encryptWithPin(
   signingSeed: Uint8Array,
   encryptionSeed: Uint8Array,
   pin: string,
+  kemSeed: Uint8Array,
 ): Promise<{
   kdfVersion: number; salt: string; nonce: string; ciphertext: string
   argon2MCost: number; argon2TCost: number; argon2PCost: number
@@ -344,9 +377,11 @@ async function encryptWithPin(
   const nonce = randomBytes(12)
   const kek = await deriveKek(pin, salt)
 
-  const plaintext = new Uint8Array(64)
+  // signing || encryption || kem, as device_keys::encrypt_device_secrets_with.
+  const plaintext = new Uint8Array(96)
   plaintext.set(signingSeed)
   plaintext.set(encryptionSeed, 32)
+  plaintext.set(kemSeed, 64)
 
   const cipher = gcm(kek, nonce)
   const encrypted = cipher.encrypt(plaintext)
@@ -365,7 +400,7 @@ async function encryptWithPin(
 async function decryptWithPin(
   encrypted: { salt: string; nonce: string; ciphertext: string },
   pin: string,
-): Promise<{ signingSeed: Uint8Array; encryptionSeed: Uint8Array }> {
+): Promise<MockDeviceSecrets> {
   const salt = hexToBytes(encrypted.salt)
   const nonce = hexToBytes(encrypted.nonce)
   const ciphertext = hexToBytes(encrypted.ciphertext)
@@ -374,11 +409,13 @@ async function decryptWithPin(
   const cipher = gcm(kek, nonce)
   const plaintext = cipher.decrypt(ciphertext)
 
-  if (plaintext.length !== 64) throw new Error('Invalid decrypted device key blob')
+  // Three seeds, always: a two-seed blob is never completed at unlock.
+  if (plaintext.length !== 96) throw new Error('Invalid decrypted device key blob')
 
   return {
     signingSeed: plaintext.slice(0, 32),
-    encryptionSeed: plaintext.slice(32),
+    encryptionSeed: plaintext.slice(32, 64),
+    kemSeed: plaintext.slice(64),
   }
 }
 
@@ -684,6 +721,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     const signingSeed = randomBytes(32)
     const encryptionSeed = randomBytes(32)
+    const kemSeed = randomBytes(32)
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
 
@@ -691,12 +729,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       deviceId,
       signingPubkeyHex: bytesToHex(signingPubkey),
       encryptionPubkeyHex: bytesToHex(encryptionPubkey),
+      kemPubkeyHex: xwingPubkeyHex(kemSeed),
     }
 
-    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, pin)
+    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, pin, kemSeed)
 
     const result = { ...encrypted, state }
-    mockSecrets = { signingSeed, encryptionSeed }
+    mockSecrets = { signingSeed, encryptionSeed, kemSeed }
     mockDeviceState = state
     mockEncryptedKeys = result
 
@@ -720,13 +759,10 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     checkPinLockout()
 
     const pin = a.pin as string
-    let signingSeed: Uint8Array
-    let encryptionSeed: Uint8Array
+    let secrets: MockDeviceSecrets
 
     try {
-      const result = await decryptWithPin(data, pin)
-      signingSeed = result.signingSeed
-      encryptionSeed = result.encryptionSeed
+      secrets = await decryptWithPin(data, pin)
     } catch {
       // Wrong PIN — record failed attempt (may throw lockout/wipe)
       recordFailedPinAttempt()
@@ -737,7 +773,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     // Success — reset lockout counter
     resetPinLockout()
 
-    mockSecrets = { signingSeed, encryptionSeed }
+    // Mirror of unlock_device_keys: the stored state must name the X-Wing key
+    // the blob holds. Unlocking only reads it; it is never redrawn.
+    if (data.state.kemPubkeyHex !== xwingPubkeyHex(secrets.kemSeed)) {
+      throw new Error('invalid format: derived public keys do not match stored state')
+    }
+
+    mockSecrets = secrets
     mockDeviceState = data.state
 
     return data.state
@@ -905,6 +947,16 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     return verifySigchainMock(links)
   },
 
+  sigchain_verify_users: (a) => {
+    return verifyUserSigchainsMock(JSON.parse(a.chainsJson as string) as MockSigchainLink[][])
+  },
+
+  user_init_payload_from_state: () => {
+    const secrets = requireSecrets()
+    const ds = requireDeviceState()
+    return userInitPayloadMock(secrets.signingSeed, ds.deviceId, ds.encryptionPubkeyHex, ds.kemPubkeyHex)
+  },
+
   sigchain_verify_link: (a) => {
     const link = JSON.parse(a.linkJson as string) as MockSigchainLink
     return verifySigchainLinkMock(link, a.expectedSignerPubkey as string)
@@ -940,26 +992,22 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
       utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
 
-    const signingPubkey = deriveEd25519Pubkey(signingSeed)
-    const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
+    // The imported device's own X-Wing seed, drawn once as it is created
+    // (DeviceSecrets::with_fresh_kem_seed).
+    const kemSeed = randomBytes(32)
+    const state = mockDeviceStateOf(deviceId, { signingSeed, encryptionSeed, kemSeed })
 
-    const state: MockDeviceKeyState = {
-      deviceId,
-      signingPubkeyHex: bytesToHex(signingPubkey),
-      encryptionPubkeyHex: bytesToHex(encryptionPubkey),
-    }
-
-    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, pin)
+    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, pin, kemSeed)
     const result = { ...encrypted, state }
 
-    mockSecrets = { signingSeed, encryptionSeed }
+    mockSecrets = { signingSeed, encryptionSeed, kemSeed }
     mockDeviceState = state
     mockEncryptedKeys = result
 
     return result
   },
 
-  // --- Backup generation / restore (v5 container) ---
+  // --- Backup generation / restore (v6 container) ---
   //
   // These honour their arguments and really encrypt, so an E2E can round-trip a
   // backup and a wrong credential is actually rejected. The container shape
@@ -980,9 +1028,10 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     if (!pin) throw new Error('PIN is empty')
     if (!normalizeRecoveryKey(recoveryKey)) throw new Error('Recovery key is empty after normalization')
 
-    const seeds = new Uint8Array(64)
+    const seeds = new Uint8Array(96)
     seeds.set(secrets.signingSeed, 0)
     seeds.set(secrets.encryptionSeed, 32)
+    seeds.set(secrets.kemSeed, 64)
 
     const pinSalt = randomBytes(32)
     const pinNonce = randomBytes(12)
@@ -1038,19 +1087,15 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   restore_backup_and_load: async (a) => {
-    const { signingSeed, encryptionSeed } = await openMockBackup(
+    const restored = await openMockBackup(
       a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean,
     )
 
-    const state: MockDeviceKeyState = {
-      deviceId: a.deviceId as string,
-      signingPubkeyHex: bytesToHex(deriveEd25519Pubkey(signingSeed)),
-      encryptionPubkeyHex: bytesToHex(deriveX25519Pubkey(encryptionSeed)),
-    }
-    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, a.newPin as string)
+    const state = mockDeviceStateOf(a.deviceId as string, restored)
+    const encrypted = await encryptWithPin(restored.signingSeed, restored.encryptionSeed, a.newPin as string, restored.kemSeed)
     const result = { ...encrypted, state }
 
-    mockSecrets = { signingSeed, encryptionSeed }
+    mockSecrets = restored
     mockDeviceState = state
     mockEncryptedKeys = result
     return result
@@ -1387,20 +1432,15 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     // Both seeds are used exactly as transported (never re-derive one from the
     // other); the claim, the bundle's signer and the AEAD are all checked inside.
     const { signingSeed, encryptionSeed } = decryptProvisioningBundle(encryptedHex, claimHex, ephemeral)
+    // This device's own X-Wing seed, drawn here as the device is created — never
+    // carried in the bundle (mirror of decrypt_provisioned_bundle).
+    const kemSeed = randomBytes(32)
+    const state = mockDeviceStateOf(deviceId, { signingSeed, encryptionSeed, kemSeed })
 
-    const signingPubkey = deriveEd25519Pubkey(signingSeed)
-    const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
-
-    const state: MockDeviceKeyState = {
-      deviceId,
-      signingPubkeyHex: bytesToHex(signingPubkey),
-      encryptionPubkeyHex: bytesToHex(encryptionPubkey),
-    }
-
-    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, pin)
+    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, pin, kemSeed)
     const result = { ...encrypted, state }
 
-    mockSecrets = { signingSeed, encryptionSeed }
+    mockSecrets = { signingSeed, encryptionSeed, kemSeed }
     mockDeviceState = state
     mockEncryptedKeys = result
     return result

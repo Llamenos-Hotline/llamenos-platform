@@ -218,6 +218,47 @@ impl CryptoState {
             .ok_or_else(|| "Device key is locked. Enter PIN to unlock.".into())
     }
 
+    /// Body of [`generate_backup_from_state`], without Tauri state.
+    fn backup_json(&self, pin: &str, recovery_key: &str) -> Result<String, String> {
+        let file = self.with_secrets(|secrets| {
+            backup::create_backup(secrets, pin, recovery_key, unix_now_seconds()).map_err(err_str)
+        })?;
+        serde_json::to_string(&file).map_err(err_str)
+    }
+
+    /// Body of [`restore_backup_and_load`], without Tauri state. A backup
+    /// without the X-Wing seed is refused by `open_backup` as
+    /// `backup_missing_xwing_seed` (#3053) and loads nothing.
+    fn restore_backup(
+        &self,
+        backup_json: &str,
+        credential: &str,
+        is_recovery_key: bool,
+        new_pin: &str,
+        device_id: String,
+    ) -> Result<serde_json::Value, String> {
+        let file: backup::BackupFile = serde_json::from_str(backup_json).map_err(err_str)?;
+        let secrets = backup::open_backup(&file, backup_credential(credential, is_recovery_key))
+            .map_err(crypto_err)?;
+        // All three seeds, so the restored X-Wing key is the one the chain names.
+        let device_state = device_keys::DeviceKeyState::of(&device_id, &secrets);
+
+        let encrypted = encrypt_secrets_with_pin(&secrets, new_pin, &device_state)?;
+
+        *lock_mutex(&self.secrets)? = Some(secrets);
+        *lock_mutex(&self.device_state)? = Some(device_state);
+
+        serde_json::to_value(&encrypted).map_err(err_str)
+    }
+
+    /// Body of [`user_init_payload_from_state`], without Tauri state.
+    fn user_init_payload(&self) -> Result<String, String> {
+        let ds = self.get_device_state()?;
+        self.with_secrets(|secrets| {
+            sigchain::user_init_payload(secrets, &ds.device_id).map_err(crypto_err)
+        })
+    }
+
     /// Open an envelope of `shape` with this device's X25519 secret (any shape —
     /// Rust-internal; the webview reaches this only through
     /// [`Self::shape_open_for_webview`]).
@@ -474,6 +515,8 @@ pub fn device_generate_and_load(
 
 /// Decrypt device keys from PIN-encrypted storage, load into CryptoState.
 /// Returns only the device state (public keys) — secrets NEVER leave the Rust process.
+/// Unlocking only reads the device's X-Wing seed; it is never redrawn (spec
+/// 2026-11-25-v2-device-linking-and-recovery §5 as revised 2026-11-26).
 ///
 /// PIN lockout schedule:
 ///   1-4 failures: no lockout
@@ -804,11 +847,32 @@ pub fn sigchain_create_link_from_state(
     })
 }
 
+/// This device's genesis `user_init` payload JSON (spec
+/// 2026-11-25-v2-device-linking-and-recovery §5 as revised 2026-11-26): its
+/// Ed25519, X25519 and X-Wing keys, `format: 2` and the possession signature,
+/// made in Rust. Sign the link carrying it with `sigchain_create_link_from_state`.
+#[tauri::command]
+pub fn user_init_payload_from_state(
+    state: tauri::State<'_, CryptoState>,
+) -> Result<String, String> {
+    state.user_init_payload()
+}
+
+/// Verify several users' chains together, refusing a key named by two users'
+/// chains (`chain_key_reused`) (stateless).
+#[tauri::command]
+pub fn sigchain_verify_users(chains_json: String) -> Result<serde_json::Value, String> {
+    let chains: Vec<Vec<sigchain::SigchainLink>> =
+        serde_json::from_str(&chains_json).map_err(err_str)?;
+    let states = sigchain::verify_user_sigchains(&chains).map_err(crypto_err)?;
+    serde_json::to_value(&states).map_err(err_str)
+}
+
 /// Verify a sigchain (stateless — no secrets needed).
 #[tauri::command]
 pub fn sigchain_verify(links_json: String) -> Result<serde_json::Value, String> {
     let links: Vec<sigchain::SigchainLink> = serde_json::from_str(&links_json).map_err(err_str)?;
-    let result = sigchain::verify_sigchain(&links).map_err(err_str)?;
+    let result = sigchain::verify_sigchain(&links).map_err(crypto_err)?;
     serde_json::to_value(&result).map_err(err_str)
 }
 
@@ -1384,18 +1448,15 @@ pub fn device_import_and_load(
     signing_seed.copy_from_slice(&signing_seed_bytes);
 
     // Derive X25519 encryption seed from signing seed via HKDF
-    let encryption_seed = derive_encryption_seed_from_signing(&signing_seed);
+    let mut encryption_seed = derive_encryption_seed_from_signing(&signing_seed);
 
-    let secrets = device_keys::DeviceSecrets {
-        signing_seed,
-        encryption_seed,
-    };
+    // The imported device's own X-Wing seed is drawn here, once, as the device
+    // is created; unlocking never redraws it.
+    let secrets = device_keys::DeviceSecrets::with_fresh_kem_seed(&signing_seed, &encryption_seed);
+    zeroize::Zeroize::zeroize(&mut signing_seed);
+    zeroize::Zeroize::zeroize(&mut encryption_seed);
 
-    let device_state = device_keys::DeviceKeyState {
-        device_id: device_id.clone(),
-        signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-        encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-    };
+    let device_state = device_keys::DeviceKeyState::of(&device_id, &secrets);
 
     // Encrypt the imported seeds with PIN (Argon2id + AES-256-GCM)
     let encrypted_imported = encrypt_secrets_with_pin(&secrets, &pin, &device_state)?;
@@ -1416,8 +1477,9 @@ pub fn generate_recovery_key() -> String {
 
 /// Generate an encrypted backup of the loaded device key.
 ///
-/// Both credentials protect the same plaintext — both device seeds, so a
-/// restore yields the same X25519 key (#2140): the PIN (Argon2id) and the
+/// Both credentials protect the same plaintext — all three device seeds, so a
+/// restore yields the same X25519 key (#2140) and the same X-Wing key the
+/// user's chain names (#3053): the PIN (Argon2id) and the
 /// recovery key (HKDF-SHA256). Format, KDFs and rationale live in
 /// `packages/crypto/src/backup.rs` — this command only plumbs CryptoState into
 /// it so the seed never crosses the IPC boundary.
@@ -1427,10 +1489,7 @@ pub fn generate_backup_from_state(
     pin: String,
     recovery_key: String,
 ) -> Result<String, String> {
-    let file = state.with_secrets(|secrets| {
-        backup::create_backup(secrets, &pin, &recovery_key, unix_now_seconds()).map_err(err_str)
-    })?;
-    serde_json::to_string(&file).map_err(err_str)
+    state.backup_json(&pin, &recovery_key)
 }
 
 /// Check that a credential opens a backup file, without restoring anything.
@@ -1452,8 +1511,8 @@ pub fn backup_verify_credential(
 
 /// Restore a device key from a backup file and load it into CryptoState.
 ///
-/// The recovered seeds — signing AND encryption, exactly as they were before the
-/// backup (#2140) — go straight from the backup into `CryptoState`; they are
+/// The recovered seeds — signing, X25519 and X-Wing, exactly as they were before
+/// the backup (#2140, #3053) — go straight from the backup into `CryptoState`; they are
 /// never returned to the webview. The returned blob is
 /// the device key re-encrypted under `new_pin`, for the caller to persist in
 /// the vault exactly as `device_import_and_load` does.
@@ -1466,21 +1525,13 @@ pub fn restore_backup_and_load(
     new_pin: String,
     device_id: String,
 ) -> Result<serde_json::Value, String> {
-    let file: backup::BackupFile = serde_json::from_str(&backup_json).map_err(err_str)?;
-    let secrets = backup::open_backup(&file, backup_credential(&credential, is_recovery_key))
-        .map_err(err_str)?;
-    let device_state = device_keys::DeviceKeyState {
+    state.restore_backup(
+        &backup_json,
+        &credential,
+        is_recovery_key,
+        &new_pin,
         device_id,
-        signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-        encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-    };
-
-    let encrypted = encrypt_secrets_with_pin(&secrets, &new_pin, &device_state)?;
-
-    *lock_mutex(&state.secrets)? = Some(secrets);
-    *lock_mutex(&state.device_state)? = Some(device_state);
-
-    serde_json::to_value(&encrypted).map_err(err_str)
+    )
 }
 
 fn backup_credential(credential: &str, is_recovery_key: bool) -> backup::BackupCredential<'_> {
@@ -1584,13 +1635,11 @@ impl CryptoState {
         )
         .map_err(err_str)?;
 
+        // The transported seeds, plus this device's own X-Wing seed, drawn by
+        // the crate as the device is created — never carried in the bundle.
         let secrets = decrypted.secrets;
 
-        let device_state = device_keys::DeviceKeyState {
-            device_id,
-            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-        };
+        let device_state = device_keys::DeviceKeyState::of(&device_id, &secrets);
 
         // Encrypt with PIN for persistent storage
         let encrypted_keys = encrypt_secrets_with_pin(&secrets, pin, &device_state)?;
@@ -1732,6 +1781,70 @@ mod v2_vector_tests {
         err.split(':').next().unwrap_or(err)
     }
 
+    /// device-binding.json (#2496): every case through the
+    /// `sigchain_verify_users` command — the multi-user verifier, which verifies
+    /// each chain and refuses cross-user key reuse — asserting each positive's
+    /// active device keys and each negative's closed code.
+    #[test]
+    fn device_binding_vectors_through_the_verify_users_command() {
+        let f = load("device-binding.json");
+        let chains = |c: &serde_json::Value| c["chains"].to_string();
+        for p in f["positives"].as_array().unwrap() {
+            let states = sigchain_verify_users(chains(p)).unwrap();
+            let keys: Vec<serde_json::Value> = states
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|st| st["activeDeviceKeys"].clone())
+                .collect();
+            assert_eq!(serde_json::Value::Array(keys), p["expect"], "{}", p["name"]);
+        }
+        let negatives = f["negatives"].as_array().unwrap();
+        assert_eq!(negatives.len(), 9);
+        for n in negatives {
+            let err = sigchain_verify_users(chains(n)).unwrap_err();
+            assert_eq!(
+                code(&err),
+                n["expect"].as_str().unwrap(),
+                "{}: {err}",
+                n["name"]
+            );
+        }
+    }
+
+    /// A new device's genesis, built by `user_init_payload_from_state`, names
+    /// the X-Wing key the device holds, and a chain naming it verifies.
+    #[test]
+    fn the_genesis_names_the_devices_own_xwing_key() {
+        let pin = "12345678";
+        let blob = device_keys::generate_device_keys("genesis-desktop", pin).unwrap();
+        let secrets = device_keys::unlock_device_keys(&blob, pin).unwrap();
+        let ds = blob.state.clone();
+        let state = CryptoState::new();
+        state.load_secrets_for_test(secrets, ds.clone());
+
+        let payload = state.user_init_payload().unwrap();
+        let genesis = state
+            .with_secrets(|s| {
+                sigchain::create_sigchain_link(
+                    s,
+                    "g",
+                    &ds.device_id,
+                    1,
+                    None,
+                    "2026-11-26T00:00:00Z",
+                    &payload,
+                )
+                .map_err(err_str)
+            })
+            .unwrap();
+        let verified = sigchain_verify(serde_json::to_string(&vec![genesis]).unwrap()).unwrap();
+        assert_eq!(
+            verified["activeDeviceKeys"][0]["encryptionPubkey"],
+            serde_json::json!(ds.kem_pubkey_hex)
+        );
+    }
+
     #[test]
     fn every_server_event_vector_opens_or_fails_with_its_code() {
         let f = load("server-event.json");
@@ -1780,11 +1893,13 @@ mod v2_vector_tests {
         let secrets = device_keys::DeviceSecrets {
             signing_seed: random_key(),
             encryption_seed: seed,
+            kem_seed: random_key(),
         };
         let ds = device_keys::DeviceKeyState {
             device_id: "v2-vectors".into(),
             signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
             encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
         };
         let state = CryptoState::new();
         state.load_secrets_for_test(secrets, ds);
@@ -1918,11 +2033,13 @@ mod stored_record_conformance_tests {
         let secrets = device_keys::DeviceSecrets {
             signing_seed,
             encryption_seed,
+            kem_seed: random_key(),
         };
         let ds = device_keys::DeviceKeyState {
             device_id: format!("vector-{}", reader.name),
             signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
             encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
         };
         assert_eq!(
             ds.encryption_pubkey_hex, reader.x25519_pubkey_hex,
@@ -2057,11 +2174,13 @@ mod ipc_surface_tests {
         let secrets = device_keys::DeviceSecrets {
             signing_seed,
             encryption_seed,
+            kem_seed: random_key(),
         };
         let ds = device_keys::DeviceKeyState {
             device_id: "ipc-surface-test".into(),
             signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
             encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
         };
         let state = CryptoState::new();
         let (encryption_pubkey_hex, signing_pubkey_hex) = (
@@ -2813,6 +2932,7 @@ mod ipc_surface_tests {
         let primary = device_keys::DeviceSecrets {
             signing_seed: primary_signing,
             encryption_seed: primary_encryption,
+            kem_seed: random_key(),
         };
         let new_device = CryptoState::new();
         let ephemeral_pubkey_hex = new_device_session(&new_device);
@@ -2953,11 +3073,13 @@ mod case_record_conformance_tests {
         let secrets = device_keys::DeviceSecrets {
             signing_seed: [0x5a; 32],
             encryption_seed,
+            kem_seed: random_key(),
         };
         let ds = device_keys::DeviceKeyState {
             device_id: format!("vector-{}", reader.name),
             signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
             encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
         };
         assert_eq!(ds.encryption_pubkey_hex, reader.x25519_pubkey_hex);
         let state = CryptoState::new();
@@ -3052,11 +3174,13 @@ mod random_source_tests {
         let secrets = device_keys::DeviceSecrets {
             signing_seed: random_key(),
             encryption_seed: random_key(),
+            kem_seed: random_key(),
         };
         let ds = device_keys::DeviceKeyState {
             device_id: "random-source-test".into(),
             signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
             encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+            kem_pubkey_hex: hex::encode(secrets.kem_pubkey()),
         };
         (secrets, ds)
     }
@@ -3096,6 +3220,119 @@ mod random_source_tests {
         assert_ne!(
             a.ciphertext, b.ciphertext,
             "same plaintext under the same PIN must not produce the same ciphertext"
+        );
+    }
+}
+
+/// The device backup through the production commands' bodies (#3053): a v6
+/// backup restores the very keys data was sealed to before it was written —
+/// the X25519 key the hub key was wrapped to, and the X-Wing key the device's
+/// genesis named — and a backup without the X-Wing seed is refused by name.
+#[cfg(test)]
+mod backup_restore_tests {
+    use super::*;
+
+    const PIN: &str = "12345678";
+    const NEW_PIN: &str = "87654321";
+
+    /// A freshly generated device loaded into a CryptoState, with its genesis.
+    fn device() -> (
+        CryptoState,
+        device_keys::DeviceKeyState,
+        sigchain::SigchainLink,
+    ) {
+        let blob = device_keys::generate_device_keys("backup-desktop", PIN).unwrap();
+        let state = CryptoState::new();
+        state.load_secrets_for_test(
+            device_keys::unlock_device_keys(&blob, PIN).unwrap(),
+            blob.state.clone(),
+        );
+        let payload = state.user_init_payload().unwrap();
+        let genesis = state
+            .with_secrets(|s| {
+                sigchain::create_sigchain_link(
+                    s,
+                    "g",
+                    &blob.state.device_id,
+                    1,
+                    None,
+                    "2026-11-26T00:00:00Z",
+                    &payload,
+                )
+                .map_err(err_str)
+            })
+            .unwrap();
+        (state, blob.state, genesis)
+    }
+
+    #[test]
+    fn a_restored_device_opens_what_was_sealed_to_it_before_the_backup() {
+        let (original, ds, genesis) = device();
+        // Sealed to this device before the backup: a hub key wrapped to its
+        // X25519 key, and an X-Wing encapsulation to the key its genesis names.
+        let hub_key = random_key();
+        let wrap = shape::seal_to(&ds.encryption_pubkey_hex, Shape::HubKey, &[], &hub_key).unwrap();
+        let chain_named = sigchain::verify_sigchain(std::slice::from_ref(&genesis))
+            .unwrap()
+            .active_device_keys[0]
+            .encryption_pubkey
+            .clone();
+        let ek = x_wing::EncapsulationKey::try_from(hex::decode(&chain_named).unwrap().as_slice())
+            .unwrap();
+        let mut randomness = [0u8; 64];
+        randomness[..32].copy_from_slice(&random_key());
+        randomness[32..].copy_from_slice(&random_key());
+        let (ct, shared) = ek.encapsulate_deterministic(&randomness.into());
+
+        let recovery_key = backup::generate_recovery_key();
+        let backup_json = original.backup_json(PIN, &recovery_key).unwrap();
+        drop(original);
+
+        let restored = CryptoState::new();
+        restored
+            .restore_backup(
+                &backup_json,
+                &recovery_key,
+                true,
+                NEW_PIN,
+                "restored-desktop".into(),
+            )
+            .unwrap();
+        // The hub key opens through the production unwrap path.
+        restored.load_hub_key_wrap("hub-1", wrap).unwrap();
+        assert_eq!(*hub_key_array(&restored, "hub-1").unwrap(), hub_key);
+        // The X-Wing ciphertext opens with the restored seed, and the restored
+        // device's X-Wing key is the one its chain names.
+        let opened = restored
+            .with_secrets(|s| {
+                use x_wing::Decapsulate;
+                Ok(device_keys::xwing_decapsulation_key(&s.kem_seed).decapsulate(&ct))
+            })
+            .unwrap();
+        assert_eq!(opened.as_slice(), shared.as_slice());
+        assert_eq!(
+            restored.get_device_state().unwrap().kem_pubkey_hex,
+            chain_named
+        );
+    }
+
+    #[test]
+    fn a_backup_without_the_xwing_seed_is_refused_by_name() {
+        let (original, _, _) = device();
+        let recovery_key = backup::generate_recovery_key();
+        let mut v5: serde_json::Value =
+            serde_json::from_str(&original.backup_json(PIN, &recovery_key).unwrap()).unwrap();
+        v5["v"] = 5.into();
+
+        let restored = CryptoState::new();
+        let err = restored
+            .restore_backup(&v5.to_string(), &recovery_key, true, NEW_PIN, "r".into())
+            .unwrap_err();
+        assert!(err.starts_with("backup_missing_xwing_seed: "), "{err}");
+        assert!(err.contains("X-Wing seed"), "{err}");
+        assert!(
+            restored.get_device_state().is_err(),
+            "a refused backup loads nothing"
         );
     }
 }
