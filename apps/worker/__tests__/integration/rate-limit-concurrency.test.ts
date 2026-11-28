@@ -36,23 +36,11 @@ import { createSettingsDomain, type SettingsDomainServices } from '../../service
 import { rateLimit, RATE_LIMIT_TIERS } from '../../middleware/rate-limit'
 import type { AppEnv } from '../../types'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables } from '../helpers/schema-ddl'
 
 const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_rate_limit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-// Mirrors apps/worker/db/schema/settings.ts rateLimits + apiRateLimits.
-const DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.rate_limits (
-    key         TEXT PRIMARY KEY,
-    timestamps  JSONB NOT NULL DEFAULT '[]'::jsonb
-  );
-  CREATE TABLE ${TEST_SCHEMA}.api_rate_limits (
-    key           TEXT PRIMARY KEY,
-    count         INTEGER NOT NULL DEFAULT 1,
-    window_start  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-`
 
 const JSONB_TYPE = {
   to: 3802,
@@ -73,8 +61,7 @@ let settings: SettingsDomainServices
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(DDL)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [schema.rateLimits, schema.apiRateLimits])
 
   // A multi-connection pool is required: the race only exists when the
   // concurrent requests run on distinct connections.

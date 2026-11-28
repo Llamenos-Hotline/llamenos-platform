@@ -53,100 +53,13 @@ import { ed25519Sign, ed25519PubkeyFromSeed } from '../mocks/llamenos-crypto-ffi
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import type { SigchainLinkType } from '@protocol/schemas/sigchain'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables } from '../helpers/schema-ddl'
 import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js'
 import { userInitPayloadMock } from '../../../../tests/mocks/sigchain-mock'
 
 const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_sigchain_concurrency_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-// Mirrors apps/worker/db/schema/sigchain.ts sigchainLinks, post-#1146
-// (UNIQUE, not plain, index on (user_pubkey, seq_no)). `users` is a minimal
-// FK target — appendSigchainLink never reads/writes it.
-const DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.users (
-    pubkey TEXT PRIMARY KEY,
-    hub_roles JSONB NOT NULL DEFAULT '[]'
-  );
-
-  CREATE TABLE ${TEST_SCHEMA}.sigchain_links (
-    id                 TEXT PRIMARY KEY,
-    user_pubkey        TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE CASCADE,
-    seq_no             INTEGER NOT NULL,
-    link_type          TEXT NOT NULL,
-    payload            JSONB NOT NULL,
-    signature          TEXT NOT NULL,
-    prev_hash          TEXT NOT NULL DEFAULT '',
-    hash               TEXT NOT NULL,
-    signer_device_id   TEXT NOT NULL DEFAULT '',
-    signer_pubkey      TEXT NOT NULL DEFAULT '',
-    "timestamp"        TEXT NOT NULL DEFAULT '',
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-
-  CREATE UNIQUE INDEX sigchain_links_user_seq_idx
-    ON ${TEST_SCHEMA}.sigchain_links (user_pubkey, seq_no);
-
-  -- Every append claims the device keys its link names (#2496).
-  CREATE TABLE ${TEST_SCHEMA}.device_key_claims (
-    key         TEXT PRIMARY KEY,
-    user_pubkey TEXT NOT NULL,
-    kind        TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-
-  -- IdentityService.revokeDevice touches these in the same transaction as
-  -- its sigchain append, so the revoke-vs-append race test needs them.
-  CREATE TABLE ${TEST_SCHEMA}.devices (
-    id               TEXT PRIMARY KEY,
-    pubkey           TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE CASCADE,
-    platform         TEXT NOT NULL,
-    push_token       TEXT,
-    voip_token       TEXT,
-    wake_key_public  TEXT,
-    ed25519_pubkey   TEXT,
-    x25519_pubkey    TEXT,
-    x25519_set_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    registered_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen_at     TIMESTAMPTZ,
-    device_name      TEXT,
-    device_model     TEXT,
-    os_version       TEXT,
-    app_version      TEXT,
-    last_ip_hash     TEXT
-  );
-
-  CREATE TABLE ${TEST_SCHEMA}.sessions (
-    id          TEXT NOT NULL,
-    token       TEXT PRIMARY KEY,
-    pubkey      TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE CASCADE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at  TIMESTAMPTZ NOT NULL,
-    device_info JSONB
-  );
-
-  -- Not FK'd to devices: PUK envelopes are keyed by sigchain device ID (#1050).
-  CREATE TABLE ${TEST_SCHEMA}.puk_envelopes (
-    crypto_format SMALLINT NOT NULL DEFAULT 1,
-    id          TEXT PRIMARY KEY,
-    user_pubkey TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE CASCADE,
-    device_id   TEXT NOT NULL,
-    generation  INTEGER NOT NULL,
-    envelope    JSONB NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_pubkey, device_id, generation)
-  );
-
-  CREATE TABLE ${TEST_SCHEMA}.security_events (
-    id          TEXT PRIMARY KEY,
-    user_pubkey TEXT REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE SET NULL,
-    event_type  TEXT NOT NULL,
-    device_id   TEXT,
-    metadata    JSONB NOT NULL DEFAULT '{}',
-    ip_hash     TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-`
 
 const JSONB_TYPE = {
   to: 3802,
@@ -251,8 +164,17 @@ async function insertStoredLink(link: LinkInput): Promise<{ hash: string }> {
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(DDL)
+  // Every table the exercised paths touch: appendSigchainLink writes the chain and
+  // its device-key claims, IdentityService.revokeDevice touches devices, sessions,
+  // PUK envelopes and security events in the same transaction.
+  await createSchemaTables(adminSql, TEST_SCHEMA, [
+    schema.sigchainLinks,
+    schema.deviceKeyClaims,
+    schema.devices,
+    schema.sessions,
+    schema.pukEnvelopes,
+    schema.securityEvents,
+  ])
 
   // A multi-connection pool is required: the race only exists when the
   // concurrent transactions run on distinct connections.

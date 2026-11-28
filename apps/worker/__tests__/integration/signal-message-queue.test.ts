@@ -15,6 +15,7 @@ import * as schema from '../../db/schema'
 import { signalMessageQueue } from '../../db/schema'
 import { SignalMessageQueue, hashSignalQueueRecipientIdentifier } from '../../messaging/signal/queue'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables, insertTestHub } from '../helpers/schema-ddl'
 
 // This integration suite runs in Node; the production crypto wrapper uses
 // bun:ffi, so use the shared contract-compatible crypto implementation.
@@ -26,26 +27,24 @@ const TEST_SCHEMA = `test_signal_queue_${Date.now()}_${Math.random().toString(36
 const HMAC_SECRET = 'a'.repeat(64)
 const SERVER_KEK = 'c'.repeat(64)
 
-const LEGACY_QUEUE_DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.signal_message_queue (
-    crypto_format SMALLINT NOT NULL DEFAULT 1,
-    id                              TEXT PRIMARY KEY,
-    hub_id                          TEXT NOT NULL,
-    conversation_id                 TEXT NOT NULL,
-    recipient_identifier            TEXT NOT NULL,
-    body                            TEXT NOT NULL,
-    media_url                       TEXT,
-    media_type                      TEXT,
-    external_id                     TEXT,
-    idempotency_key                 TEXT,
-    status                          TEXT NOT NULL DEFAULT 'pending',
-    retry_count                     INTEGER NOT NULL DEFAULT 0,
-    last_error                      TEXT,
-    next_retry_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )
-`
+/**
+ * Rewrites the DECLARED table into the shape it had before migration 0056 —
+ * plaintext `recipient_identifier` / `body` where the hash, ciphertext and
+ * encrypted-body columns now are. The migration under test needs that shape to
+ * act on, but the table is still derived from the schema (every other column,
+ * constraint and index comes from the declaration), so a column added to
+ * signal_message_queue reaches this fixture without an edit here (#3011).
+ */
+const MAKE_PRE_0056_SHAPE = [
+  'DROP INDEX signal_queue_recipient_status_idx',
+  `ALTER TABLE signal_message_queue
+     DROP COLUMN recipient_identifier_hash,
+     DROP COLUMN recipient_identifier_ciphertext,
+     DROP COLUMN encrypted_body,
+     ADD COLUMN recipient_identifier text NOT NULL,
+     ADD COLUMN body text NOT NULL`,
+  'CREATE INDEX signal_queue_recipient_status_idx ON signal_message_queue (recipient_identifier, status, updated_at)',
+]
 
 const TIMESTAMPTZ_TYPE = {
   to: 1184,
@@ -61,18 +60,16 @@ let queue: SignalMessageQueue
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(LEGACY_QUEUE_DDL)
-  await adminSql.unsafe(
-    `CREATE INDEX signal_queue_recipient_status_idx ` +
-      `ON ${TEST_SCHEMA}.signal_message_queue (recipient_identifier, status, updated_at)`,
-  )
+  await createSchemaTables(adminSql, TEST_SCHEMA, [signalMessageQueue])
 
   testSql = postgres(DATABASE_URL, {
     max: 5,
     connection: { search_path: TEST_SCHEMA },
     types: { timestamptz: TIMESTAMPTZ_TYPE },
   })
+  for (const statement of MAKE_PRE_0056_SHAPE) await testSql.unsafe(statement)
+  db = drizzle({ client: testSql, schema }) as unknown as Database
+  await insertTestHub(db, 'hub-test')
   await testSql`
     INSERT INTO signal_message_queue
       (id, hub_id, conversation_id, recipient_identifier, body)
@@ -83,7 +80,6 @@ beforeAll(async () => {
     await testSql.unsafe(statement)
   }
 
-  db = drizzle({ client: testSql, schema }) as unknown as Database
   queue = new SignalMessageQueue(db, HMAC_SECRET, SERVER_KEK)
 })
 

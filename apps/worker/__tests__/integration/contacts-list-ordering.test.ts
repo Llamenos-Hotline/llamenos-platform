@@ -33,39 +33,11 @@ import * as schema from '../../db/schema'
 import { contacts } from '../../db/schema'
 import { ContactsService } from '../../services/contacts'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables } from '../helpers/schema-ddl'
 
 const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_contacts_order_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-// Mirrors apps/worker/db/schema/contacts.ts `contacts` table.
-const CONTACTS_DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.contacts (
-    crypto_format SMALLINT NOT NULL DEFAULT 1,
-    id                    TEXT PRIMARY KEY,
-    hub_id                TEXT NOT NULL,
-    identifier_hashes     TEXT[] NOT NULL DEFAULT '{}'::text[],
-    name_hash             TEXT,
-    trigram_tokens        TEXT[] NOT NULL DEFAULT '{}'::text[],
-    encrypted_summary     TEXT NOT NULL,
-    summary_envelopes     JSONB NOT NULL DEFAULT '[]'::jsonb,
-    encrypted_pii         TEXT,
-    pii_envelopes         JSONB,
-    contact_type_hash     TEXT,
-    tag_hashes            TEXT[] NOT NULL DEFAULT '{}'::text[],
-    status_hash           TEXT,
-    blind_indexes         JSONB NOT NULL DEFAULT '{}'::jsonb,
-    case_count            INTEGER NOT NULL DEFAULT 0,
-    note_count            INTEGER NOT NULL DEFAULT 0,
-    interaction_count     INTEGER NOT NULL DEFAULT 0,
-    last_interaction_at   TIMESTAMPTZ,
-    needs_reencryption    BOOLEAN NOT NULL DEFAULT false,
-    merged_into_id        TEXT,
-    deleted_at            TIMESTAMPTZ,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )
-`
 
 const JSONB_TYPE = {
   to: 3802,
@@ -106,8 +78,7 @@ function baseContactRow(id: string, createdAt: Date) {
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(CONTACTS_DDL)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [schema.contacts])
 
   testSql = postgres(DATABASE_URL, {
     max: 5,

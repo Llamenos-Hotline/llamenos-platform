@@ -31,6 +31,7 @@ import { EventOutbox } from '../../lib/event-outbox'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables, insertTestHub } from '../helpers/schema-ddl'
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -43,25 +44,6 @@ const TEST_SCHEMA = `test_outbox_${Date.now()}_${Math.random().toString(36).slic
 
 /** The hubs the events below are addressed to. */
 const HUB_IDS = ['hub-test-1', 'hub-restart-1']
-
-// Mirrors the migrated table, including the #2459 hub constraint: every event
-// names a hub that exists. A fixture that could store a hubless event would
-// prove nothing about the schema the server actually runs on.
-const EVENT_OUTBOX_DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.hubs (id TEXT PRIMARY KEY);
-  CREATE TABLE ${TEST_SCHEMA}.event_outbox (
-    id            SERIAL PRIMARY KEY,
-    event_json    JSONB    NOT NULL,
-    hub_id        TEXT     NOT NULL REFERENCES ${TEST_SCHEMA}.hubs(id) ON DELETE CASCADE,
-    kind          INTEGER  NOT NULL,
-    epoch         INTEGER  NOT NULL,
-    status        TEXT     NOT NULL DEFAULT 'pending',
-    retry_count   INTEGER  NOT NULL DEFAULT 0,
-    last_error    TEXT,
-    next_retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )
-`
 
 /**
  * postgres.js JSONB type config.
@@ -114,9 +96,7 @@ beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
 
   // Create isolated test schema and table
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(EVENT_OUTBOX_DDL)
-  for (const id of HUB_IDS) await adminSql.unsafe(`INSERT INTO ${TEST_SCHEMA}.hubs (id) VALUES ('${id}')`)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [schema.eventOutbox])
 
   // Test connection scoped to the test schema via search_path.
   // Configure JSONB serialization so raw objects from bun-jsonb columns
@@ -131,6 +111,7 @@ beforeAll(async () => {
   // drizzle/postgres-js exposes the same ORM interface (insert/update/execute).
   // The cast is safe for integration testing purposes.
   db = drizzle({ client: testSql, schema }) as unknown as Database
+  for (const id of HUB_IDS) await insertTestHub(db, id)
   outbox = new EventOutbox(db)
 })
 
