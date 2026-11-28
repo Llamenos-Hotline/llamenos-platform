@@ -53,8 +53,9 @@ typealias HubsListResponse = HubListResponse
 typealias AppHubResponse = HubDetailResponse
 
 // MARK: - Request Bodies
-// Create/update bodies are the generated `CreateHubBody` / `UpdateHubBody`
-// (updateHubBodySchema adds optional `slug` and `status`).
+// The update body is the generated `UpdateHubBody` (optional `slug` and
+// `status`). A create body carries the founder's signed genesis, a raw crate
+// link, so it is built as JSON by `HubChainService.foundHub` (#2963).
 
 // HubKeyEnvelopeResponse and HubKeyEnvelopeResponseEnvelope are generated from
 // packages/protocol/generated/swift/Types.swift — do not redefine here.

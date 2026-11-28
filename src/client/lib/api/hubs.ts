@@ -12,6 +12,10 @@ import type {
   SystemHealth,
 } from '@protocol/schemas'
 import type { HubReadersResponse, ReaderPurpose } from '@protocol/schemas/hubs'
+import type { createHubBodySchema } from '@protocol/schemas/hubs'
+import type { z } from 'zod'
+
+type CreateHubBody = z.input<typeof createHubBodySchema>
 
 export type { Hub }
 export type { ServiceStatus, SystemHealth }
@@ -32,7 +36,8 @@ export async function getMyHubPermissions(hubId: string) {
   return request<{ hubId: string; permissions: string[] }>(`/hubs/${encodeURIComponent(hubId)}/permissions/me`)
 }
 
-export async function createHub(data: { name: string; slug?: string; description?: string; phoneNumber?: string; timezone?: string }) {
+/** Create a hub with the client-minted id its founder's signed genesis names (#2963). Use `foundHub` (lib/hub-chain). */
+export async function createHub(data: CreateHubBody) {
   return request<{ hub: Hub }>('/hubs', {
     method: 'POST',
     body: JSON.stringify(data),

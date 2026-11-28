@@ -52,7 +52,9 @@ async function makeFounder(): Promise<string> {
 async function foundHub(body: { timezone?: string }): Promise<string> {
   const founder = await makeFounder()
   const id = `hub-timezone-${suite}-${counter++}`
-  const parsed = createHubBodySchema.parse({ name: id, slug: id, ...body })
+  // The route's own field schemas (name, slug, timezone and its default); the
+  // genesis and client-minted id #2963 added are the founding path's concern.
+  const parsed = createHubBodySchema.pick({ name: true, slug: true, timezone: true }).parse({ name: id, slug: id, ...body })
   const now = new Date().toISOString()
   await settings.hubs.createHub(
     { id, name: parsed.name, slug: id, status: 'active', timezone: parsed.timezone, createdBy: founder, createdAt: now, updatedAt: now },

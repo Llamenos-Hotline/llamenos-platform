@@ -40,6 +40,7 @@
  * content (D1). Hub content must not be sealed to it.
  */
 import { getActiveHub, getHubReaders, NoActiveHubError } from './api'
+import { assertHubSealable } from './hub-chain'
 
 declare const adminHpkeRecipientBrand: unique symbol
 
@@ -98,6 +99,10 @@ export class NoAdminReaderError extends Error {
 export async function hubAdminReaders(hubId: string | null): Promise<AdminHpkeRecipient[]> {
   // A row with no hub (an instance with no hub scope) has no reader set to ask.
   if (!hubId) throw new NoActiveHubError('/readers')
+  // Every hub-content seal resolves its admin readers here, so this is where a
+  // hub whose authority chain this device found forked or invalid stops
+  // sealing (#2963): nothing is written to readers a forked server chose.
+  await assertHubSealable(hubId)
   const { recipients } = await getHubReaders(hubId, 'admin')
   const readers: AdminHpkeRecipient[] = []
   for (const key of recipients) {

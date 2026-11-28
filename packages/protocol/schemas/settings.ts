@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { hubChainLinkSchema } from './hub-chain'
+import { hubIdSchema } from './hubs'
 import { DEFAULT_HUB_TIMEZONE, ianaTimezoneSchema } from './common'
 
 // --- Inferred types ---
@@ -136,6 +138,12 @@ export const ttlOverridesBodySchema = z.record(z.string(), z.number().int().min(
 export const setupCompleteBodySchema = z.object({
   /** Zone for the default hub created on completion; the setup admin's device zone. */
   timezone: ianaTimezoneSchema.optional().default(DEFAULT_HUB_TIMEZONE),
+  /**
+   * The default hub's id and the setup admin's signed new-hub genesis for it
+   * (#2963). Required when setup creates the first hub, which every hub
+   * founded by a client is: no hub is created without its genesis.
+   */
+  hub: z.object({ id: hubIdSchema, genesis: hubChainLinkSchema }).optional(),
 })
 
 /**

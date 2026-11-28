@@ -103,7 +103,7 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
   async (c) => {
     const pubkey = c.get('pubkey')
     const services = c.get('services')
-    const { timezone } = c.req.valid('json')
+    const { timezone, hub: founded } = c.req.valid('json')
 
     // Create default hub if none exists. Deliberately NOT caught here: if hub
     // creation or admin-role assignment fails, the request must fail too —
@@ -128,6 +128,12 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
             "the hub's first admin must be able to read what the hub receives",
         }, 409)
       }
+      if (!founded) {
+        return c.json({
+          error: "Completing setup founds the first hub: send its id and the setup admin's signed genesis for it (`hub`)",
+          code: 'chain_genesis',
+        }, 400)
+      }
       const hotlineName = c.env.HOTLINE_NAME || 'Hotline'
       // The default hub answers the hotline number — the one routing matches an
       // incoming call against (`hub_numbers`). It is the number of the
@@ -146,7 +152,8 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
         logger.error('The configured hotline number cannot be read as a telephone number — the default hub has none and answers no calls until one is declared')
       }
       const defaultHub = {
-        id: crypto.randomUUID(),
+        // Minted by the client: the founder's genesis names it (#2963).
+        id: founded.id,
         name: hotlineName,
         slug: hotlineName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
         status: 'active' as const,
@@ -162,7 +169,7 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
       // permission (`hubFounderRoleIds`), never a role id. Their instance-wide
       // authority is their global role; inside the hub they hold exactly what
       // any hub admin holds, which is what makes them its reader (D1).
-      await services.hubs.createHub(defaultHub, { pubkey })
+      await services.hubs.createHub(defaultHub, { pubkey, genesis: founded.genesis })
     }
 
     const result = await services.setupState.updateSetupState({ setupCompleted: true })

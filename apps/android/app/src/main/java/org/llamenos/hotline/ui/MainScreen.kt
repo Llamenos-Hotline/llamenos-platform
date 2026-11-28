@@ -126,6 +126,7 @@ fun MainScreen(
 
     // ViewModels scoped to this composable's lifecycle
     val dashboardViewModel: DashboardViewModel = hiltViewModel()
+    val hubChainViewModel: org.llamenos.hotline.ui.hubs.HubChainViewModel = hiltViewModel()
     val notesViewModel: NotesViewModel = hiltViewModel()
     val conversationsViewModel: ConversationsViewModel = hiltViewModel()
     val shiftsViewModel: ShiftsViewModel = hiltViewModel()
@@ -169,6 +170,7 @@ fun MainScreen(
             OfflineBanner(networkMonitor, offlineQueue)
             HubMembershipBanner(visible = membershipUnavailable, onRetry = hubSelectionViewModel::refresh)
             IncidentBanner(rows = incidentRows, onOpen = onNavigateToIncidents)
+            org.llamenos.hotline.ui.hubs.HubChainBanner(hubChainViewModel)
 
             when (MainTab.entries[selectedTab]) {
                 MainTab.DASHBOARD -> {

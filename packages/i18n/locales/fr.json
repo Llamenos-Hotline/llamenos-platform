@@ -4802,5 +4802,13 @@
     "push": "Une activité sur votre ligne d'écoute demande votre attention.",
     "signalAlert": "Alerte de la ligne — {{category}} : {{state}}. Ouvrez l'application pour les détails.",
     "title": "Incidents en cours"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Le registre d'autorité de ce centre a été bifurqué",
+      "refusedTitle": "Le registre d'autorité de ce centre contient une modification que personne n'a autorisée",
+      "sealingStopped": "Rien de nouveau ne sera chiffré dans ce centre tant qu'un administrateur n'aura pas résolu le problème. Le serveur vous montre peut-être un historique différent de celui des autres membres.",
+      "staleSigner": "Une modification récente dans ce centre a été signée par un appareil que son propriétaire a depuis supprimé ({{count}})."
+    }
   }
 }

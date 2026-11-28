@@ -80,6 +80,13 @@ pub enum CryptoError {
     #[error("sigchain rejected ({code}): {detail}")]
     SigchainRejected { code: &'static str, detail: String },
 
+    /// A hub authority chain link or recovery approval refused by one of its
+    /// closed rules (wire spec §5, §6.1): `chain_prev_hash`, `chain_fork`,
+    /// `chain_unauthorised_signer`, `recovery_threshold`, …; see
+    /// [`crate::hub_chain`].
+    #[error("hub chain rejected ({code}): {detail}")]
+    HubChainRejected { code: &'static str, detail: String },
+
     /// A device backup that does not carry the device's X-Wing seed — a v5 or
     /// older file, or a payload holding only the signing and X25519 seeds. It
     /// is never half-restored: the X-Wing key the user's chain names for the
@@ -110,6 +117,7 @@ impl CryptoError {
             Self::InvalidIdentifier(_) => "invalid_id",
             Self::NoEventKey => "no_event_key",
             Self::SigchainRejected { code, .. } => code,
+            Self::HubChainRejected { code, .. } => code,
             Self::BackupMissingXwingSeed => "backup_missing_xwing_seed",
             _ => "invalid_input",
         }

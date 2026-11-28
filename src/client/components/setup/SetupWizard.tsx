@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useAuth } from '@/lib/auth'
+import { completeFounding, signGenesis } from '@/lib/hub-chain'
 import { useToast } from '@/lib/toast'
 import {
   updateSetupState,
@@ -96,7 +97,7 @@ export function validateHubUrl(url: string): string | null {
 export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boolean }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { unlockWithPin, isKeyUnlocked } = useAuth()
+  const { unlockWithPin, isKeyUnlocked, publicKey } = useAuth()
   const { toast } = useToast()
   const [bootstrapComplete, setBootstrapComplete] = useState(
     !needsBootstrap || sessionStorage.getItem('bootstrapComplete') === '1'
@@ -204,7 +205,12 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
       // explicitly, not on the unlock effect's schedule. `false` means the key
       // is locked: there is nothing to register, and completing would fail.
       if (!(await ensureDeviceRegistered())) throw new Error('device key locked')
-      await completeSetup()
+      // This device signs the default hub's genesis (#2963); the server founds
+      // the hub with it only if setup creates one.
+      if (!publicKey) throw new Error('device key locked')
+      const hubId = crypto.randomUUID()
+      const founding = await signGenesis(hubId, publicKey)
+      await completeSetup({ id: hubId, genesis: founding.genesis })
       sessionStorage.removeItem('bootstrapComplete')
       // Activate the hub `POST /api/setup/complete` just created. Read from the
       // AUTHENTICATED hub list, which the server filters to this admin's
@@ -218,6 +224,11 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
           setHubId(hubs[0].id)
         }
       } catch { /* ignore — hub switching is best-effort */ }
+      // The server founded the hub with this device's genesis: commit its bundle
+      // policies and take the genesis as this device's anchor. Not when setup
+      // found an existing hub (it then ignored the genesis).
+      const founded = await listHubs().then(r => r.hubs.some(h => h.id === hubId), () => false)
+      if (founded) await completeFounding(hubId, founding.genesis, founding.policies)
       toast(t('setup.complete'), 'success')
       setStep(INVITE_STEP)
     } catch {

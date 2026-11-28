@@ -48,7 +48,7 @@ import {
   setVerifiedSigchainHead,
   pukCreateFromState,
   sigchainCreateLinkFromState,
-  sigchainVerify,
+  hubChainCall,
   userInitPayloadFromState,
   type DeviceKeyState,
   type SigchainLink,
@@ -226,7 +226,10 @@ async function verifyAuthorisesDevice(
   links: SigchainLinkRecord[],
   device: DeviceKeyState,
 ): Promise<SigchainVerifiedState> {
-  const verified = await sigchainVerify(links.map(toCryptoSigchainLink))
+  // The crate's verifier (`hub_chain::call` verifySigchain) — the same one the
+  // hub chain's signer checks use, so a recovery link is decided by its
+  // approvals and never accepted on trust (#2963).
+  const verified = await hubChainCall('verifySigchain', { links: links.map(toCryptoSigchainLink) })
   if (verified.userPubkey !== userPubkey || !verified.activeDevicePubkeys.includes(device.signingPubkeyHex)) {
     throw new Error('Verified sigchain does not authorise this device')
   }
@@ -245,7 +248,7 @@ function assertNamesHeldKemKey(verified: SigchainVerifiedState, device: DeviceKe
  * verified for `userPubkey`: an empty, shorter or forked chain is a rollback,
  * and re-initialising it would sign a second genesis (#2496).
  */
-async function assertExtendsVerifiedHead(userPubkey: string, links: SigchainLinkRecord[]): Promise<void> {
+export async function assertExtendsVerifiedHead(userPubkey: string, links: SigchainLinkRecord[]): Promise<void> {
   const known = await getVerifiedSigchainHead()
   if (!known) return
   // Fail closed: another user's head is not "no head" (sign-out clears it).
@@ -256,7 +259,11 @@ async function assertExtendsVerifiedHead(userPubkey: string, links: SigchainLink
   }
 }
 
-async function recordVerifiedHead(verified: SigchainVerifiedState): Promise<void> {
+export async function recordVerifiedHead(verified: SigchainVerifiedState): Promise<void> {
+  // Monotonic: two verifications racing (identity start, hub founding) never
+  // move the recorded head backwards for the same user.
+  const known = await getVerifiedSigchainHead()
+  if (known && known.userPubkey === verified.userPubkey && known.seq > verified.headSeq) return
   await setVerifiedSigchainHead({ userPubkey: verified.userPubkey, seq: verified.headSeq, hash: verified.headHash })
 }
 

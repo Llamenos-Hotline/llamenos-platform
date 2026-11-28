@@ -15,6 +15,15 @@ import { HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
 import type { Shape } from '@shared/crypto-shapes'
 import { bytesToHex, bytesToUtf8, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import type { AdminHpkeRecipient } from './admin-recipient'
+import type {
+  CrateSigchainLink,
+  HubChainOps,
+  LinkIntentRequest,
+  SignedIntent,
+  RecoveryApproval,
+  SigchainVerifiedState,
+  UnsignedRecoveryApproval,
+} from '@protocol/schemas/hub-chain'
 import type { KeyEnvelope, RelayEventKey } from '@protocol/schemas'
 
 export type { KeyEnvelope, RelayEventKey, Shape }
@@ -69,6 +78,9 @@ export type TauriIpcCommand =
   | 'sigchain_verify_users'
   | 'user_init_payload_from_state'
   | 'sigchain_verify_link'
+  | 'hub_chain_call'
+  | 'hub_chain_sign_from_state'
+  | 'recovery_approval_sign_from_state'
   | 'sframe_derive_key'
   | 'hpke_unwrap_and_set_hub_key'
   | 'generate_hub_key_in_state'
@@ -178,38 +190,11 @@ export interface PukRotateResult {
   clkrChainLinkHex: string
 }
 
-/** Sigchain link — append-only identity log entry. */
-export interface SigchainLink {
-  id: string
-  seq: number
-  prevHash: string | null
-  entryHash: string
-  signerDeviceId: string
-  signerPubkey: string   // Ed25519 (64 hex chars)
-  signature: string      // Ed25519 (128 hex chars)
-  timestamp: string      // ISO-8601
-  payloadJson: string    // Type-tagged JSON
-}
-
+/** Sigchain link — append-only identity log entry (packages/crypto `SigchainLink`). */
+export type SigchainLink = CrateSigchainLink
 /** An active device's X-Wing key, as its `user_init` / `device_add` link names it. */
-export interface ActiveDeviceKey {
-  devicePubkey: string
-  encryptionPubkey: string
-  format: number
-}
-
-/** Sigchain verification result (packages/crypto `SigchainVerifiedState`). */
-export interface SigchainVerifiedState {
-  userPubkey: string
-  verifiedCount: number
-  headSeq: number
-  headHash: string
-  activeDevicePubkeys: string[]
-  /** The X-Wing key of every active device (one each: user_init and device_add require it). */
-  activeDeviceKeys: ActiveDeviceKey[]
-  /** Every key the chain has ever named; another user's chain naming one is refused. */
-  namedKeys: string[]
-}
+export type ActiveDeviceKey = SigchainVerifiedState['activeDeviceKeys'][number]
+export type { SigchainVerifiedState }
 
 // ── Device key management ───────────────────────────────────────────
 
@@ -544,6 +529,38 @@ export async function sigchainVerifyUsers(chains: SigchainLink[][]): Promise<Sig
   throw new Error('WASM sigchain verify not yet implemented')
 }
 
+// ── Hub authority chain (#2963; wire spec §5) ───────────────────────
+
+/**
+ * One stateless hub-chain operation in Rust (`hub_chain::call`). The webview
+ * verifies every hub chain it is served through this and never canonicalises,
+ * hashes or checks a link itself. A refusal rejects with an Error whose message
+ * starts with the crate's closed rejection code (`chain_fork: …`).
+ */
+export async function hubChainCall<Op extends keyof HubChainOps>(
+  op: Op,
+  request: HubChainOps[Op]['request'],
+): Promise<HubChainOps[Op]['answer']> {
+  const answer = await tauriInvoke<string>('hub_chain_call', { requestJson: JSON.stringify({ op, ...request }) })
+  return JSON.parse(answer) as HubChainOps[Op]['answer']
+}
+
+/**
+ * Build and sign one hub-chain link from an intent with this device's key,
+ * held in Rust. The crate derives every signed field; the answer is the link
+ * and the head it makes (#3133).
+ */
+export async function hubChainSign(request: LinkIntentRequest): Promise<SignedIntent> {
+  const signed = await tauriInvoke<string>('hub_chain_sign_from_state', { requestJson: JSON.stringify(request) })
+  return JSON.parse(signed) as SignedIntent
+}
+
+/** Sign a recovery approval with this holder device's key, held in Rust (D14). */
+export async function recoveryApprovalSign(approval: UnsignedRecoveryApproval): Promise<RecoveryApproval> {
+  const signed = await tauriInvoke<string>('recovery_approval_sign_from_state', { approvalJson: JSON.stringify(approval) })
+  return JSON.parse(signed) as RecoveryApproval
+}
+
 /** Verify a single sigchain link (stateless). */
 export async function sigchainVerifyLink(
   link: SigchainLink,
@@ -854,6 +871,41 @@ export async function setVerifiedSigchainHead(head: VerifiedSigchainHead): Promi
   await store.set(SIGCHAIN_HEAD_KEY, head)
 }
 
+const HUB_CHAIN_ANCHORS_KEY = 'llamenos-verified-hub-chain-anchors'
+
+/**
+ * The trusted `{hub, seq, hash}` this device holds per hub (#2963, wire spec
+ * §5.7): set from a trusted device (the founder's own genesis, provisioning,
+ * an invite) and advanced only by this device's own successful verification —
+ * never taken from the server. A chain the server later serves that does not
+ * contain it is a fork, and the hub stops sealing.
+ */
+export async function getHubChainAnchor(hubId: string): Promise<{ seq: number; hash: string } | null> {
+  const store = await getSecureStore()
+  const anchors = (await store.get<Record<string, { seq: number; hash: string }>>(HUB_CHAIN_ANCHORS_KEY)) ?? {}
+  return anchors[hubId] ?? null
+}
+
+/** Anchor writes are one read-modify-write of one record, so they run one at a
+ *  time: two hubs' writes racing would otherwise drop one hub's anchor, and a
+ *  hub with no anchor verifies by trust-on-first-use again. */
+let anchorWrites: Promise<unknown> = Promise.resolve()
+
+/**
+ * Store `head` as `hubId`'s anchor. Raw storage: the monotonic rule (never a
+ * lower seq, never a different hash at the same seq) is the caller's —
+ * `advanceHubAnchor` in hub-chain.ts — because only it knows the verdict.
+ */
+export function setHubChainAnchor(hubId: string, head: { seq: number; hash: string }): Promise<void> {
+  const write = anchorWrites.then(async () => {
+    const store = await getSecureStore()
+    const anchors = (await store.get<Record<string, { seq: number; hash: string }>>(HUB_CHAIN_ANCHORS_KEY)) ?? {}
+    await store.set(HUB_CHAIN_ANCHORS_KEY, { ...anchors, [hubId]: head })
+  })
+  anchorWrites = write.catch(() => undefined)
+  return write
+}
+
 /** Check if encrypted device keys exist in store. */
 export async function hasStoredKey(): Promise<boolean> {
   const store = await getSecureStore()
@@ -866,6 +918,7 @@ export async function clearStoredKey(): Promise<void> {
   const store = await getSecureStore()
   await store.delete(STORE_KEY)
   await store.delete(SIGCHAIN_HEAD_KEY)
+  await store.delete(HUB_CHAIN_ANCHORS_KEY)
   await lockCrypto()
 }
 

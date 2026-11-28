@@ -4802,5 +4802,13 @@
     "push": "Gen aktivite sou liy dirèk ou a ki bezwen yon koutje.",
     "signalAlert": "Alèt liy dirèk — {{category}}: {{state}}. Louvri aplikasyon an pou detay yo.",
     "title": "Ensidan ki aktif"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Dosye otorite sant sa a divize an de",
+      "refusedTitle": "Dosye otorite sant sa a gen yon chanjman pèsonn pa otorize",
+      "sealingStopped": "Pa gen anyen nouvo k ap chifre nan sant sa a jiskaske yon administratè rezoud sa. Sèvè a ka ap montre w yon istwa ki diferan de lòt manm yo.",
+      "staleSigner": "Yon chanjman resan nan sant sa a te siyen pa yon aparèy pwopriyetè li te deja retire ({{count}})."
+    }
   }
 }

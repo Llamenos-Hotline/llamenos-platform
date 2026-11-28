@@ -6,6 +6,8 @@
  * verifies expected HTTP status codes for each endpoint.
  */
 import { Given, When, Then, Before, getState, setState } from './fixtures'
+import { founderHead } from '../../hub-chain-helpers'
+import { newHubGenesisMock } from '../../mocks/hub-chain-mock'
 // Status assertions (Then) are in assertions.steps.ts
 import { getSharedState, setLastResponse } from './shared-state'
 import { getScenarioState } from './common.steps'
@@ -494,7 +496,13 @@ When('the {string} user sends {string} to {string} with valid hub body', async (
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
+  // A real founder's body: this user's own device signs the genesis (#2963), so
+  // a refusal is the permission check's, never a malformed body's.
+  const id = crypto.randomUUID()
+  const genesis = newHubGenesisMock(id, user.deviceKey, await founderHead(request, user.deviceKey), ['role-hub-admin'])
   getSharedState(world).lastResponse = await apiPost(request, '/hubs', {
+    id,
+    genesis,
     name: uniqueName('PM Hub'),
     description: 'PM test hub',
   }, user.deviceKey)

@@ -1194,6 +1194,42 @@ pub extern "C" fn ffi_sigchain_verify(
     json.len() as i32
 }
 
+// ── Hub authority chain (`crate::hub_chain`, #2963) ─────────────────────
+
+/// One stateless hub-chain operation, JSON in and JSON out:
+/// `{"op": "verify" | "signingMessage" | "assemble" | "permsHash" |
+/// "verifySigchain" | "approvalMessage", …}` — see `crate::hub_chain::call`.
+/// The server validates every appended link through `verify` before storing
+/// it; it never hashes, canonicalises or signs a link itself.
+#[no_mangle]
+pub extern "C" fn ffi_hub_chain(
+    request: *const u8,
+    request_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(request, out);
+    check_input_size!(request_len);
+    let slice = unsafe { std::slice::from_raw_parts(request, request_len) };
+    let text = match std::str::from_utf8(slice) {
+        Ok(t) => t,
+        Err(_) => {
+            return set_crypto_error(&crate::errors::CryptoError::InvalidFormat(
+                "hub-chain request is not UTF-8".into(),
+            ))
+        }
+    };
+    let json = match crate::hub_chain::call_json(text) {
+        Ok(j) => j.into_bytes(),
+        Err(e) => return set_crypto_error(&e),
+    };
+    check_output_size!(out_len, json.len());
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, json.len()) };
+    out_slice.copy_from_slice(&json);
+    json.len() as i32
+}
+
 // ── Ban digest (RFC 9497 OPRF, `crate::ban_digest`) ────────────────────
 
 /// Read the 32-byte BAN_HASH_KEY, a UTF-8 scope string, and a UTF-8 phone/element argument.

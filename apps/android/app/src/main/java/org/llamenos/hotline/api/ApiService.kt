@@ -384,15 +384,16 @@ class ApiService @Inject constructor(
      * @throws HubMembershipPendingException when the hub list has not been read yet.
      * @throws HubMembershipUnavailableException when the hub list could not be read.
      */
-    fun activeHubPath(path: String): String {
-        val hubId = activeHubState.activeHubId.value
+    fun activeHubPath(path: String): String = hubPath(activeHubIdOrThrow(), path)
+
+    /** The hub being browsed, or the error that says why there is none. */
+    fun activeHubIdOrThrow(): String =
+        activeHubState.activeHubId.value
             ?: throw when (val membership = activeHubState.membership.value) {
                 HubMembership.Loaded -> NoActiveHubException()
                 HubMembership.Unknown -> HubMembershipPendingException()
                 is HubMembership.Failed -> HubMembershipUnavailableException(membership.cause)
             }
-        return hubPath(hubId, path)
-    }
 
     /**
      * Returns the path prefixed with /hubs/{hubId} — for acting on a call or

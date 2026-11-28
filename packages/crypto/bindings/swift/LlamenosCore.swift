@@ -2457,6 +2457,14 @@ public enum CryptoError: Swift.Error, Equatable, Hashable, Foundation.LocalizedE
     case SigchainRejected(message: String)
     
     /**
+     * A hub authority chain link or recovery approval refused by one of its
+     * closed rules (wire spec §5, §6.1): `chain_prev_hash`, `chain_fork`,
+     * `chain_unauthorised_signer`, `recovery_threshold`, …; see
+     * [`crate::hub_chain`].
+     */
+    case HubChainRejected(message: String)
+    
+    /**
      * A device backup that does not carry the device's X-Wing seed — a v5 or
      * older file, or a payload holding only the signing and X25519 seeds. It
      * is never half-restored: the X-Wing key the user's chain names for the
@@ -2592,11 +2600,15 @@ public struct FfiConverterTypeCryptoError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 24: return .BackupMissingXwingSeed(
+        case 24: return .HubChainRejected(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 25: return .NoAdminReader(
+        case 25: return .BackupMissingXwingSeed(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 26: return .NoAdminReader(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -2657,10 +2669,12 @@ public struct FfiConverterTypeCryptoError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(22))
         case .SigchainRejected(_ /* message is ignored*/):
             writeInt(&buf, Int32(23))
-        case .BackupMissingXwingSeed(_ /* message is ignored*/):
+        case .HubChainRejected(_ /* message is ignored*/):
             writeInt(&buf, Int32(24))
-        case .NoAdminReader(_ /* message is ignored*/):
+        case .BackupMissingXwingSeed(_ /* message is ignored*/):
             writeInt(&buf, Int32(25))
+        case .NoAdminReader(_ /* message is ignored*/):
+            writeInt(&buf, Int32(26))
 
         
         }
@@ -3823,6 +3837,34 @@ public func mobileHasWakeKey() -> Bool  {
 })
 }
 /**
+ * One stateless hub-chain operation, JSON in and JSON out
+ * (`hub_chain::call`): `{"op": "verify" | "signingMessage" | "assemble" |
+ * "permsHash" | "verifySigchain" | "approvalMessage", …}`. The app verifies
+ * every hub chain it is served through this, and never canonicalises, hashes
+ * or checks a link itself. A refusal is a `CryptoError` whose message starts
+ * with its closed rejection code.
+ */
+public func mobileHubChain(requestJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_hub_chain(
+        FfiConverterString.lower(requestJson),$0
+    )
+})
+}
+/**
+ * Build and sign one hub-chain link from an intent (JSON
+ * `hub_chain::LinkIntentRequest`) with this device's key from mobile state;
+ * the answer is `{link, head}`. The crate derives every signed field: the app
+ * never assembles or parses one (#3133).
+ */
+public func mobileHubChainSign(requestJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_hub_chain_sign(
+        FfiConverterString.lower(requestJson),$0
+    )
+})
+}
+/**
  * Check if the mobile crypto state is unlocked.
  */
 public func mobileIsUnlocked() -> Bool  {
@@ -3982,6 +4024,16 @@ public func mobilePukUnwrapSeed(envelope: HpkeEnvelope)throws  -> String  {
 public func mobileRandomBytesHex() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_llamenos_core_fn_func_mobile_random_bytes_hex($0
+    )
+})
+}
+/**
+ * Sign a recovery approval (JSON) with this holder device's key (D14).
+ */
+public func mobileRecoveryApprovalSign(approvalJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_recovery_approval_sign(
+        FfiConverterString.lower(approvalJson),$0
     )
 })
 }
@@ -4411,6 +4463,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_has_wake_key() != 11945) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_hub_chain() != 6094) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign() != 51133) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_is_unlocked() != 56931) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4451,6 +4509,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_recovery_approval_sign() != 52329) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897) {

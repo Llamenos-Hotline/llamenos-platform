@@ -759,9 +759,8 @@ pub fn mobile_sigchain_create_link(
 /// Verify a complete sigchain (stateless).
 #[uniffi::export]
 pub fn mobile_sigchain_verify(links_json: String) -> Result<SigchainVerifiedState, CryptoError> {
-    let links: Vec<SigchainLink> =
-        serde_json::from_str(&links_json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
-    sigchain::verify_sigchain(&links)
+    // The crate's link shape or the server's record shape (#3133).
+    sigchain::verify_sigchain(&sigchain::links_from_json_any_shape(&links_json)?)
 }
 
 /// This device's genesis `user_init` payload JSON (spec
@@ -780,8 +779,12 @@ pub fn mobile_user_init_payload() -> Result<String, CryptoError> {
 pub fn mobile_sigchain_verify_users(
     chains_json: String,
 ) -> Result<Vec<SigchainVerifiedState>, CryptoError> {
-    let chains: Vec<Vec<SigchainLink>> =
+    let chains: Vec<serde_json::Value> =
         serde_json::from_str(&chains_json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+    let chains = chains
+        .into_iter()
+        .map(|c| sigchain::links_from_json_any_shape(&c.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
     sigchain::verify_user_sigchains(&chains)
 }
 
@@ -794,6 +797,34 @@ pub fn mobile_sigchain_verify_link(
     let link: SigchainLink =
         serde_json::from_str(&link_json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
     sigchain::verify_sigchain_link(&link, &expected_signer_pubkey)
+}
+
+// ── Hub authority chain (#2963; wire spec §5) ───────────────────────
+
+/// One stateless hub-chain operation, JSON in and JSON out
+/// (`hub_chain::call`): `{"op": "verify" | "signingMessage" | "assemble" |
+/// "permsHash" | "verifySigchain" | "approvalMessage", …}`. The app verifies
+/// every hub chain it is served through this, and never canonicalises, hashes
+/// or checks a link itself. A refusal is a `CryptoError` whose message starts
+/// with its closed rejection code.
+#[uniffi::export]
+pub fn mobile_hub_chain(request_json: String) -> Result<String, CryptoError> {
+    crate::hub_chain::call_json(&request_json)
+}
+
+/// Build and sign one hub-chain link from an intent (JSON
+/// `hub_chain::LinkIntentRequest`) with this device's key from mobile state;
+/// the answer is `{link, head}`. The crate derives every signed field: the app
+/// never assembles or parses one (#3133).
+#[uniffi::export]
+pub fn mobile_hub_chain_sign(request_json: String) -> Result<String, CryptoError> {
+    with_secrets(|secrets, _| crate::hub_chain::sign_intent_json(secrets, &request_json))
+}
+
+/// Sign a recovery approval (JSON) with this holder device's key (D14).
+#[uniffi::export]
+pub fn mobile_recovery_approval_sign(approval_json: String) -> Result<String, CryptoError> {
+    with_secrets(|secrets, _| crate::hub_chain::sign_approval_json(secrets, &approval_json))
 }
 
 // ── Hub key + server event key management ───────────────────────────

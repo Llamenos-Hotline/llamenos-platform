@@ -73,6 +73,8 @@ struct LlamenosApp: App {
                             PermissionsRefreshBanner(failure: failure)
                         }
 
+                        HubChainBanner(hubChain: appState.hubChainService, hubId: hubContext.activeHubId)
+
                         ContentView()
                             .environment(appState)
                             .environment(router)

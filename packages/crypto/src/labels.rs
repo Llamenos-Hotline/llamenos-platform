@@ -484,6 +484,21 @@ pub const LABEL_HUB_KEY_ROTATION: &str = "llamenos:hub-key-rotation:v1";
 /// the user (`sigchain::device_pop_message`).
 pub const LABEL_DEVICE_POP: &str = "llamenos:device-pop:v1";
 
+// --- Hub authority chain (#2963; wire spec §5, §7) ---
+
+/// Hub-chain link signature (wire spec §5.3, D11): the signer device's Ed25519
+/// key signs `L_HUB_CHAIN_SIG ‖ 0x00 ‖ entryHash`, so a hub link can never be
+/// confused with a user-sigchain link, which signs the raw `entryHash`.
+pub const LABEL_HUB_CHAIN_SIG: &str = "llamenos:hub-chain-sig:v1";
+
+/// Bundle permission commitment (wire spec §5.5, D12):
+/// `permsHash = H(lp(L_HUB_BUNDLE_PERMS) ‖ lp(p_1) ‖ … ‖ lp(p_k))`.
+pub const LABEL_HUB_BUNDLE_PERMS: &str = "llamenos:hub-bundle-perms:v1";
+
+/// Recovery approval signature (wire spec §5.8, D14): a share holder's device
+/// signs `L_RECOVERY_APPROVAL ‖ 0x00 ‖ H(canonical(approval without sig))`.
+pub const LABEL_RECOVERY_APPROVAL: &str = "llamenos:recovery-approval:v1";
+
 // =============================================================================
 // LABEL REGISTRY — maps numeric IDs (u8) to label strings.
 //
@@ -679,6 +694,12 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_HUB_KEY_ROTATION, // 111
     // 112: Device possession signature on user_init / device_add (#2496)
     LABEL_DEVICE_POP, // 112
+    // 113: Hub-chain link signature (#2963, wire spec §5.3)
+    LABEL_HUB_CHAIN_SIG, // 113
+    // 114: Bundle permission commitment (#2963, wire spec §5.5)
+    LABEL_HUB_BUNDLE_PERMS, // 114
+    // 115: Recovery approval signature (#2963, wire spec §5.8)
+    LABEL_RECOVERY_APPROVAL, // 115
 ];
 
 /// Look up a label string by its numeric ID.

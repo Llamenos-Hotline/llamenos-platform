@@ -881,6 +881,44 @@ class CryptoService @Inject constructor() {
             }
         }
 
+    // ── Hub authority chain (#2963; wire spec §5) ──────────────────────
+
+    /**
+     * One stateless hub-chain operation in Rust (`hub_chain::call`): [requestJson]
+     * names the op (the crate's `hub_chain::call` table lists them); the app uses
+     * `verify`, `verifySigchain` and `usersNamed`, the answer the crate's JSON. The
+     * app never canonicalises, hashes or checks a hub link itself.
+     */
+    suspend fun hubChainCall(requestJson: String): String =
+        withContext(computeDispatcher) {
+            NativeCryptoLibrary.require()
+            try {
+                org.llamenos.core.mobileHubChain(requestJson)
+            } catch (e: org.llamenos.core.CryptoException) {
+                throw CryptoException("Hub chain refused: ${e.message}", e)
+            }
+        }
+
+    /**
+     * Build and sign one hub-chain link from an intent (JSON
+     * `hub_chain::LinkIntentRequest`) with this device's key, held in Rust. The
+     * answer is `{link, head}`; the crate derives every signed field (#3133).
+     */
+    suspend fun signHubIntent(requestJson: String): String =
+        withContext(computeDispatcher) {
+            NativeCryptoLibrary.require()
+            check(isUnlocked) { "Device is locked" }
+            org.llamenos.core.mobileHubChainSign(requestJson)
+        }
+
+    /** Sign a recovery approval (JSON) with this holder device's key (D14). */
+    suspend fun signRecoveryApproval(approvalJson: String): String =
+        withContext(computeDispatcher) {
+            NativeCryptoLibrary.require()
+            check(isUnlocked) { "Device is locked" }
+            org.llamenos.core.mobileRecoveryApprovalSign(approvalJson)
+        }
+
     /** Verify a complete sigchain (all links). */
     suspend fun verifySigchain(
         linksJson: String,

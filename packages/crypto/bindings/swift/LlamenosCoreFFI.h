@@ -511,6 +511,16 @@ int8_t uniffi_llamenos_core_fn_func_mobile_has_wake_key(RustCallStatus *_Nonnull
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_HUB_CHAIN
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_HUB_CHAIN
+RustBuffer uniffi_llamenos_core_fn_func_mobile_hub_chain(RustBuffer request_json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_HUB_CHAIN_SIGN
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_HUB_CHAIN_SIGN
+RustBuffer uniffi_llamenos_core_fn_func_mobile_hub_chain_sign(RustBuffer request_json, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_IS_UNLOCKED
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_IS_UNLOCKED
 int8_t uniffi_llamenos_core_fn_func_mobile_is_unlocked(RustCallStatus *_Nonnull out_status
@@ -583,6 +593,11 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(RustBuffer envelo
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RANDOM_BYTES_HEX
 RustBuffer uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(RustCallStatus *_Nonnull out_status
     
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_APPROVAL_SIGN
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_APPROVAL_SIGN
+RustBuffer uniffi_llamenos_core_fn_func_mobile_recovery_approval_sign(RustBuffer approval_json, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_SHARE_LIVENESS_PROOF
@@ -1248,6 +1263,18 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_has_wake_key(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_HUB_CHAIN
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_HUB_CHAIN
+uint16_t uniffi_llamenos_core_checksum_func_mobile_hub_chain(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_HUB_CHAIN_SIGN
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_HUB_CHAIN_SIGN
+uint16_t uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_IS_UNLOCKED
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_IS_UNLOCKED
 uint16_t uniffi_llamenos_core_checksum_func_mobile_is_unlocked(void
@@ -1329,6 +1356,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_puk_unwrap_seed(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RANDOM_BYTES_HEX
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RANDOM_BYTES_HEX
 uint16_t uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RECOVERY_APPROVAL_SIGN
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RECOVERY_APPROVAL_SIGN
+uint16_t uniffi_llamenos_core_checksum_func_mobile_recovery_approval_sign(void
     
 );
 #endif

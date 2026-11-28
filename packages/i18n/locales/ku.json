@@ -4800,5 +4800,13 @@
     "push": "Li ser xeta we çalakiyek heye ku divê lê were nêrîn.",
     "signalAlert": "Hişyariya xetê — {{category}}: {{state}}. Ji bo hûrguliyan sepanê vekin.",
     "title": "Bûyerên çalak"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Tomara desthilatê ya vê navendê du şax bûye",
+      "refusedTitle": "Di tomara desthilatê ya vê navendê de guhertinek heye ku kesî destûr nedaye",
+      "sealingStopped": "Heta ku rêveberek vê çareser neke, tiştekî nû di vê navendê de nayê şîfrekirin. Dibe ku server dîrokeke cuda ji ya endamên din nîşanî te bide.",
+      "staleSigner": "Guhertineke nû ya vê navendê bi amûreke ku xwediyê wê jê birî hatiye îmzekirin ({{count}})."
+    }
   }
 }

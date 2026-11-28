@@ -30,6 +30,7 @@ import { DeviceWipeScreen } from '@/components/device-wipe-screen'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { OfflineBanner } from '@/components/offline-banner'
 import { IncidentBanner } from '@/components/incident-banner'
+import { HubChainBanner } from '@/components/hub-chain-banner'
 import { UpdateRequiredScreen } from '@/components/update-required-screen'
 import { HubSwitcher } from '@/components/hub-switcher'
 import { NoHubMembershipScreen, HubMembershipErrorScreen } from '@/components/hub-membership-screen'
@@ -530,6 +531,7 @@ function AuthenticatedLayout() {
         <UpdateChecker />
         <NotificationPromptBanner />
         <IncidentBanner />
+        <HubChainBanner />
 
         {/* Mobile top bar */}
         <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-background px-4 py-3 md:hidden">

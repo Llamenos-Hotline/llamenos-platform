@@ -1,6 +1,7 @@
 package org.llamenos.hotline.api
 
 import org.llamenos.hotline.crypto.KeyValueStore
+import org.llamenos.hotline.hub.HubChainService
 import org.llamenos.core.CryptoException
 import org.llamenos.core.mobileResolveAdminReaders
 import org.llamenos.hotline.crypto.NoAdminReaderException
@@ -16,6 +17,8 @@ import javax.inject.Singleton
 @Singleton
 class SessionState @Inject constructor(
     private val keyValueStore: KeyValueStore,
+    /** The hub-chain gate every hub-content seal passes (#2963). */
+    private val hubChain: HubChainService,
 ) {
     /**
      * The hub's admin reader set — every key hub content must be sealed to so that
@@ -36,19 +39,16 @@ class SessionState @Inject constructor(
      *   caller reports it and writes nothing; it never substitutes another key.
      */
     suspend fun adminReaders(apiService: ApiService, hubId: String? = null): List<String> {
-        // The route is spelled inside each call so the mobile route scanner and the
-        // API contract guard can read what it reaches.
-        val response = if (hubId != null) {
-            apiService.request<HubReadersResponse>(
-                "GET",
-                apiService.hubPath(hubId, "/api/readers?purpose=${ReaderPurpose.Admin.value}"),
-            )
-        } else {
-            apiService.request<HubReadersResponse>(
-                "GET",
-                apiService.activeHubPath("/api/readers?purpose=${ReaderPurpose.Admin.value}"),
-            )
-        }
+        // Every hub-content seal resolves its admin readers here, so this is where a
+        // hub whose authority chain this device has not verified stops sealing
+        // (#2963): fail closed. The readers asked for are those of exactly the hub
+        // the gate passed — the active hub is never read a second time.
+        val sealingHub = hubId ?: apiService.activeHubIdOrThrow()
+        hubChain.assertSealable(sealingHub)
+        val response = apiService.request<HubReadersResponse>(
+            "GET",
+            apiService.hubPath(sealingHub, "/api/readers?purpose=${ReaderPurpose.Admin.value}"),
+        )
         return try {
             mobileResolveAdminReaders(response.recipients)
         } catch (_: CryptoException.NoAdminReader) {

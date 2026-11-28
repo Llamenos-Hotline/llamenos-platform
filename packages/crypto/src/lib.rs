@@ -38,6 +38,9 @@ pub mod recovery_liveness;
 pub mod shamir;
 pub mod sigchain;
 
+// Hub authority chain (#2963; wire spec §5): link format, verification, chain-derived state, recovery approvals
+pub mod hub_chain;
+
 #[cfg(feature = "mls")]
 pub mod mls;
 pub mod sframe;
@@ -62,6 +65,8 @@ pub mod id_profile;
 
 pub mod shape;
 
+#[cfg(test)]
+mod hub_chain_vectors;
 #[cfg(test)]
 mod vectors;
 

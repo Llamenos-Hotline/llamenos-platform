@@ -20,6 +20,12 @@ import { concatBytes } from '@noble/hashes/utils.js'
 import { ristretto255_oprf } from '@noble/curves/ed25519.js'
 import { LABEL_BAN_KEY_DERIVE, HMAC_BAN_PREFIX } from '@shared/crypto-labels'
 import { verifySigchainMock, type MockSigchainVerifiedState } from '../../../../tests/mocks/sigchain-mock'
+import { spawnSync } from 'node:child_process'
+import { join } from 'node:path'
+import type { HubChainOps } from '@protocol/schemas/hub-chain'
+export type { HubAnchor, HubChainInput, HubChainOps } from '@protocol/schemas/hub-chain'
+
+const HUB_CHAIN_CRATE = join(__dirname, 'hub-chain-crate.ts')
 
 export function randomBytes(len: number): Uint8Array {
   const out = new Uint8Array(len)
@@ -82,6 +88,24 @@ export class CryptoError extends Error {
 }
 
 export { SHAPES, type Shape } from '@shared/crypto-shapes'
+
+/**
+ * The hub chain is NOT re-implemented here: a JS verifier would be a second
+ * verifier a test could pass against while the crate differs (#2104). These
+ * run the real crate's `hub_chain::call` in a `bun` subprocess
+ * (./hub-chain-crate.ts), so the Node-hosted tiers validate hub links exactly
+ * as the server does.
+ */
+export function hubChainCallJson(requestJson: string): string {
+  const out = spawnSync('bun', [HUB_CHAIN_CRATE], { input: requestJson, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  if (out.status === 0) return out.stdout
+  if (out.status === 2) throw new CryptoError(-5, out.stderr)
+  throw new Error(`hub-chain crate subprocess failed (${out.status}): ${out.stderr || out.error?.message}`)
+}
+
+export function hubChainCall<Op extends keyof HubChainOps>(op: Op, request: HubChainOps[Op]['request']): HubChainOps[Op]['answer'] {
+  return JSON.parse(hubChainCallJson(JSON.stringify({ op, ...request }))) as HubChainOps[Op]['answer']
+}
 
 export interface SigchainLink {
   id: string

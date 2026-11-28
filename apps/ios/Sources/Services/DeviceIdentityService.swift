@@ -208,24 +208,10 @@ final class DeviceIdentityService {
         )
     }
 
-    /// The server's links in the crate's `SigchainLink` JSON shape.
+    /// The server's links as JSON for the crate, which reads the server's record
+    /// shape itself — no signed field is renamed or re-encoded here (#3133).
     private func cryptoLinksJson(_ links: [SigchainResponseLink]) throws -> String {
-        let encoder = JSONEncoder()
-        let array: [[String: Any]] = try links.map { l in
-            let payload = String(decoding: try encoder.encode(l.payload), as: UTF8.self)
-            return [
-                "id": l.id,
-                "seq": l.seqNo,
-                "prevHash": l.prevHash.flatMap { $0.isEmpty ? nil : $0 } ?? NSNull(),
-                "entryHash": l.hash,
-                "signerDeviceId": l.signerDeviceID,
-                "signerPubkey": l.signerPubkey,
-                "signature": l.signature,
-                "timestamp": l.timestamp,
-                "payloadJson": payload,
-            ]
-        }
-        return String(decoding: try JSONSerialization.data(withJSONObject: array), as: UTF8.self)
+        String(decoding: try JSONEncoder().encode(links), as: UTF8.self)
     }
 
     private func json(_ object: [String: Any]) throws -> String {

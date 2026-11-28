@@ -14,6 +14,7 @@
 
 import { type APIRequestContext } from '@playwright/test'
 import { devSurfaceSecret, devSurfaceHeaders, harnessClientHeaders } from './dev-surface-secret'
+import { commitFounding, signFounding } from './hub-chain-helpers'
 import { simulateCallForNote } from './simulation-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
@@ -266,17 +267,22 @@ export async function createHubViaApi(
   /** IANA zone the hub's shift schedules are written in; the server's default (UTC) when omitted. */
   timezone?: string,
 ): Promise<string> {
+  // The admin's device signs the hub's genesis, as the desktop does (#2963).
+  const founding = await signFounding(request, ADMIN_SEED)
   const { status, data } = await apiPost<{ hub?: { id: string } }>(request, '/hubs', {
+    id: founding.id,
+    genesis: founding.genesis,
     name,
     ...(timezone ? { timezone } : {}),
   })
   if (status !== 201 && status !== 200) {
-    throw new Error(`Failed to create hub "${name}": POST /api/hubs returned ${status}`)
+    throw new Error(`Failed to create hub "${name}": POST /api/hubs returned ${status} ${JSON.stringify(data)}`)
   }
   const id = data?.hub?.id
   if (!id) {
     throw new Error(`POST /api/hubs returned ${status} but no hub id: ${JSON.stringify(data)}`)
   }
+  await commitFounding(request, founding)
   return id
 }
 

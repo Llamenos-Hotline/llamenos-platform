@@ -1,5 +1,6 @@
 import { deviceTimezone } from '../timezone'
 import { request } from './client'
+import type { HubChainLink } from '@protocol/schemas/hub-chain'
 import type { SetupState } from '@shared/types'
 
 export type { SetupState } from '@shared/types'
@@ -17,11 +18,16 @@ export async function updateSetupState(data: Partial<SetupState>) {
   })
 }
 
-export async function completeSetup() {
+/**
+ * Complete setup. `hub` is the default hub's client-minted id and this
+ * device's signed genesis for it (#2963) — required when setup founds the
+ * first hub, which the server refuses to do without one.
+ */
+export async function completeSetup(hub?: { id: string; genesis: HubChainLink }) {
   return request<SetupState>('/setup/complete', {
     method: 'POST',
     // The default hub is created in the setup admin's own zone.
-    body: JSON.stringify({ timezone: deviceTimezone() }),
+    body: JSON.stringify({ timezone: deviceTimezone(), ...(hub ? { hub } : {}) }),
   })
 }
 

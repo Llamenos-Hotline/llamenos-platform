@@ -702,6 +702,20 @@ rather than kept unchanged, and gains #2999's cross-hub and cross-kind negative 
 **Storage.** `hub_chain_links(hub_id, seq, prev_hash, entry_hash, link_json, appended_at)`.
 `users.hub_roles` becomes a cache of the chain-derived state that clients never trust (#2963).
 
+*Amended by #3133.* **Codegen excludes the link schemas** (`hubChainLinkSchema`,
+`unsignedHubLinkSchema`, `hubChainBodySchema` and the bodies that carry a link): a generated type
+cannot express the open, type-tagged body and would silently drop signed fields. *Accepted on the
+condition that the mobile clients build, sign and verify links only through the crate (UniFFI):
+the host passes an intent (`genesis`, `bundlePolicy`, `roleGrant`, `roleRevoke`) and the head it
+builds on, and the crate derives every signed field — `seq`, `prevHash`, `permsHash`, the body —
+signs, and returns the link with its head. No client parses or assembles a signed field by hand;
+`apps/worker/__tests__/unit/mobile-hub-links-through-crate.test.ts` asserts it.*
+
+*Amended by #3133.* **Every role write is a signed link.** Adding a member, changing or revoking
+a role is a `role_grant` / `role_revoke` the admin's client builds and signs through the crate and
+appends; the server writes `users.hub_roles` only from `state_after`, and has no unsigned role
+write.
+
 ### 5.2 D10: canonical serialisation — OPERATOR DECISION
 
 | Option | For | Against |
@@ -755,6 +769,18 @@ A link at `seq = n` is valid iff all of these hold:
    - the escrow-management permission for `escrow_set`;
    - **the subject user themselves** for a user-group `group_epoch`.
 4. The body is valid for its type (§5.6).
+
+*Amended by #3133.* **The escrow-management permission is every reader purpose's permissions
+together**: a signer may sign `escrow_set` only if its chain-derived permissions include
+`READER_PURPOSE_PERMISSIONS[p]` for every purpose `p` — the rule `assertMayManageHubEscrow`
+applies on the server. A dedicated permission may come later, through a bundle policy. *Accepted on
+the condition that the crate's vocabulary (`packages/crypto/src/hub_chain.rs`) and
+`packages/protocol/hub-chain-permissions.json` stay pinned to each other and to
+`READER_PURPOSE_PERMISSIONS` by test (`vocabulary_matches_protocol_json`,
+`hub-chain-permissions-vocabulary.test.ts`).*
+
+*Amended by #3133.* **A user-group `group_epoch`'s signer must be a hub member** as well as the
+subject user: a user the chain does not list cannot open a user group in the hub.
 
 Authority races resolve by construction: an admin revoked at `n` cannot land a link built on
 `n − 1` (#2963 §1).
@@ -824,6 +850,17 @@ All ids follow §2.1. Every set is sorted and unique (§5.2).
 
 *Revised 2026-11-27 (no real data; see the note under §3).* **Only the new-hub genesis is built.** `migration` is always `0` and `members` names the founder alone. A verifier refuses `migration: 1` with a named code until a migration is ever needed; the field stays so that one can be added without a format change.
 
+*Amended by #3133.* **Bootstrap.** Until the chain's first `policy {kind: bundle}` link, the
+founder alone holds every permission (the genesis names bundles that no link has defined yet, so
+nothing else could authorise the first policy). From that link on, permissions come **only** from
+defined bundles: a member's permissions are the union of the defined bundles they hold, and a bundle
+with no policy confers nothing. *Accepted on the condition that the bootstrap ends at the first
+bundle policy and never resumes — `state_after` carries it as a flag that only clears.*
+
+*Amended by #3133.* **`policy {kind: recovery_quorum}` is refused** as `chain_policy_unsupported`.
+K-E (#2975) defines its fields together with recovery adoption. *Accepted on the condition that no
+client signs one until then.*
+
 **Group membership is derived, never listed.**
 
 - A `purpose` group's members are the users whose chain-derived permissions include
@@ -852,6 +889,40 @@ that hub. A reader whose chain is shorter fetches forward first.
 **Anchors** come from a trusted device, never from the server (#2963 §3). Their wire shape is
 `{hub, seq, hash}`, carried in the provisioning payload (#1972), the invite, and the connector
 enrollment handshake. Those payloads' own formats belong to their issues.
+
+*Amended by #3133.* **The anchor rule.** A client persists one anchor `{hub, seq, hash}` per hub,
+and it moves under one rule on every platform:
+
+- **One deduplicated entry point.** All loads of a hub's chain — the alert banner, the sealing
+  gate, a hub switch — go through one function that shares a verification already in flight for
+  that hub. No caller verifies around it.
+- **A per-hub lock.** Reading the anchor, verifying against it and writing the new one is one
+  critical section per hub; so is every append that moves the anchor. Two verifications never
+  interleave their read-modify-write.
+- **Strictly forward.** The anchor moves only to a strictly greater `seq`. A write with a lower
+  `seq` is refused. An equal `seq` with a different hash is a **fork**: the fork alert is raised
+  and sealing stops in that hub.
+- **From the client's own verdict.** The new anchor is the head the crate verified, or a link this
+  device signed itself — never the server's echo of an append.
+
+Stage 2 inherits this rule for every head it persists. *Accepted on the condition that each client
+has a test that interleaves two verifications of one hub and asserts on the stored anchor.*
+
+*Amended by #3133.* **The invite anchor.** Creating an invite records the bundles the inviter chose
+and the anchor `{hub, seq, hash}` from the inviter's own verified chain. The anchor also travels in
+the invite link itself, which the inviter hands over out of band; that copy, not the server's, is
+the one the invitee trusts. Redeeming the invite makes the invitee a **pending member**: no
+chain-derived permissions, allowed to read the hub chain and verify it against the invite anchor.
+The next admin device holding role management signs a `role_grant` per invited bundle, on its own
+authority, after checking each bundle is still defined (the first admin-client job; stage 2 adds its
+other jobs to the same runner). Until a client holds an anchor from a trusted device (provisioning
+anchors are K-E's), trust on first use from the client's own genesis or verification stands.
+*Accepted on the condition that no `hub_roles` row is written except from `state_after`.*
+
+*Amended by #3133.* **Fetching from seq 1 and replaying is accepted.** It is correct under this
+section, and chains stay small. Fetching forward from a persisted head is an optimisation and is
+never allowed to stand in for verification: the chain-derived state is never persisted. *Accepted
+on the condition that chain-derived state is always the output of a full crate verification.*
 
 ### 5.8 D14: recovery link (#2963 addendum) — OPERATOR DECISION
 
@@ -901,6 +972,13 @@ which names neither the user nor the new keys.
 2. each approval's `holderDevice` is active in that holder's user chain;
 3. every approval's `subjectUser`, `new*Pk`, `session` and `hubHead` match the link's.
 
+*Amended by #3133.* `recovery_device_add` carries **`format: 2`**, and each approval's
+`holderDevice` is checked against the holder's **current verified** user chain (rule 2). Worker
+and client adoption — the format-2 `recovery_group` link, `newEncryptionPubkey` on `/initiate`,
+client-signed approvals, server-enforced `delayHours`/`emergencyFloorHours` and deleting the
+`contributorSignature` path — moves to K-E (#2975). *Accepted on the condition that clients keep
+refusing to seal PUK or user-group epochs to a recovery-added device until then.*
+
 The new device then joins the active set. `emergency` only shortens the delay
 (`emergencyFloorHours`), which the server enforces. It never substitutes for the threshold.
 
@@ -925,6 +1003,9 @@ recovery link (#2963 addendum).
   is therefore reproducible.
 - Each file has a `description` and a `generator` field, and is **never edited by hand**.
 - Regenerating them is a wire change: the PR shows the diff.
+
+*Amended by #3133.* `hub-chain.json` and `recovery.json` live here, in
+`packages/crypto/tests/fixtures/v2/`, and **not** under `packages/protocol/`.
 
 **Every platform opens them through its production reader:**
 
@@ -972,6 +1053,10 @@ Checks that are not byte vectors, named so the contract PR carries each one:
 - `hub-id-profile`: the §2.1 `CHECK` on `hubs.id`, an integration test over every hub-create path,
   and a migration-time check that refuses (naming the ids) any existing `hubs.id` outside the
   profile.
+  *Amended by #3133.* The contract PR ships the crate's canonical-form check and the create path's
+  refusal (`HubService.createHub`, `invalid_hub_id`). The `CHECK` and the migration-time check
+  follow in #3136, once that release has replaced the previous one: `hubs.id` is a column the
+  previous release writes (`docs/runbooks/migrations.md`).
 - `thread-gen1-secret-never-leaves-crate`: the `ffi_server` generation-1 mint returns only the
   public key, the record and the sealed tier, and its type has no accessor for the secret (§2.7
   rule 1).

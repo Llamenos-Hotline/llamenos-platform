@@ -49,6 +49,9 @@ const mocks = vi.hoisted(() => ({
   auth: { hasDeviceKey: true, publicKey: 'aa'.repeat(32), isAdmin: false },
 }))
 
+// These tests compose READERS. Whether the hub's authority chain lets this
+// device seal at all is lib/hub-chain's verdict, tested in hub-chain.test.ts.
+vi.mock('@/lib/hub-chain', () => ({ assertHubSealable: async () => {} }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))

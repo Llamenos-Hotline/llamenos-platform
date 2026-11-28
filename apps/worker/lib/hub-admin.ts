@@ -59,7 +59,7 @@
 import { and, eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { users, roles as roleDefinitions, hubs } from '../db/schema'
-import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, roleUsableIn, rolesConferHubAdmin, rolesGrantAll, type RoleCatalog } from '@shared/permissions'
+import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, expandPermissions, roleUsableIn, rolesConferHubAdmin, rolesGrantAll, type RoleCatalog } from '@shared/permissions'
 import { ServiceError } from '../services/service-error'
 import { isRevokedSigningKey } from './revoked-signing-keys'
 
@@ -116,6 +116,13 @@ export function mergeHubRole(
   return merged
 }
 
+/** `hubRoles` with the assignment in `hubId` replaced by `roleIds` (added if absent); every other hub is untouched */
+export function replaceHubRole(hubRoles: readonly HubRoleAssignment[], hubId: string, roleIds: readonly string[]): HubRoleAssignment[] {
+  return hubRoles.some(hr => hr.hubId === hubId)
+    ? hubRoles.map(hr => (hr.hubId === hubId ? { ...hr, roleIds: [...roleIds] } : hr))
+    : [...hubRoles, { hubId, roleIds: [...roleIds] }]
+}
+
 // ---------------------------------------------------------------------------
 // Pure predicate
 // ---------------------------------------------------------------------------
@@ -161,6 +168,37 @@ export function hubFounderRoleIds(catalog: RoleCatalog): string[] {
     .filter(r => !r.permissions.some(isInstanceLevel) && rolesConferHubAdmin([r.id], catalog))
     .sort((a, b) => a.permissions.length - b.permissions.length || a.id.localeCompare(b.id))
   return candidates.length > 0 ? [candidates[0].id] : []
+}
+
+/**
+ * The subset of `roleIds` a hub's authority chain may place in `hub_roles` for
+ * `hubId` (#2963): roles the catalog (or the default set) defines, usable in
+ * this hub, and carrying no instance-level permission ({@link isInstanceLevel}).
+ * Chain bundles are opaque ids a hub admin chooses; the server resolves a
+ * cached role id against ITS catalog, so a bundle named after a role with
+ * instance authority (`role-super-admin`) must never reach the cache.
+ */
+export function hubGrantableRoleIds(
+  roleIds: readonly string[],
+  catalog: RoleCatalog,
+  hubId: string,
+  /**
+   * The chain's own permission set for each bundle. When given, a role is cached
+   * only if the chain bundle declares every concrete permission the catalog role
+   * confers: the server resolves the cached id against ITS catalog, so a chain
+   * bundle narrower than the catalog role must not inherit the broader set.
+   */
+  chainPermissions?: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  const known = new Set(catalog.map(r => r.id))
+  const defs = [...catalog, ...DEFAULT_ROLES.filter(r => !known.has(r.id))]
+  return roleIds.filter(id => {
+    const def = defs.find(r => r.id === id)
+    if (def === undefined || !roleUsableIn(id, defs, hubId) || def.permissions.some(isInstanceLevel)) return false
+    if (!chainPermissions) return true
+    const declared = new Set(chainPermissions.get(id) ?? [])
+    return expandPermissions(def.permissions).every(p => declared.has(p))
+  })
 }
 
 function canAct(state: AdminState): boolean {

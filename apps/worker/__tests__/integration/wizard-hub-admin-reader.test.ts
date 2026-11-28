@@ -38,6 +38,7 @@ import { freshHubDb } from './hub-shred-helpers'
 import { createServices, type Services } from '../../services'
 import { getMessagingAdapterFromService } from '../../lib/service-factories'
 import { releaseWebhookReplay } from '../../services/webhook-replay'
+import { founding, newFounder, storeUserChain } from '../helpers/founder'
 
 const fresh = freshHubDb('wizard_hub_admin_reader')
 // A wizard deployment: no ADMIN_PUBKEY, no ADMIN_DECRYPTION_PUBKEY.
@@ -51,11 +52,13 @@ const ENV = {
 
 let services: Services
 
-/** A person with a device: an Ed25519 identity and the device's X25519 keypair. */
+/** A person with a device: an Ed25519 identity (which can found a hub, #2963) and the device's X25519 keypair. */
 function person() {
   const secret = x25519.utils.randomSecretKey()
+  const identity = newFounder()
   return {
-    pubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
+    identity,
+    pubkey: identity.pubkey,
     deviceSecret: secret,
     devicePubkey: bytesToHex(x25519.getPublicKey(secret)),
   }
@@ -86,6 +89,14 @@ afterAll(fresh.teardown, 60_000)
 beforeEach(() => vi.clearAllMocks())
 
 async function completeSetup(admin: ReturnType<typeof person>) {
+  // The wizard's device signs the default hub's genesis (#2963): the admin's
+  // user chain first, then the genesis naming its head.
+  await fresh.db.insert(schema.users).values({ pubkey: admin.pubkey, displayName: 'Setup admin' }).onConflictDoNothing()
+  const head = await storeUserChain(fresh.db, admin.identity).catch(async () => {
+    const [last] = (await fresh.db.select().from(schema.sigchainLinks).where(eq(schema.sigchainLinks.userPubkey, admin.pubkey)))
+    return { seq: last.seqNo, hash: last.hash }
+  })
+  const hub = founding(admin.identity, head)
   const { default: setup } = await import('../../routes/setup')
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
@@ -98,7 +109,7 @@ async function completeSetup(admin: ReturnType<typeof person>) {
   return app.request('/api/setup/complete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify({ hub }),
   }, ENV)
 }
 

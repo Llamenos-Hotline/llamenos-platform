@@ -56,7 +56,7 @@ import {
   type Role,
 } from '@shared/permissions'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
-import { adminStateOf, assertHubsKeepAnAdmin, mergeHubRole, type HubRoleAssignment } from '../lib/hub-admin'
+import { adminStateOf, assertHubsKeepAnAdmin, mergeHubRole, replaceHubRole } from '../lib/hub-admin'
 
 const log = createLogger('services.identity')
 
@@ -209,13 +209,6 @@ function hubMember(hubId: string): SQL {
         AND ${roleDefinitions.permissions} @> ARRAY['*']::text[]
     )
   )`
-}
-
-/** `hubRoles` with the assignment in `hubId` replaced by `roleIds` (added if absent); every other hub is untouched */
-function replaceHubRole(hubRoles: readonly HubRoleAssignment[], hubId: string, roleIds: readonly string[]): HubRoleAssignment[] {
-  return hubRoles.some(hr => hr.hubId === hubId)
-    ? hubRoles.map(hr => (hr.hubId === hubId ? { ...hr, roleIds: [...roleIds] } : hr))
-    : [...hubRoles, { hubId, roleIds: [...roleIds] }]
 }
 
 /** A user as seen from inside one hub: their role assignments in other hubs are not its business */

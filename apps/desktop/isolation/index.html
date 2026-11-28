@@ -58,6 +58,10 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'sigchain_verify_users',
     // This device's genesis user_init payload: its keys + possession signature (#2496)
     'user_init_payload_from_state',
+    // Hub authority chain (#2963): stateless verify/ops, link and approval signing
+    'hub_chain_call',
+    'hub_chain_sign_from_state',
+    'recovery_approval_sign_from_state',
     // Hub key management (stateful — key never enters JS)
     'hpke_unwrap_and_set_hub_key',
     'generate_hub_key_in_state',

@@ -11,8 +11,9 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.hub.HubRepository
-import org.llamenos.hotline.model.CreateHubRequest
-import org.llamenos.hotline.model.CreateHubResponse
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import org.llamenos.hotline.hub.HubChainService
 import org.llamenos.hotline.model.Hub
 import javax.inject.Inject
 
@@ -46,6 +47,8 @@ class HubManagementViewModel @Inject constructor(
     private val apiService: ApiService,
     private val hubRepository: HubRepository,
     private val activeHubState: ActiveHubState,
+    /** Hub authority chain (#2963): founding a hub, and verifying the chain on switch. */
+    private val hubChain: HubChainService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HubListState())
@@ -103,13 +106,16 @@ class HubManagementViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isCreating = true, createError = null, createSuccess = false) }
             try {
-                val request = CreateHubRequest(
-                    name = name,
-                    description = description?.takeIf { it.isNotBlank() },
-                    phoneNumber = phoneNumber?.takeIf { it.isNotBlank() },
-                    timezone = deviceTimezone(),
+                // This device signs the hub's genesis — its founding link (#2963) —
+                // and then commits the founder bundles' permissions.
+                hubChain.foundHub(
+                    buildJsonObject {
+                        put("name", name)
+                        description?.takeIf { it.isNotBlank() }?.let { put("description", it) }
+                        phoneNumber?.takeIf { it.isNotBlank() }?.let { put("phoneNumber", it) }
+                        put("timezone", deviceTimezone())
+                    },
                 )
-                apiService.request<CreateHubResponse>("POST", "/api/hubs", request)
                 _uiState.update { it.copy(isCreating = false, createSuccess = true) }
                 loadHubs()
             } catch (e: Exception) {
@@ -135,6 +141,9 @@ class HubManagementViewModel @Inject constructor(
             _uiState.update { it.copy(isSwitching = true) }
             try {
                 hubRepository.switchHub(hub.id)
+                // Verify the hub's authority chain in Rust on every switch (#2963). The
+                // verdict gates sealing in that hub; a fetch failure keeps the last one.
+                runCatching { hubChain.load(hub.id) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {

@@ -1,3 +1,4 @@
+import { VALID_HUB_FOUNDING } from '../../helpers/hub-genesis'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
@@ -250,7 +251,7 @@ describe('hubs routes', () => {
       const res = await app.request('/hubs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'New Hub', slug: 'new-hub' }),
+        body: JSON.stringify({ ...VALID_HUB_FOUNDING, name: 'New Hub', slug: 'new-hub' }),
       })
 
       expect(res.status).toBe(201)
@@ -272,12 +273,12 @@ describe('hubs routes', () => {
         body: JSON.stringify(body),
       })
 
-      const plain = await post({ name: 'Plain Hub' })
+      const plain = await post({ ...VALID_HUB_FOUNDING, name: 'Plain Hub' })
       expect(plain.status).toBe(201)
       expect((await plain.json()).hub.timezone).toBe('UTC')
       expect(createHubSpy.mock.calls[0][0].timezone).toBe('UTC')
 
-      const berlin = await post({ name: 'Berlin Hub', timezone: 'Europe/Berlin' })
+      const berlin = await post({ ...VALID_HUB_FOUNDING, name: 'Berlin Hub', timezone: 'Europe/Berlin' })
       expect(berlin.status).toBe(201)
       expect((await berlin.json()).hub.timezone).toBe('Europe/Berlin')
       expect(createHubSpy.mock.calls[1][0].timezone).toBe('Europe/Berlin')
@@ -293,7 +294,7 @@ describe('hubs routes', () => {
       const res = await app.request('/hubs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'My Test Hub' }),
+        body: JSON.stringify({ ...VALID_HUB_FOUNDING, name: 'My Test Hub' }),
       })
 
       expect(res.status).toBe(201)
@@ -311,7 +312,7 @@ describe('hubs routes', () => {
       const res = await app.request('/hubs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: '   ' }),
+        body: JSON.stringify({ ...VALID_HUB_FOUNDING, name: '   ' }),
       })
 
       expect(res.status).toBe(400)
@@ -329,7 +330,7 @@ describe('hubs routes', () => {
       const res = await app.request('/hubs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'New Hub' }),
+        body: JSON.stringify({ ...VALID_HUB_FOUNDING, name: 'New Hub' }),
       })
       expect(res.status).toBe(403)
     })
@@ -345,15 +346,14 @@ describe('hubs routes', () => {
       await app.request('/hubs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'New Hub' }),
+        body: JSON.stringify({ ...VALID_HUB_FOUNDING, name: 'New Hub' }),
       })
 
       expect(createHubSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'New Hub' }),
-        // No role named: the service resolves the founder's role by permission
-        // (#2233). A route that named an id here would break the moment a hub
-        // renamed or re-permissioned its admin role.
-        { pubkey: 'a'.repeat(64) },
+        expect.objectContaining({ name: 'New Hub', id: VALID_HUB_FOUNDING.id }),
+        // No role named: the founder's roles are the bundles of their signed
+        // genesis, which the service validates and stores (#2963).
+        { pubkey: 'a'.repeat(64), genesis: VALID_HUB_FOUNDING.genesis },
       )
       // No second, separately-failable step that could leave the hub adminless
       expect(setHubRoleSpy).not.toHaveBeenCalled()
@@ -369,7 +369,7 @@ describe('hubs routes', () => {
       const res = await app.request('/hubs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'New Hub' }),
+        body: JSON.stringify({ ...VALID_HUB_FOUNDING, name: 'New Hub' }),
       })
 
       expect(res.status).toBe(404)
@@ -388,7 +388,7 @@ describe('hubs routes', () => {
       const res = await app.request('/hubs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Existing Hub' }),
+        body: JSON.stringify({ ...VALID_HUB_FOUNDING, name: 'Existing Hub' }),
       })
 
       expect(res.status).toBe(500)

@@ -22,6 +22,19 @@ private func ffiMobileSigchainVerifyUsers(chainsJson: String) throws -> [Sigchai
     try mobileSigchainVerifyUsers(chainsJson: chainsJson)
 }
 
+// Hub authority chain (#2963)
+private func ffiMobileHubChain(requestJson: String) throws -> String {
+    try mobileHubChain(requestJson: requestJson)
+}
+
+private func ffiMobileHubChainSign(requestJson: String) throws -> String {
+    try mobileHubChainSign(requestJson: requestJson)
+}
+
+private func ffiMobileRecoveryApprovalSign(approvalJson: String) throws -> String {
+    try mobileRecoveryApprovalSign(approvalJson: approvalJson)
+}
+
 private func ffiMobileCreateBackup(pin: String, recoveryKey: String) throws -> String {
     try mobileCreateBackup(pin: pin, recoveryKey: recoveryKey)
 }
@@ -516,6 +529,30 @@ final class CryptoService: @unchecked Sendable {
     /// (stateless). `linksJson` is a JSON array of the crate's `SigchainLink`.
     func verifySigchain(linksJson: String) throws -> SigchainVerifiedState {
         try mobileSigchainVerify(linksJson: linksJson)
+    }
+
+    // MARK: - Hub Authority Chain (#2963; wire spec §5)
+
+    /// One stateless hub-chain operation in Rust (`hub_chain::call`): `requestJson`
+    /// names the op (the crate's `hub_chain::call` table lists them); the app uses
+    /// `verify`, `verifySigchain` and `usersNamed`, the answer the crate's JSON. The app
+    /// never canonicalises, hashes or checks a hub link itself.
+    func hubChainCall(requestJson: String) throws -> String {
+        try ffiMobileHubChain(requestJson: requestJson)
+    }
+
+    /// Build and sign one hub-chain link from an intent (JSON
+    /// `hub_chain::LinkIntentRequest`) with this device's key, held in Rust. The
+    /// answer is `{link, head}`; the crate derives every signed field (#3133).
+    func signHubIntent(requestJson: String) throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        return try ffiMobileHubChainSign(requestJson: requestJson)
+    }
+
+    /// Sign a recovery approval (JSON) with this holder device's key (D14).
+    func signRecoveryApproval(approvalJson: String) throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        return try ffiMobileRecoveryApprovalSign(approvalJson: approvalJson)
     }
 
     /// Verify a single sigchain link's Ed25519 signature against an expected signer pubkey.

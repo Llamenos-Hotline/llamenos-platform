@@ -25,20 +25,20 @@ enum HubAdminReaders {
     ///   read — the caller keeps the user's input on screen and says why, it never
     ///   substitutes another key — or the request's own error.
     static func resolve(apiService: APIService, hubId: String? = nil) async throws -> [String] {
-        // The path is spelled inside each `request(...)` so the API contract guard
-        // can read the route it reaches (a path held in a variable is "unresolved").
-        let response: HubReadersResponse
-        if let hubId {
-            response = try await apiService.request(
-                method: "GET",
-                path: APIService.hubPath(hubId, "/api/readers?purpose=\(ReaderPurpose.admin.rawValue)")
-            )
-        } else {
-            response = try await apiService.request(
-                method: "GET",
-                path: try apiService.activeHubPath("/api/readers?purpose=\(ReaderPurpose.admin.rawValue)")
-            )
+        // Every hub-content seal resolves its admin readers here, so this is where a
+        // hub whose authority chain this device has not verified stops sealing
+        // (#2963): fail closed — no gate, no seal.
+        let sealingHub = try hubId ?? apiService.activeHubIdOrThrow()
+        guard let chain = apiService.hubChain else {
+            throw HubChainService.ChainError.sealingStopped(hubId: sealingHub)
         }
+        try await chain.assertSealable(hubId: sealingHub)
+        // The readers of exactly the hub the gate just passed — never the active hub
+        // read a second time, which could have changed in between.
+        let response: HubReadersResponse = try await apiService.request(
+            method: "GET",
+            path: APIService.hubPath(sealingHub, "/api/readers?purpose=\(ReaderPurpose.admin.rawValue)")
+        )
         return try admins(from: response.recipients)
     }
 

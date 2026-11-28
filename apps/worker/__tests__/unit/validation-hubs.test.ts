@@ -12,6 +12,7 @@ import {
   VALID_PUBKEY,
   VALID_PUBKEY_2,
 } from '../helpers/openapi-validation'
+import { VALID_HUB_FOUNDING } from '../helpers/hub-genesis'
 
 function createApp() {
   return createTestApp({
@@ -27,8 +28,24 @@ describe('hubs route validation', () => {
   // -----------------------------------------------------------------------
   describe('POST /hubs', () => {
     const VALID_HUB = {
+      ...VALID_HUB_FOUNDING,
       name: 'Test Hub',
     }
+
+    it('rejects a body without the founder\'s genesis (#2963)', async () => {
+      const app = createApp()
+      const { genesis: _genesis, ...withoutGenesis } = VALID_HUB
+      const res = await sendJSON(app, '/hubs', withoutGenesis)
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects a hub id outside the identifier profile (#2963 hub-id-profile)', async () => {
+      const app = createApp()
+      for (const id of ['Hub-1', 'hub_1', '-hub', 'a'.repeat(65), '']) {
+        const res = await sendJSON(app, '/hubs', { ...VALID_HUB, id })
+        expect(res.status, id).toBe(400)
+      }
+    })
 
     it('rejects empty body', async () => {
       const app = createApp()
@@ -105,6 +122,7 @@ describe('hubs route validation', () => {
     it('accepts valid hub with all optional fields', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/hubs', {
+        ...VALID_HUB_FOUNDING,
         name: 'Full Hub',
         slug: 'full-hub',
         description: 'A complete hub',
@@ -133,7 +151,7 @@ describe('hubs route validation', () => {
     it('accepts valid slug formats', async () => {
       const app = createApp()
       for (const slug of ['a', 'test-hub', 'hub123', 'a1b2c3']) {
-        const res = await sendJSON(app, '/hubs', { name: 'Test', slug })
+        const res = await sendJSON(app, '/hubs', { ...VALID_HUB_FOUNDING, name: 'Test', slug })
         expect(res.status).not.toBe(400)
       }
     })

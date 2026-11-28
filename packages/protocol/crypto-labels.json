@@ -115,6 +115,9 @@
     "LABEL_CASE_COMMENT": "llamenos:case-comment",
     "LABEL_OFFLINE_QUEUE": "llamenos:offline-queue:v1",
     "LABEL_HUB_KEY_ROTATION": "llamenos:hub-key-rotation:v1",
-    "LABEL_DEVICE_POP": "llamenos:device-pop:v1"
+    "LABEL_DEVICE_POP": "llamenos:device-pop:v1",
+    "LABEL_HUB_CHAIN_SIG": "llamenos:hub-chain-sig:v1",
+    "LABEL_HUB_BUNDLE_PERMS": "llamenos:hub-bundle-perms:v1",
+    "LABEL_RECOVERY_APPROVAL": "llamenos:recovery-approval:v1"
   }
 }

@@ -58,6 +58,8 @@ import { banDigestBlind, banDigestFinalize } from './ban-digest-mock'
 import { decryptProvisioningBundle, newDeviceProvisioningSas } from './provisioning-mock'
 import { openCaseMock, sealCaseMock, type CaseCiphertextMock, type CasePurposeMock } from './case-record-mock'
 import { livenessPublicKey, signLivenessProof } from '../helpers/recovery-liveness'
+import { signHubLinkMock } from './hub-chain-mock'
+import type { UnsignedHubLink, UnsignedRecoveryApproval } from '@protocol/schemas/hub-chain'
 
 /** Mirrors `platform.ts` RECOVERY_SHARE_COMMITMENT_MISMATCH / crypto.rs. */
 const RECOVERY_SHARE_COMMITMENT_MISMATCH = 'Share does not match its commitment'
@@ -609,6 +611,26 @@ async function mockConfiguredOrigin(): Promise<URL | null> {
   }
 }
 
+/** Forward a hub-chain request to the dev server, which runs the crate's own `hub_chain::call`. */
+async function forwardHubChainCall(requestJson: string): Promise<string> {
+  const configured = await mockConfiguredOrigin()
+  const path = '/api/test-crypto/hub-chain'
+  const target = new URL(configured ? `${configured.origin}${path}` : path, window.location.origin)
+  const res = await fetch(target.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Test-Secret': String(import.meta.env.PLAYWRIGHT_DEV_SECRET ?? ''),
+    },
+    body: requestJson,
+    redirect: 'manual',
+  })
+  const body = (await res.json()) as { error?: string; code?: string }
+  // Same error shape as apps/desktop `crypto_err`: the closed code first.
+  if (!res.ok) throw new Error(body.error ?? `${body.code ?? 'invalid_input'}: hub-chain call failed (${res.status})`)
+  return JSON.stringify(body)
+}
+
 async function mockAllowedOrigin(): Promise<URL> {
   const configured = await mockConfiguredOrigin()
   if (!configured) throw new Error('no backend server configured')
@@ -960,6 +982,38 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   sigchain_verify_link: (a) => {
     const link = JSON.parse(a.linkJson as string) as MockSigchainLink
     return verifySigchainLinkMock(link, a.expectedSignerPubkey as string)
+  },
+
+  // --- Hub authority chain (#2963) ---
+  // `hub_chain_call` is NOT re-implemented here: it is forwarded to the dev
+  // server, which runs the crate's own `hub_chain::call` (apps/worker/routes/
+  // dev.ts `/test-crypto/hub-chain`). A JS verifier would be a second verifier
+  // the suite could pass against while the real one differs (#2104). Signing
+  // uses ./hub-chain-mock, pinned byte-for-byte to the crate.
+
+  hub_chain_call: (a) => forwardHubChainCall(a.requestJson as string),
+
+  // Building a link is the crate's (`build`, forwarded like every other op);
+  // only the signature over the crate's unsigned link is made here.
+  hub_chain_sign_from_state: async (a) => {
+    const secrets = requireSecrets()
+    const req = JSON.parse(a.requestJson as string) as Record<string, unknown>
+    const unsigned = JSON.parse(await forwardHubChainCall(JSON.stringify({ op: 'build', ...req }))) as UnsignedHubLink
+    const link = signHubLinkMock(unsigned, bytesToHex(secrets.signingSeed))
+    return JSON.stringify({ link, head: { seq: link.seq, hash: link.entryHash } })
+  },
+
+  recovery_approval_sign_from_state: async (a) => {
+    const secrets = requireSecrets()
+    const approval = JSON.parse(a.approvalJson as string) as UnsignedRecoveryApproval
+    const holderDevice = bytesToHex(ed25519.getPublicKey(secrets.signingSeed))
+    // The crate builds the message (canonical form + label); the mock only signs it.
+    const answer = await commands.hub_chain_call({
+      requestJson: JSON.stringify({ op: 'approvalMessage', approval, holderDevice }),
+    })
+    const { message } = JSON.parse(answer as string) as { message: string }
+    const sig = bytesToHex(ed25519.sign(hexToBytes(message), secrets.signingSeed))
+    return JSON.stringify({ type: 'recovery_approval', ...approval, holderDevice, sig })
   },
 
   // --- SFrame key derivation ---

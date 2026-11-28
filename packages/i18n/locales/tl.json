@@ -4802,5 +4802,13 @@
     "push": "May aktibidad sa iyong hotline na kailangang tingnan.",
     "signalAlert": "Alerto sa hotline — {{category}}: {{state}}. Buksan ang app para sa mga detalye.",
     "title": "Mga aktibong insidente"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Nahati ang tala ng awtoridad ng hub na ito",
+      "refusedTitle": "May pagbabago sa tala ng awtoridad ng hub na ito na walang nag-awtorisa",
+      "sealingStopped": "Walang bagong ie-encrypt sa hub na ito hangga't hindi ito nalulutas ng isang admin. Maaaring ibang kasaysayan ang ipinapakita sa iyo ng server kaysa sa ibang miyembro.",
+      "staleSigner": "Ang isang kamakailang pagbabago sa hub na ito ay nilagdaan ng device na inalis na ng may-ari nito ({{count}})."
+    }
   }
 }

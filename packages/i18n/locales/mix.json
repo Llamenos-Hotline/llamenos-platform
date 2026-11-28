@@ -4808,5 +4808,13 @@
     "erasure.envelopeRevocationFailed",
     "erasure.envelopeRevocationProcessed",
     "erasure.envelopeRevocationProgress"
-  ]
+  ],
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Tutu ña'a ndatu'un kuu xíní ve'e ya'a ni ndata uvi ña",
+      "refusedTitle": "Tutu ña'a ndatu'un kuu xíní ve'e ya'a kúú iin ña ndasama ña ni ma ndíku ni iin ñayiví",
+      "sealingStopped": "Ma tava ini ka iin ña xaa ve'e ya'a nda ná ndasa'a iin ña ndíku. Kúú ña server stá'á iin tutu ña'a ña inka nuu ña ndíto inka ñayiví.",
+      "staleSigner": "Iin ña ndasama ña ni kuu vitin ve'e ya'a ni chíndee iin aparato ña ni xita ña xíin ña ({{count}})."
+    }
+  }
 }

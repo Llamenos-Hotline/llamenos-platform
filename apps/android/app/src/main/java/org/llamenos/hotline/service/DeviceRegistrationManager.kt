@@ -1,11 +1,13 @@
 package org.llamenos.hotline.service
 
+
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -284,24 +286,12 @@ class DeviceRegistrationManager @Inject constructor(
         )
     }
 
-    /** The server's links in the crate's `SigchainLink` JSON shape. */
-    private fun cryptoLinksJson(links: List<SigchainResponseLink>): String = buildJsonArray {
-        for (l in links) {
-            add(
-                buildJsonObject {
-                    put("id", l.id)
-                    put("seq", l.seqNo)
-                    put("prevHash", l.prevHash?.takeIf { it.isNotEmpty() }?.let { JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)
-                    put("entryHash", l.hash)
-                    put("signerDeviceId", l.signerDeviceID)
-                    put("signerPubkey", l.signerPubkey)
-                    put("signature", l.signature)
-                    put("timestamp", l.timestamp)
-                    put("payloadJson", (l.payload ?: kotlinx.serialization.json.JsonNull).toString())
-                },
-            )
-        }
-    }.toString()
+    /**
+     * The server's links as JSON for the crate, which reads the server's record
+     * shape itself — no signed field is renamed or re-encoded here (#3133).
+     */
+    private fun cryptoLinksJson(links: List<SigchainResponseLink>): String =
+        Json.encodeToString(ListSerializer(SigchainResponseLink.serializer()), links)
 
     private companion object {
         const val TAG = "DeviceRegistration"

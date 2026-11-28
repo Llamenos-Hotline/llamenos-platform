@@ -4800,5 +4800,13 @@
     "push": "Hattınızda göz atılması gereken bir etkinlik var.",
     "signalAlert": "Hat uyarısı — {{category}}: {{state}}. Ayrıntılar için uygulamayı açın.",
     "title": "Etkin olaylar"
+  },
+  "hubChain": {
+    "alert": {
+      "forkTitle": "Bu merkezin yetki kaydı çatallandı",
+      "refusedTitle": "Bu merkezin yetki kaydında kimsenin yetkilendirmediği bir değişiklik var",
+      "sealingStopped": "Bir yönetici bunu çözene kadar bu merkezde yeni hiçbir şey şifrelenmeyecek. Sunucu size diğer üyelerden farklı bir geçmiş gösteriyor olabilir.",
+      "staleSigner": "Bu merkezdeki yakın tarihli bir değişiklik, sahibinin kaldırdığı bir cihazla imzalandı ({{count}})."
+    }
   }
 }

@@ -24,6 +24,13 @@ func cryptoErrorCode(_ error: Error) -> String {
             return String(message[open.upperBound..<close])
         }
         return "invalid_input"
+    case .HubChainRejected(let message):
+        // A flat error: `hub chain rejected (<code>): …` (#2963).
+        if let open = message.range(of: "hub chain rejected ("),
+           let close = message[open.upperBound...].firstIndex(of: ")") {
+            return String(message[open.upperBound..<close])
+        }
+        return "invalid_input"
     default:
         return "invalid_input"
     }
