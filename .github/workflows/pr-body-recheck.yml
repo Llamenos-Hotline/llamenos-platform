@@ -30,7 +30,8 @@
 # `edited` also fires on a title or base-branch change; the job's `if:` lets
 # only a body edit through, so those start no scan. A job-level `if:` is safe
 # in this file because this name is not a required context (#848): skipping it
-# satisfies nothing.
+# satisfies nothing. The `concurrency:` block below keys on the SAME condition,
+# so such a run cannot cancel a body edit's recheck either.
 #
 # A fork PR's token cannot re-run anything, so it is not attempted there; a
 # fork contributor clears the check by re-running the failed job (it reads the
@@ -41,10 +42,21 @@ on:
   pull_request:
     types: [edited]
 
-# Per PR. A newer edit supersedes an older one: the carrier reads the live
-# description, so the last edit's re-run judges every edit before it.
+# A run that will RECHECK (a body edit on a same-repo PR — the job's `if:`,
+# verbatim) groups per PR, and a newer body edit supersedes an older one: the
+# carrier reads the live description, so the last edit's re-run judges every
+# edit before it.
+#
+# Every other run — a title or base edit, a fork PR — groups by its own run
+# id. The group is decided for the whole run before any job `if:` is
+# evaluated, so a per-PR group here would let a run whose job is about to be
+# SKIPPED cancel an in-progress recheck (`cancel-in-progress`) or displace a
+# pending one, and the corrected description would be left with no re-run at
+# all. Alone in its group, a run that does nothing can cancel nothing.
+# tests/orchestrator/carrier-refresh.test.ts evaluates both expressions and
+# fails if a run the `if:` skips can ever share a recheck's group.
 concurrency:
-  group: ${{ format('pr-body-recheck-pr-{0}', github.event.pull_request.number) }}
+  group: ${{ github.event.changes.body != null && github.event.pull_request.head.repo.full_name == github.repository && format('pr-body-recheck-pr-{0}', github.event.pull_request.number) || format('pr-body-recheck-noop-{0}', github.run_id) }}
   cancel-in-progress: true
 
 permissions: {}  # deny-all; the job below sets its own

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { RULESET_REQUIRED_CONTEXTS } from './required-context-creation'
+import { evalTemplate, truthy, type ExprValue } from './helpers/github-expr'
 import { getJob, getStep, loadWorkflow, runShellStep, type RunResult } from './helpers/workflow-shell'
 
 /**
@@ -210,6 +211,7 @@ describe('editing the PR description re-judges the gitleaks carrier (#3127)', ()
   const read = (f: string) => readFileSync(join(process.cwd(), '.github', 'workflows', f), 'utf8')
   const recheck = parseYaml(read('pr-body-recheck.yml')) as {
     on: { pull_request: { types: string[] } }
+    concurrency: { group: string; 'cancel-in-progress': boolean }
     permissions: Record<string, string>
     jobs: Record<string, { name: string; if: string; permissions: Record<string, string> }>
   }
@@ -233,6 +235,45 @@ describe('editing the PR description re-judges the gitleaks carrier (#3127)', ()
     const cond = recheck.jobs['recheck']?.if ?? ''
     expect(cond).toContain('github.event.changes.body != null')
     expect(cond).toContain('github.event.pull_request.head.repo.full_name == github.repository')
+  })
+
+  it('a run the job `if` skips never shares a recheck\'s concurrency group, so it can never cancel one', () => {
+    // The group is fixed for the whole run before the job `if` is evaluated,
+    // and cancel-in-progress cancels (or displaces) whatever else is in it. A
+    // title edit landing while a body edit's recheck polls its carrier must
+    // not take the recheck down with it: the corrected body would get no re-run.
+    const job = recheck.jobs['recheck']
+    if (job === undefined) throw new Error('no recheck job')
+    const NUMBER = 4242
+    const edits: Array<{ label: string; changes: Record<string, ExprValue>; head: string; works: boolean }> = [
+      { label: 'body edit', changes: { body: { from: 'old' } }, head: REPO, works: true },
+      { label: 'body and title edit', changes: { body: { from: 'old' }, title: { from: 'old' } }, head: REPO, works: true },
+      { label: 'title edit', changes: { title: { from: 'old' } }, head: REPO, works: false },
+      { label: 'base-branch edit', changes: { base: { ref: { from: 'dev' }, sha: { from: 'b'.repeat(40) } } }, head: REPO, works: false },
+      { label: 'body edit on a fork PR', changes: { body: { from: 'old' } }, head: 'someone/llamenos-platform', works: false },
+    ]
+    const runs = edits.map((e, i) => {
+      const ctx: Record<string, ExprValue> = {
+        github: {
+          event_name: 'pull_request',
+          repository: REPO,
+          run_id: 9000 + i,
+          event: { action: 'edited', changes: e.changes, pull_request: { number: NUMBER, head: { sha: HEAD, repo: { full_name: e.head } } } },
+        },
+      }
+      return { ...e, runsJob: truthy(evalTemplate(job.if, ctx)), group: String(evalTemplate(recheck.concurrency.group, ctx)) }
+    })
+    // Anchor the event shapes: the `if` must agree with which edits do work.
+    for (const r of runs) expect(r.runsJob, `job if on a ${r.label}`).toBe(r.works)
+    expect(recheck.concurrency['cancel-in-progress']).toBe(true)
+    for (const a of runs) {
+      for (const b of runs) {
+        if (a === b || a.group !== b.group) continue
+        expect(a.works && b.works, `a ${a.label} and a ${b.label} share group \`${a.group}\``).toBe(true)
+      }
+    }
+    // …and body edits still supersede each other per PR: the last edit's re-run judges every edit before it.
+    expect(new Set(runs.filter((r) => r.works).map((r) => r.group))).toEqual(new Set([`pr-body-recheck-pr-${NUMBER}`]))
   })
 
   it('the guard reads the description LIVE, never from the event payload a re-run replays', () => {
