@@ -1782,6 +1782,11 @@ jobs:
   # only where isReleaseCandidate() is true, and the release PR's
   # `pull_request` run is the only run of this workflow where it is:
   # `merge_group` sets no GITHUB_HEAD_REF, and this workflow has no tag push.
+  # The tag half of that predicate is therefore never evaluated here, and by
+  # design: a release tag is pushed only by release.yml's `draft` job with
+  # GITHUB_TOKEN, which starts no workflow, so a `v*` trigger would never fire.
+  # The same check runs instead as a step of release.yml's `check` job, on the
+  # merge commit and before the tag exists (#3094).
   # A release-bump diff classifies as `docs_only`, so without the second term
   # the gate is skipped on exactly the run it exists for, and the release PR
   # is green without it having run.

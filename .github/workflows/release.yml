@@ -86,6 +86,61 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing v$VERSION"
 
+      # The release trust gate (#3094, the CI half of #3069/#3074). Every other
+      # job here needs `check`, and `draft` is the one that creates the git tag
+      # (and the draft release every artifact is attached to), so a refusal HERE
+      # means no tag, no draft and no build exists for a commit whose trust
+      # snapshot no sign-off covers.
+      #
+      # Why it lives in this workflow and not as a `v*` tag trigger in ci.yml:
+      # the only thing that ever pushes a release tag is the `draft` job below,
+      # with GITHUB_TOKEN, and GitHub deliberately starts no workflow for a
+      # push made with GITHUB_TOKEN. A `tags: [v*]` trigger would therefore
+      # exist, read as a gate, and never fire for any real release — the same
+      # shape as the dead tag branch of isReleaseCandidate() (#3094). It would
+      # also run only after the tag existed. This step judges the exact commit
+      # the tag will be cut from (the merge commit, not "whatever the release PR
+      # looked like"), before the tag is created.
+      #
+      # The local publish path is the other half and already refuses on its
+      # own: scripts/release/sign-artifacts.sh and promote-release.sh both run
+      # `release-check --candidate v<version>`. This step guards the GitHub
+      # Release; those guard what operators actually ship.
+      #
+      # Positive observation: the step prints and summarises what it compared,
+      # and fails if the CLI did not print its verdict line at all, so a CLI
+      # that exited 0 without evaluating anything cannot pass as green.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Release trust check (no tag, draft or build without it)
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -o pipefail
+          rc=0
+          bun packages/protocol/tools/trust-snapshot-cli.ts release-check --candidate "$MERGE_SHA" 2>&1 | tee trust-release-check.log || rc=$?
+          verdict=$(grep -E '^trust release check against ' trust-release-check.log | tail -1 || true)
+          if [ -z "$verdict" ]; then
+            echo "::error::the release trust check printed no verdict, so it did not evaluate anything"
+            exit 1
+          fi
+          {
+            echo "### Release trust check"
+            echo ""
+            echo "- candidate: \`${MERGE_SHA}\` (version \`$(node -p "require('./package.json').version")\`)"
+            echo "- result: ${verdict}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::refusing to tag or build — the TLS trust snapshot changed since the last release and no sign-off in docs/security/trust-signoffs.json names it"
+            exit "$rc"
+          fi
+
   # --- Web bundle build (reproducible-build manifest + attestation subject) ---
   build:
     needs: check
