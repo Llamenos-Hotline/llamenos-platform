@@ -66,6 +66,7 @@ vi.mock('../../lib/safe-fetch', () => ({
 
 import { SignalRegistrationService } from '../../services/provider-setup/signal-registration'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables, insertTestHub } from '../helpers/schema-ddl'
 
 const DATABASE_URL = requireDatabaseUrl()
 
@@ -73,22 +74,6 @@ const TEST_SCHEMA = `test_signalsynth_${Date.now()}_${Math.random().toString(36)
 
 // `hub_id` carries an FK to hubs in production; this schema holds only the one
 // table under test, so the column is a plain text here.
-const DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.signal_registrations (
-    id TEXT PRIMARY KEY,
-    hub_id TEXT NOT NULL,
-    bridge_url TEXT,
-    phone_number TEXT NOT NULL,
-    method TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    error TEXT,
-    expires_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-`
-
 const TIMESTAMPTZ_TYPE = {
   to: 1184,
   from: [1114, 1184],
@@ -139,14 +124,14 @@ async function seedPendingVoice(): Promise<string> {
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(DDL)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [schema.signalRegistrations])
   testSql = postgres(DATABASE_URL, {
     max: 5,
     connection: { search_path: TEST_SCHEMA },
     types: { timestamptz: TIMESTAMPTZ_TYPE },
   })
   db = drizzle({ client: testSql, schema }) as unknown as Database
+  await insertTestHub(db, 'hub-1')
 })
 
 afterAll(async () => {

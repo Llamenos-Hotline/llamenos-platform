@@ -27,31 +27,11 @@ import * as schema from '../../db/schema'
 import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import type { CustomFieldDefinition } from '@shared/types'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables } from '../helpers/schema-ddl'
 
 const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_custom_fields_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-// Mirrors apps/worker/db/schema/settings.ts customFieldDefinitions.
-const CUSTOM_FIELDS_DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.custom_field_definitions (
-    id                  TEXT PRIMARY KEY,
-    name                TEXT NOT NULL,
-    label               TEXT NOT NULL,
-    field_type          TEXT NOT NULL,
-    required            BOOLEAN DEFAULT false,
-    options             TEXT[] NOT NULL DEFAULT '{}'::text[],
-    validation          JSONB,
-    visible_to_users    BOOLEAN DEFAULT true,
-    editable_by_users   BOOLEAN DEFAULT true,
-    context             TEXT NOT NULL DEFAULT 'all',
-    max_file_size       INTEGER,
-    allowed_mime_types  TEXT[] NOT NULL DEFAULT '{}'::text[],
-    max_files           INTEGER DEFAULT 1,
-    sort_order          INTEGER DEFAULT 0,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )
-`
 
 const JSONB_TYPE = {
   to: 3802,
@@ -87,8 +67,7 @@ function field(name: string, label = name): CustomFieldDefinition {
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(CUSTOM_FIELDS_DDL)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [schema.customFieldDefinitions])
 
   // A multi-connection pool is required: the race only exists when the
   // concurrent transactions run on distinct connections.

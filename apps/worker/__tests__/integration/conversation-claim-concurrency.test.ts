@@ -31,6 +31,7 @@ import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { ConversationsService } from '../../services/conversations'
 import { requireDatabaseUrl } from '../helpers/database-url'
+import { createSchemaTables, insertTestHub } from '../helpers/schema-ddl'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
@@ -38,37 +39,14 @@ const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_conv_claim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
-// Mirrors apps/worker/db/schema/conversations.ts conversations (messages
-// omitted — not exercised by claim()), including the #2459 hub constraint: a
-// fixture that could build a hubless conversation would not be the schema the
-// server runs on.
 const HUB_ID = 'hub-claim-concurrency'
-const DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.hubs (id TEXT PRIMARY KEY);
-  INSERT INTO ${TEST_SCHEMA}.hubs (id) VALUES ('${HUB_ID}');
-  CREATE TABLE ${TEST_SCHEMA}.conversations (
-    id                        TEXT PRIMARY KEY,
-    hub_id                    TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.hubs(id) ON DELETE CASCADE,
-    channel_type              TEXT NOT NULL DEFAULT 'web',
-    contact_identifier_hash   TEXT NOT NULL DEFAULT '',
-    assigned_to               TEXT,
-    status                    TEXT NOT NULL DEFAULT 'waiting',
-    created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_message_at           TIMESTAMPTZ,
-    message_count             INTEGER NOT NULL DEFAULT 0,
-    metadata                  JSONB
-  );
-`
-
 let adminSql: ReturnType<typeof postgres>
 let testSql: ReturnType<typeof postgres>
 let service: ConversationsService
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(DDL)
+  await createSchemaTables(adminSql, TEST_SCHEMA, [schema.conversations])
 
   // A multi-connection pool is required: the race only exists when the
   // concurrent claimants run on distinct connections.
@@ -77,6 +55,7 @@ beforeAll(async () => {
     connection: { search_path: TEST_SCHEMA },
   })
   const db = drizzle({ client: testSql, schema }) as unknown as Database
+  await insertTestHub(db, HUB_ID)
   service = new ConversationsService(db)
 })
 
