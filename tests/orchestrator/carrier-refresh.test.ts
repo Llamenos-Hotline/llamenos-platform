@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parse as parseYaml } from 'yaml'
+import { RULESET_REQUIRED_CONTEXTS } from './required-context-creation'
+import { evalTemplate, truthy, type ExprValue } from './helpers/github-expr'
 import { getJob, getStep, loadWorkflow, runShellStep, type RunResult } from './helpers/workflow-shell'
 
 /**
@@ -19,9 +22,14 @@ import { getJob, getStep, loadWorkflow, runShellStep, type RunResult } from './h
  */
 
 const GATES = [
-  { file: 'fleet-review.yml', job: 'refresh-carrier', step: "Re-run the head's fleet/review carrier in place", context: 'fleet/review' },
-  { file: 'fleet-verify.yml', job: 'refresh-carrier', step: "Re-run the head's fleet/verify carrier in place", context: 'fleet/verify' },
+  { file: 'fleet-review.yml', job: 'refresh-carrier', step: "Re-run the head's fleet/review carrier in place", context: 'fleet/review', carrier: 'fleet-review.yml' },
+  { file: 'fleet-verify.yml', job: 'refresh-carrier', step: "Re-run the head's fleet/verify carrier in place", context: 'fleet/verify', carrier: 'fleet-verify.yml' },
+  // #3127: a description edit re-runs the `gitleaks` carrier (which reads the live body) the same way.
+  { file: 'pr-body-recheck.yml', job: 'recheck', step: "Re-run the head's gitleaks carrier in place", context: 'gitleaks', carrier: 'secret-scan.yml' },
 ] as const
+
+/** The pair that must stay byte-identical; pr-body-recheck.yml words its operator guidance for a description edit. */
+const REVIEW_GATES = GATES.slice(0, 2)
 
 const HEAD = 'a'.repeat(40)
 const REPO = 'Llamenos-Hotline/llamenos-platform'
@@ -88,7 +96,7 @@ function refresh(gate: (typeof GATES)[number], overrides: Record<string, string>
 const reruns = (calls: string[]) => calls.filter((c) => c.startsWith('POST '))
 
 describe.each(GATES)('$file refresh-carrier (#2813)', (gate) => {
-  const wf = `.github/workflows/${gate.file}`
+  const wf = `.github/workflows/${gate.carrier}`
 
   it('names its own gate and workflow — a copy pointed at the other gate would re-run the wrong carrier', () => {
     const env = getStep(getJob(loadWorkflow(gate.file), gate.job), gate.step).env ?? {}
@@ -184,12 +192,101 @@ describe.each(GATES)('$file refresh-carrier (#2813)', (gate) => {
 
 describe('the two refresh steps are one script (#2813)', () => {
   it('fleet-review.yml and fleet-verify.yml ship byte-identical refresh scripts', () => {
-    const [a, b] = GATES.map((g) => getStep(getJob(loadWorkflow(g.file), g.job), g.step).run)
+    const [a, b] = REVIEW_GATES.map((g) => getStep(getJob(loadWorkflow(g.file), g.job), g.step).run)
     expect(typeof a).toBe('string')
     expect(a).toBe(b)
   })
 
   it('the fake gh is really on PATH — a test that reached the real one would not be hermetic', () => {
     expect(existsSync(join(bin, 'gh'))).toBe(true)
+  })
+})
+
+/**
+ * #3127: the PR-body guard must be clearable by the action that fixes it — an
+ * edit to the description — without a second `gitleaks` carrier and without the
+ * file scan becoming clearable by editing prose.
+ */
+describe('editing the PR description re-judges the gitleaks carrier (#3127)', () => {
+  const read = (f: string) => readFileSync(join(process.cwd(), '.github', 'workflows', f), 'utf8')
+  const recheck = parseYaml(read('pr-body-recheck.yml')) as {
+    on: { pull_request: { types: string[] } }
+    concurrency: { group: string; 'cancel-in-progress': boolean }
+    permissions: Record<string, string>
+    jobs: Record<string, { name: string; if: string; permissions: Record<string, string> }>
+  }
+  const scan = read('secret-scan.yml')
+
+  it('the carrier workflow still triggers on opened/synchronize only — `edited` there would be a second `gitleaks` on an unchanged head', () => {
+    expect(scan).toMatch(/pull_request:\s*\n\s*types: \[opened, synchronize\]\n/)
+    expect(scan).not.toMatch(/types:[^\n]*edited/)
+  })
+
+  it('the recheck lives in its own workflow, on `edited` alone, under a name that is not a required context', () => {
+    expect(recheck.on.pull_request.types).toEqual(['edited'])
+    expect(recheck.permissions).toEqual({})
+    const job = recheck.jobs['recheck']
+    if (job === undefined) throw new Error('no recheck job')
+    expect(RULESET_REQUIRED_CONTEXTS as readonly string[]).not.toContain(job.name)
+    expect(job.permissions).toEqual({ actions: 'write', checks: 'read' })
+  })
+
+  it('a title or base edit starts no scan: only a body edit on a same-repo PR passes the job `if`', () => {
+    const cond = recheck.jobs['recheck']?.if ?? ''
+    expect(cond).toContain('github.event.changes.body != null')
+    expect(cond).toContain('github.event.pull_request.head.repo.full_name == github.repository')
+  })
+
+  it('a run the job `if` skips never shares a recheck\'s concurrency group, so it can never cancel one', () => {
+    // The group is fixed for the whole run before the job `if` is evaluated,
+    // and cancel-in-progress cancels (or displaces) whatever else is in it. A
+    // title edit landing while a body edit's recheck polls its carrier must
+    // not take the recheck down with it: the corrected body would get no re-run.
+    const job = recheck.jobs['recheck']
+    if (job === undefined) throw new Error('no recheck job')
+    const NUMBER = 4242
+    const edits: Array<{ label: string; changes: Record<string, ExprValue>; head: string; works: boolean }> = [
+      { label: 'body edit', changes: { body: { from: 'old' } }, head: REPO, works: true },
+      { label: 'body and title edit', changes: { body: { from: 'old' }, title: { from: 'old' } }, head: REPO, works: true },
+      { label: 'title edit', changes: { title: { from: 'old' } }, head: REPO, works: false },
+      { label: 'base-branch edit', changes: { base: { ref: { from: 'dev' }, sha: { from: 'b'.repeat(40) } } }, head: REPO, works: false },
+      { label: 'body edit on a fork PR', changes: { body: { from: 'old' } }, head: 'someone/llamenos-platform', works: false },
+    ]
+    const runs = edits.map((e, i) => {
+      const ctx: Record<string, ExprValue> = {
+        github: {
+          event_name: 'pull_request',
+          repository: REPO,
+          run_id: 9000 + i,
+          event: { action: 'edited', changes: e.changes, pull_request: { number: NUMBER, head: { sha: HEAD, repo: { full_name: e.head } } } },
+        },
+      }
+      return { ...e, runsJob: truthy(evalTemplate(job.if, ctx)), group: String(evalTemplate(recheck.concurrency.group, ctx)) }
+    })
+    // Anchor the event shapes: the `if` must agree with which edits do work.
+    for (const r of runs) expect(r.runsJob, `job if on a ${r.label}`).toBe(r.works)
+    expect(recheck.concurrency['cancel-in-progress']).toBe(true)
+    for (const a of runs) {
+      for (const b of runs) {
+        if (a === b || a.group !== b.group) continue
+        expect(a.works && b.works, `a ${a.label} and a ${b.label} share group \`${a.group}\``).toBe(true)
+      }
+    }
+    // …and body edits still supersede each other per PR: the last edit's re-run judges every edit before it.
+    expect(new Set(runs.filter((r) => r.works).map((r) => r.group))).toEqual(new Set([`pr-body-recheck-pr-${NUMBER}`]))
+  })
+
+  it('the guard reads the description LIVE, never from the event payload a re-run replays', () => {
+    expect(scan).not.toContain('PR_BODY_JSON')
+    expect(scan).not.toContain('github.event.pull_request.body')
+    expect(scan).toContain('--body-from-api "${REPO}" "${PR_NUMBER}"')
+  })
+
+  it('the guard stays fail-closed and required: no continue-on-error, no `if` on the job', () => {
+    const doc = parseYaml(scan) as { jobs: { gitleaks: { if?: unknown; steps: Array<{ name?: string; 'continue-on-error'?: unknown }> } } }
+    expect(doc.jobs.gitleaks.if).toBeUndefined()
+    const step = doc.jobs.gitleaks.steps.find((st) => st.name === 'Check for machine-specific absolute paths')
+    expect(step).toBeDefined()
+    expect(step?.['continue-on-error']).toBeUndefined()
   })
 })

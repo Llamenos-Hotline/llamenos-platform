@@ -197,5 +197,66 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.run_cli("--base", "abc").returncode, 2)
 
 
+class LiveBody(unittest.TestCase):
+    """#3127: the body is read from the API when the check runs, so an edit clears it.
+
+    `gh` is a stand-in script that answers `api repos/R/pulls/N` from $FAKE_BODY (a
+    JSON file holding the reply) and exits $FAKE_RC; nothing here reaches GitHub.
+    """
+
+    def setUp(self):
+        self.bin = tempfile.mkdtemp()
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", self.bin]))
+        gh = os.path.join(self.bin, "gh")
+        with open(gh, "w") as fh:
+            fh.write('#!/bin/sh\n[ "$1 $2" = "api repos/o/r/pulls/7" ] || exit 9\n'
+                     '[ "${FAKE_RC:-0}" = 0 ] || { echo boom >&2; exit "$FAKE_RC"; }\n'
+                     'cat "$FAKE_BODY"\n')
+        os.chmod(gh, 0o755)
+
+    def run_live(self, reply, rc="0", *extra):
+        reply_path = os.path.join(self.bin, "reply.json")
+        with open(reply_path, "w") as fh:
+            fh.write(reply)
+        env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "FAKE_BODY": reply_path, "FAKE_RC": rc}
+        return subprocess.run([sys.executable, os.path.join(HERE, "check-local-paths.py"),
+                               "--body-from-api", "o/r", "7", *extra], capture_output=True, text=True, env=env)
+
+    def test_offending_live_body_fails_without_echoing_the_account(self):
+        r = self.run_live(json.dumps({"body": f"ran in {H}alice/wt"}))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("PR body:1", r.stdout)
+        self.assertNotIn("alice", r.stdout + r.stderr)
+
+    def test_the_edited_body_clears_the_check(self):
+        """Same PR, same command, no push: only the description changed between the two runs."""
+        self.assertEqual(self.run_live(json.dumps({"body": f"ran in {H}alice/wt"})).returncode, 1)
+        self.assertEqual(self.run_live(json.dumps({"body": "ran in <shared asdf install>"})).returncode, 0)
+
+    def test_null_body_is_clean(self):
+        self.assertEqual(self.run_live(json.dumps({"body": None})).returncode, 0)
+
+    def test_failure_message_names_the_remedy_that_works(self):
+        r = self.run_live(json.dumps({"body": f"{H}alice/wt"}))
+        self.assertIn("just edit the description", r.stderr)
+        self.assertNotIn("push any commit", r.stderr)
+
+    def test_an_unreadable_body_fails_closed(self):
+        self.assertEqual(self.run_live("{}", rc="1").returncode, 2)  # gh failed
+        self.assertEqual(self.run_live("{}").returncode, 2)  # reply has no `body`
+        self.assertEqual(self.run_live("not json").returncode, 2)
+
+    def test_malformed_target_fails_closed(self):
+        r = subprocess.run([sys.executable, os.path.join(HERE, "check-local-paths.py"), "--body-from-api", "not a slug", "7"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        r = subprocess.run([sys.executable, os.path.join(HERE, "check-local-paths.py"), "--body-from-api", "o/r", "7;rm"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+
+    def test_the_two_body_sources_are_alternatives(self):
+        self.assertEqual(self.run_live(json.dumps({"body": "ok"}), "0", "--body-json", "null").returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,139 @@
+# PR body re-check (#3127)
+#
+# Editing a pull request's description re-judges the one check that reads it.
+#
+# `gitleaks` (secret-scan.yml) fails a PR whose description adds a machine
+# path (/home/<account>/…). That job triggers on `opened`/`synchronize` only,
+# so a corrected description started nothing, and a re-run replayed the old
+# event payload: a REQUIRED check stayed red for a defect that no longer
+# existed, with a no-op commit as the only way out.
+#
+# Two halves fix it, and this file is the second:
+#
+#   1. secret-scan.yml reads the description LIVE from the API when the step
+#      runs, so any re-run of that job judges the text as it is now.
+#   2. This workflow triggers on `edited`, and when the BODY changed it
+#      re-runs the head's one `gitleaks` carrier IN PLACE (a new attempt in
+#      the same check suite), exactly as fleet-review's `refresh-carrier`
+#      does for a review request (#2813).
+#
+# It lives in a workflow of its own, never as an `edited` trigger on
+# secret-scan.yml, for the reason invariant #2813/#2816 spells out: a run of a
+# carrier workflow on an event that does not move the head is a NEWER check
+# suite of that workflow, which admission reads instead of the carrier, and a
+# second `gitleaks` on an unchanged head can be judged in place of the first.
+# Runs of THIS file are suites of THIS workflow. Nothing here is named after a
+# required context, and nothing here makes anything green: the re-run carrier
+# re-judges the head on its own terms, so a path in a committed FILE still
+# fails after any number of description edits.
+#
+# `edited` also fires on a title or base-branch change; the job's `if:` lets
+# only a body edit through, so those start no scan. A job-level `if:` is safe
+# in this file because this name is not a required context (#848): skipping it
+# satisfies nothing. The `concurrency:` block below keys on the SAME condition,
+# so such a run cannot cancel a body edit's recheck either.
+#
+# A fork PR's token cannot re-run anything, so it is not attempted there; a
+# fork contributor clears the check by re-running the failed job (it reads the
+# live description) or by pushing.
+name: PR body re-check
+
+on:
+  pull_request:
+    types: [edited]
+
+# A run that will RECHECK (a body edit on a same-repo PR — the job's `if:`,
+# verbatim) groups per PR, and a newer body edit supersedes an older one: the
+# carrier reads the live description, so the last edit's re-run judges every
+# edit before it.
+#
+# Every other run — a title or base edit, a fork PR — groups by its own run
+# id. The group is decided for the whole run before any job `if:` is
+# evaluated, so a per-PR group here would let a run whose job is about to be
+# SKIPPED cancel an in-progress recheck (`cancel-in-progress`) or displace a
+# pending one, and the corrected description would be left with no re-run at
+# all. Alone in its group, a run that does nothing can cancel nothing.
+# tests/orchestrator/carrier-refresh.test.ts evaluates both expressions and
+# fails if a run the `if:` skips can ever share a recheck's group.
+concurrency:
+  group: ${{ github.event.changes.body != null && github.event.pull_request.head.repo.full_name == github.repository && format('pr-body-recheck-pr-{0}', github.event.pull_request.number) || format('pr-body-recheck-noop-{0}', github.run_id) }}
+  cancel-in-progress: true
+
+permissions: {}  # deny-all; the job below sets its own
+
+jobs:
+  recheck:
+    name: pr-body-recheck/recheck
+    if: ${{ github.event.changes.body != null && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: write   # read the carrier's workflow run and re-run it
+      checks: read     # find the carrier among the head's check runs
+    steps:
+      - name: Re-run the head's gitleaks carrier in place
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CONTEXT: gitleaks
+          WORKFLOW_PATH: .github/workflows/secret-scan.yml
+          POLL_SECONDS: '20'
+          MAX_WAIT_SECONDS: '900'
+        run: |
+          set -euo pipefail
+          # Re-run the head's ONE carrier of $CONTEXT in place. A re-run is a new
+          # attempt inside the SAME check suite, so the head keeps exactly one
+          # $CONTEXT check run and it now reflects the description as edited.
+          # Never makes anything green by itself: the carrier re-judges the head.
+          fail() {
+            echo "::error::refresh-carrier FAILED: $1 — the $CONTEXT carrier on $HEAD_SHA was NOT re-run, so it still shows its earlier conclusion. Re-run the failed $CONTEXT job by hand: it reads the live description."
+            exit 1
+          }
+          api() {
+            local out
+            if ! out="$(gh api "$@" 2>&1)"; then
+              printf '%s\n' "$out" >&2
+              return 1
+            fi
+            printf '%s' "$out"
+          }
+          ctx_q="$(jq -rn --arg s "$CONTEXT" '$s|@uri')"
+          carriers="$(api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=$ctx_q&filter=latest&per_page=100" \
+            --jq '.check_runs[] | select(.app.slug == "github-actions") | .id')" \
+            || fail "could not list the $CONTEXT check runs on the head"
+          runs=""
+          for job in $carriers; do
+            run="$(api "repos/$REPO/actions/jobs/$job" --jq '.run_id')" || fail "could not resolve check run $job to its workflow run"
+            meta="$(api "repos/$REPO/actions/runs/$run" --jq '[.path, .event] | @tsv')" || fail "could not read workflow run $run"
+            path="$(printf '%s' "$meta" | cut -f1)"
+            event="$(printf '%s' "$meta" | cut -f2)"
+            if { [ "$path" != "$WORKFLOW_PATH" ] && [[ "$path" != "$WORKFLOW_PATH@"* ]]; } || [ "$event" != "pull_request" ]; then
+              echo "not a carrier: check run $job belongs to run $run ($path, $event), not to this workflow's pull_request carrier"
+              continue
+            fi
+            case " $runs " in *" $run "*) ;; *) runs="$runs $run" ;; esac
+          done
+          if [ -z "${runs// /}" ]; then
+            echo "::notice::no $CONTEXT carrier on $HEAD_SHA yet — the run that creates it has not started, and it reads the live description when it does; nothing to re-run"
+            exit 0
+          fi
+          deadline=$(( $(date +%s) + MAX_WAIT_SECONDS ))
+          for run in $runs; do
+            while :; do
+              status="$(api "repos/$REPO/actions/runs/$run" --jq '.status')" || fail "could not read the status of carrier run $run"
+              if [ "$status" = "completed" ]; then
+                if refused="$(gh api -X POST "repos/$REPO/actions/runs/$run/rerun" 2>&1)"; then
+                  echo "re-ran $CONTEXT carrier run $run on $HEAD_SHA in place — the same check suite, so the head still carries exactly one $CONTEXT"
+                  break
+                fi
+                echo "::warning::re-running carrier run $run was refused ($(printf '%s' "$refused" | tr '\n' ' ')) — another re-run may have just started; waiting for it to finish"
+              else
+                echo "carrier run $run is $status — waiting for it to finish, so that its re-run starts after this edit"
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                fail "carrier run $run was still not re-runnable after ${MAX_WAIT_SECONDS}s"
+              fi
+              sleep "$POLL_SECONDS"
+            done
+          done

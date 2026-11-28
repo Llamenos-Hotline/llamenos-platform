@@ -10,7 +10,14 @@ convention.
 Two surfaces are checked, both for what a change ADDS:
 
   diff   every added line of `git diff <base>...<head>` (file and line reported)
-  body   the PR description (only when --body-json is given)
+  body   the PR description (only when --body-json or --body-from-api is given)
+
+The body can be given two ways. `--body-json` is a snapshot, and an edit to the
+description makes it stale: a re-run replays the original event payload, so it
+re-reads the old text and fails identically (#3127). `--body-from-api REPO PR`
+reads the description LIVE from the API when the check runs, so a re-run (and the
+re-run that pr-body-recheck.yml triggers on every description edit) judges the text
+as it is now. CI uses the live form.
 
 A finding quotes the path ROOT only (`/home/<user>/`) plus the location. It never
 echoes the segment or the surrounding text: the failure message must not
@@ -29,8 +36,8 @@ Fail closed: an unreadable diff, a missing range or an unparseable body exits 2.
 Exit codes: 0 clean | 1 finding(s) | 2 could not check
 
 Usage:
-  check-local-paths.py --base <sha> --head <sha> [--body-json '<json string|null>']
-  check-local-paths.py --body-json '<json string|null>'
+  check-local-paths.py --base <sha> --head <sha> [--body-json '<json string|null>' | --body-from-api OWNER/REPO PR_NUMBER]
+  check-local-paths.py (--body-json '<json string|null>' | --body-from-api OWNER/REPO PR_NUMBER)
 """
 from __future__ import annotations
 
@@ -112,6 +119,32 @@ class CouldNotCheck(Exception):
     pass
 
 
+REPO_SLUG = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def live_body_json(repo: str, pr_number: str) -> str:
+    """The PR description as it is NOW, as the JSON encoding `scan_body` takes.
+
+    Read from the API at run time, never from the event payload that started the
+    run. Any failure to read it is `CouldNotCheck`: an unreadable body is not a
+    clean one.
+    """
+    if not REPO_SLUG.match(repo) or not pr_number.isdigit():
+        raise CouldNotCheck("--body-from-api wants OWNER/REPO and a numeric PR number")
+    try:
+        res = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{pr_number}"], capture_output=True, check=False)
+    except OSError as e:
+        raise CouldNotCheck(f"could not run gh to read the PR description ({e.__class__.__name__})") from e
+    if res.returncode != 0:
+        raise CouldNotCheck(f"`gh api repos/{repo}/pulls/{pr_number}` exited {res.returncode}: {res.stderr.decode('utf-8', 'replace').strip()}")
+    try:
+        pr = json.loads(res.stdout.decode("utf-8"))
+        body = pr["body"]
+    except (ValueError, KeyError, TypeError) as e:
+        raise CouldNotCheck(f"the API reply for PR #{pr_number} has no readable description ({e.__class__.__name__})") from e
+    return json.dumps(body)
+
+
 def git_diff(base: str, head: str) -> str:
     cmd = ["git", "-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff",
            "--no-renames", "--unified=0", f"{base}...{head}"]
@@ -129,12 +162,17 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--base")
     ap.add_argument("--head")
     ap.add_argument("--body-json")
+    ap.add_argument("--body-from-api", nargs=2, metavar=("OWNER/REPO", "PR_NUMBER"))
     args = ap.parse_args(argv)
+
+    if args.body_json is not None and args.body_from_api is not None:
+        print("check-local-paths: --body-json and --body-from-api are alternatives", file=sys.stderr)
+        return 2
 
     if (args.base is None) != (args.head is None):
         print("check-local-paths: --base and --head go together", file=sys.stderr)
         return 2
-    if args.base is None and args.body_json is None:
+    if args.base is None and args.body_json is None and args.body_from_api is None:
         print("check-local-paths: nothing to check (no range, no body) — refusing to pass vacuously", file=sys.stderr)
         return 2
 
@@ -142,7 +180,9 @@ def main(argv: list[str]) -> int:
     try:
         if args.base is not None:
             findings += scan_diff(git_diff(args.base, args.head))
-        if args.body_json is not None:
+        if args.body_from_api is not None:
+            findings += scan_body(live_body_json(*args.body_from_api))
+        elif args.body_json is not None:
             findings += scan_body(args.body_json)
     except CouldNotCheck as e:
         print(f"check-local-paths: COULD NOT CHECK — {e}. This is a failure, not a pass.", file=sys.stderr)
@@ -158,7 +198,9 @@ def main(argv: list[str]) -> int:
         f"\ncheck-local-paths: {len(findings)} machine-specific absolute path(s) added (account name not echoed).\n"
         "These carry the OS account name of whoever ran the command. Replace each with a relative\n"
         "path (apps/worker/routes/) or a placeholder (/home/operator/, /home/runner/), then push.\n"
-        "For the PR body: edit the description, then push any commit to re-run this check.",
+        "For the PR body: just edit the description. The check re-runs on the edit and reads the\n"
+        "description as it is now, so no commit is needed (re-running the failed job by hand does\n"
+        "the same). A path in a committed FILE is not cleared by editing the description.",
         file=sys.stderr,
     )
     return 1
