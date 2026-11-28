@@ -14,11 +14,14 @@ import io.cucumber.java.en.And
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
 import io.cucumber.java.en.When
+import kotlinx.coroutines.runBlocking
 import org.llamenos.hotline.di.CryptoEntryPoint
+import org.llamenos.hotline.di.DeviceRegistrationEntryPoint
 import org.llamenos.hotline.helpers.SimulationClient
 import org.llamenos.hotline.helpers.SeedFailedException
 import org.llamenos.hotline.helpers.TestApiClient
 import org.llamenos.hotline.steps.BaseSteps
+import org.llamenos.hotline.service.DeviceRegistrationManager
 import org.llamenos.hotline.steps.ScenarioHooks
 
 /**
@@ -76,8 +79,15 @@ class CaseListSteps : BaseSteps() {
                 val promoteResult = SimulationClient.promoteToAdmin(npub)
                 Log.d("CaseListSteps", "Promote to admin: ok=${promoteResult.ok}, error=${promoteResult.error}")
 
+                // The server seals a record's summary to the X25519 keys of the devices
+                // that registered, and a status change re-seals that summary, so the
+                // device must have reached the server before the record is seeded.
+                // Registration is fire-and-forget at unlock; wait for it here rather
+                // than hope it won the race. Idempotent, and shares the app's mutex.
+                registerDeviceBeforeSeeding()
+
                 // Re-run seed with the pubkey so the sample record is assigned
-                // to this user AND scoped to the scenario hub
+                // to this user AND scoped to the scenario hub, and sealed to its device
                 val cmsResult = client.seed(
                     TestApiClient.SeedSpec(
                         hubId = hubId,
@@ -100,6 +110,20 @@ class CaseListSteps : BaseSteps() {
         } else {
             Log.w("CaseListSteps", "Could not read npub from Settings screen")
         }
+    }
+
+    private fun registerDeviceBeforeSeeding() {
+        var manager: DeviceRegistrationManager? = null
+        activityScenarioHolder.scenario?.onActivity { activity ->
+            manager = EntryPointAccessors.fromApplication(
+                activity.applicationContext,
+                DeviceRegistrationEntryPoint::class.java,
+            ).deviceRegistrationManager()
+        }
+        val registration = manager ?: throw AssertionError("The activity is not running, so the device cannot be registered")
+        // On the test thread, not the main one: registration is a network call.
+        runBlocking { registration.register() }
+            .getOrElse { throw AssertionError("The device could not register its keys, so no record can be sealed to it", it) }
     }
 
     /**

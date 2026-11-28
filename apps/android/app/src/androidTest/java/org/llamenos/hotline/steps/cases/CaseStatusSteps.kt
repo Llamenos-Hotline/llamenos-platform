@@ -1,5 +1,7 @@
 package org.llamenos.hotline.steps.cases
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
@@ -96,7 +98,12 @@ class CaseStatusSteps : BaseSteps() {
         val hasError = composeRule.onAllNodesWithTag("case-detail-action-error")
             .fetchSemanticsNodes().isNotEmpty()
         if (hasError) {
-            throw AssertionError("Status update failed: action error is displayed")
+            // Say WHAT failed: the generic message hid the cause in the queue-only run.
+            val shown = composeRule.onAllNodesWithTag("case-detail-action-error")
+                .fetchSemanticsNodes()
+                .flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }
+                .joinToString(" | ") { it.text }
+            throw AssertionError("Status update failed: action error is displayed: $shown")
         }
     }
 }

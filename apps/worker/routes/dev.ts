@@ -18,6 +18,7 @@ import { SAMPLE_HUB } from '../lib/sample-dataset'
 import { sampleIdentities } from '../lib/sample-identities'
 import { getDb } from '../db'
 import { sql as rawSql, eq } from 'drizzle-orm'
+import { caseSeal } from '@llamenos/crypto/ffi'
 import { signalMessageQueue } from '../db/schema'
 import { SignalIdentityService } from '../messaging/signal/identity'
 import { SignalMessageQueue } from '../messaging/signal/queue'
@@ -592,25 +593,38 @@ dev.post('/test-seed', async (c) => {
 
     entityTypeIds.push({ id: entityTypeId, name: tmpl.name, category: tmpl.category })
 
-    // Create records for this entity type
-    // Use a dummy HPKE envelope so the app can find a readable envelope.
-    // Without this, records exist in DB but the app filters them out
-    // (no envelope matching the user's pubkey).
+    // Create records for this entity type.
+    //
+    // The summary is sealed to the devices the server can actually address: the
+    // registered X25519 keys of the users in `assignTo`. A client opens it, and a
+    // client that changes the status can only do so by opening the summary and
+    // re-sealing it — the server holds no status (#2779) — so a summary nobody can
+    // open makes every status-changing scenario fail. A record with no resolvable
+    // reader (the pre-launch seed, before any device has registered) keeps a dummy
+    // envelope so the app's list still finds a record addressed to it; its summary
+    // is not a ciphertext and no client can open it.
+    // A failed lookup is a failed step (#3088): the records are still created, with
+    // the dummy envelope, and `ok` is false.
+    const readerPubkeys = (await outcome.run(`readers ${tmpl.name}`, () =>
+      services.identity.buildReaderPubkeys(undefined, etSpec.assignTo))) ?? []
     const dummyEnvelope = { pubkey: adminSeed, ct: 'a'.repeat(64), enc: adminSeed }
     for (let i = 0; i < etSpec.records; i++) {
       const isEvent = tmpl.category === 'event'
-      const record = await outcome.run(`record ${tmpl.name}[${i}]`, () =>
-        services.cases.create({
+      const record = await outcome.run(`record ${tmpl.name}[${i}]`, async () => {
+        const title = `Test ${isEvent ? 'Event' : 'Case'} ${i + 1}`
+        const sealed = readerPubkeys.length > 0
+          ? caseSeal('summary', JSON.stringify({ title, description: `Seeded ${isEvent ? 'event' : 'case'}`, status: tmpl.defaultStatus }), readerPubkeys)
+          : undefined
+        return services.cases.create({
           entityTypeId,
           assignedTo: etSpec.assignTo,
           blindIndexes: {},
-          encryptedSummary: btoa(isEvent
-            ? `{"title":"Test Event ${i + 1}","summary":"Seeded event"}`
-            : `{"title":"Test Case ${i + 1}","summary":"Seeded case"}`),
-          summaryEnvelopes: [dummyEnvelope],
+          encryptedSummary: sealed?.encryptedContent ?? btoa(JSON.stringify({ title, summary: `Seeded ${isEvent ? 'event' : 'case'}` })),
+          summaryEnvelopes: sealed?.readerEnvelopes ?? [dummyEnvelope],
           createdBy: adminSeed,
           hubId,
-        }))
+        })
+      })
       if (record) recordIds.push({ id: record.id, entityTypeId, caseNumber: record.caseNumber ?? undefined })
     }
   }

@@ -22,7 +22,11 @@
  * trigger must null it, so a rollout leaves nothing behind either.
  */
 import { describe, it, expect, afterAll } from 'bun:test'
-import { sql } from 'drizzle-orm'
+import { sql, eq } from 'drizzle-orm'
+import { x25519 } from '@noble/curves/ed25519.js'
+import { caseOpen } from '@llamenos/crypto/ffi'
+import { bytesToHex } from '@shared/encoding'
+import { devices, users } from '../../db/schema'
 import { Hono } from 'hono'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
@@ -119,6 +123,50 @@ describe('POST /api/test-seed', () => {
     // The real clients write none until per-hub index keys exist (D7/E5), and a
     // slug of the display name is a reversible index of a name.
     expect(rows[0].identifier_hashes).toEqual([])
+  })
+})
+
+describe('POST /api/test-seed — a record a client will change the status of', () => {
+  // The server holds no status (#2779): a client changes one by OPENING the summary and
+  // re-sealing it with the new value. A summary no device can open cannot be changed, so
+  // a seeded record assigned to a user whose device has registered must open on it.
+  it('seals the summary to the registered device of an assignee, and it opens there with the default status of its template', async () => {
+    const hubId = crypto.randomUUID()
+    const assignee = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+    const secret = crypto.getRandomValues(new Uint8Array(32))
+    const x25519Pubkey = bytesToHex(x25519.getPublicKey(secret))
+    await db.insert(users).values({ pubkey: assignee, displayName: 'seed-assignee', hubRoles: [] })
+    await db.insert(devices).values({ pubkey: assignee, platform: 'android', x25519Pubkey })
+    await db.execute(sql`INSERT INTO hubs (id, name, slug, status, created_by) VALUES (${hubId}, 'seal', ${hubId}, 'active', ${assignee})`)
+    try {
+      const res = await devApp().request('/test-seed', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'X-Test-Secret': SECRET },
+        body: JSON.stringify({
+          hubId,
+          adminSeed: ADMIN_SEED,
+          permissions: { enableCaseManagement: true },
+          entityTypes: [{ template: 'arrest_case', records: 1, assignTo: [assignee] }],
+        }),
+      }, ENV)
+      expect(res.status).toBe(200)
+      const body = await res.json() as { records: Array<{ id: string }>; warnings?: string[] }
+      expect(body.warnings ?? []).toEqual([])
+      expect(body.records).toHaveLength(1)
+
+      const record = await services.cases.get(body.records[0].id)
+      expect(record.summaryEnvelopes.map(e => e.pubkey)).toEqual([x25519Pubkey])
+      const opened = JSON.parse(caseOpen('summary', secret, {
+        encryptedContent: record.encryptedSummary,
+        readerEnvelopes: record.summaryEnvelopes,
+      })) as { title: string; status: string }
+      expect(opened.title).toBe('Test Case 1')
+      expect(opened.status).toBe('reported')
+    } finally {
+      await services.hubs.purgeHub(hubId, services.callRecordings).catch(() => undefined)
+      await db.delete(devices).where(eq(devices.pubkey, assignee))
+      await db.delete(users).where(eq(users.pubkey, assignee))
+    }
   })
 })
 
