@@ -8,8 +8,10 @@
  *  - a genesis is never accepted on the append path (only hub creation stores one);
  *  - `users.hub_roles` is a cache of the chain-derived roles, and never caches a
  *    bundle named after a role with instance-level authority;
- *  - `hub-id-profile`: the `hubs_id_profile` CHECK refuses an id outside the
- *    §2.1 profile, and every create path's id (a lowercase UUID) conforms.
+ *  - `hub-id-profile`: HubService.createHub, the one place a hub row is
+ *    inserted, refuses an id outside the §2.1 profile and stores no row; every
+ *    create path's id (a lowercase UUID) conforms. (The database CHECK is the
+ *    next release's, #3135.)
  *
  * MUST run under `bun test` (bun:ffi, bun-jsonb):
  *   bun run test:worker:integration-bun -- hub-chain-append
@@ -234,13 +236,16 @@ describe('hub chain: append', () => {
 })
 
 describe('hub-id-profile', () => {
-  it('the hubs_id_profile CHECK refuses an id outside the §2.1 profile', async () => {
+  it('createHub refuses an id outside the §2.1 profile and stores no row', async () => {
     const founder = await makeUser('founder')
+    const now = new Date().toISOString()
     for (const id of ['Hub-Upper', 'hub_underscore', '-leading', 'z'.repeat(65)]) {
-      const outcome = await db.insert(hubs)
-        .values({ id, name: id, slug: `bad-${bytesToHex(randomBytes(6))}`, createdBy: founder.pubkey })
-        .then(() => 'inserted', (e: unknown) => String((e as { cause?: unknown }).cause ?? e))
-      expect(outcome, id).toContain('hubs_id_profile')
+      const outcome = await settings.hubs.createHub(
+        { id, name: id, slug: `bad-${bytesToHex(randomBytes(6))}`, status: 'active', timezone: 'UTC', createdBy: founder.pubkey, createdAt: now, updatedAt: now },
+        { pubkey: founder.pubkey, roleIds: ['role-hub-admin'] },
+      ).then(() => 'created', (e: unknown) => (e as { code?: string }).code)
+      expect(outcome, id).toBe('invalid_hub_id')
+      expect(await db.select({ id: hubs.id }).from(hubs).where(eq(hubs.id, id)), id).toEqual([])
     }
   })
 

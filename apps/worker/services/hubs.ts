@@ -7,6 +7,7 @@ import {
 } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { HubChainLink } from '@protocol/schemas/hub-chain'
+import { hubIdSchema } from '@protocol/schemas/hubs'
 import { HubChainService } from './hub-chain'
 import {
   hubs as hubsTable,
@@ -146,6 +147,13 @@ export class HubService {
       genesis?: HubChainLink
     },
   ): Promise<{ hub: Hub }> {
+    // The identifier profile (wire spec §2.1, `hub-id-profile`): a hub id
+    // enters AADs and hub-chain links, and the crate refuses one outside it.
+    // This is the one place a hub row is inserted, so it is where the profile
+    // is guaranteed; the database CHECK follows in the next release (#3135).
+    if (!hubIdSchema.safeParse(hub.id).success) {
+      throw new ServiceError(400, 'A hub id must be inside the identifier profile (wire spec §2.1)', 'invalid_hub_id')
+    }
     const genesisBundles = founder.genesis ? genesisFounderBundles(founder.genesis, hub.id, founder.pubkey) : undefined
     await this.db.transaction(async (tx) => {
       const [existing] = await tx

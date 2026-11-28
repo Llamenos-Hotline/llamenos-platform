@@ -129,10 +129,10 @@ export const hubs = pgTable('hubs', {
   cryptoFormat: cryptoFormatColumn(),
 }, (table) => [
   cryptoFormatCheck('hubs', table.cryptoFormat),
-  // The identifier profile (wire spec §2.1, #2963 `hub-id-profile`): every hub
-  // id enters AADs and hub-chain links, and the crate refuses anything outside
-  // it rather than normalising, so the database refuses it first.
-  check('hubs_id_profile', sql`${table.id} ~ '^[0-9a-z][0-9a-z-]{0,63}$' OR ${table.id} ~ '^[0-9a-f]{1,128}$'`),
+  // The identifier profile (wire spec §2.1, #2963 `hub-id-profile`) is
+  // enforced by HubService.createHub in this release; the `hubs_id_profile`
+  // CHECK follows in the next one (#3135), because the previous release writes
+  // this column and a CHECK added beside it could reject its rows mid-rollout.
 ])
 
 // ---------------------------------------------------------------------------

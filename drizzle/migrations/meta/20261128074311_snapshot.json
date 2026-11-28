@@ -2517,10 +2517,6 @@
         "hubs_crypto_format_known": {
           "name": "hubs_crypto_format_known",
           "value": "\"hubs\".\"crypto_format\" IN (1)"
-        },
-        "hubs_id_profile": {
-          "name": "hubs_id_profile",
-          "value": "\"hubs\".\"id\" ~ '^[0-9a-z][0-9a-z-]{0,63}$' OR \"hubs\".\"id\" ~ '^[0-9a-f]{1,128}$'"
         }
       },
       "isRLSEnabled": false
