@@ -51,7 +51,12 @@ class HubChainService @Inject constructor(
     private val keyValueStore: KeyValueStore,
 ) {
     sealed interface Status {
-        data class Verified(val seq: Int, val hash: String, val staleSigners: Int) : Status
+        data class Verified(
+            val seq: Int,
+            val hash: String,
+            val staleSigners: Int,
+            val at: Long = System.currentTimeMillis(),
+        ) : Status
         /** The server serves no chain for the hub. */
         data object None : Status
         data class Fork(val detail: String) : Status
@@ -168,7 +173,10 @@ class HubChainService @Inject constructor(
      */
     suspend fun assertSealable(hubId: String) {
         var status = _statuses.value[hubId]
-        if (status == null || status == Status.None) status = load(hubId)
+        // A verification is good for VERIFIED_TTL_MS: after that, sealing re-checks
+        // the chain (a fork served since is caught), and a failed re-check refuses.
+        val fresh = status is Status.Verified && System.currentTimeMillis() - status.at < VERIFIED_TTL_MS
+        if (!fresh && status !is Status.Fork && status !is Status.Refused) status = load(hubId)
         if (status !is Status.Verified) throw SealingStoppedException(hubId)
     }
 
@@ -251,6 +259,7 @@ class HubChainService @Inject constructor(
 
     companion object {
         private const val KEY_ANCHORS = "hub-chain-anchors"
+        private const val VERIFIED_TTL_MS = 5 * 60 * 1000L
 
         /** The crate's closed rejection code of an error (`chain_fork`, …). */
         fun rejectionCode(e: Throwable): String {

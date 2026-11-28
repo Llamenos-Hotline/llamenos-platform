@@ -35,7 +35,7 @@ import type { Hub } from '@shared/types'
 
 /** What loading a hub's chain concluded. */
 export type HubChainStatus =
-  | { kind: 'verified'; verified: HubChainVerified; alerts: HubChainAlert[] }
+  | { kind: 'verified'; verified: HubChainVerified; alerts: HubChainAlert[]; at: number }
   /** The server serves no chain. Sealing is refused: every client-founded hub has a genesis. */
   | { kind: 'none' }
   /** The served chain does not contain this device's trusted anchor. Sealing stops. */
@@ -120,7 +120,7 @@ export async function loadHubChain(hubId: string): Promise<HubChainStatus> {
       return record(hubId, { kind: 'refused', code: 'chain_hub_mismatch', detail: `the served chain is hub ${verified.hub}'s, not ${hubId}'s` })
     }
     await setHubChainAnchor(hubId, verified.head)
-    return record(hubId, { kind: 'verified', verified, alerts: verified.alerts })
+    return record(hubId, { kind: 'verified', verified, alerts: verified.alerts, at: Date.now() })
   } catch (err) {
     const code = rejectionCode(err)
     const detail = err instanceof Error ? err.message : String(err)
@@ -138,6 +138,7 @@ export class HubSealingStoppedError extends Error {
 }
 
 const inFlight = new Map<string, Promise<HubChainStatus>>()
+const VERIFIED_TTL_MS = 5 * 60 * 1000
 
 /**
  * Refuse to seal in a hub unless this device has VERIFIED its chain (fail
@@ -149,7 +150,9 @@ const inFlight = new Map<string, Promise<HubChainStatus>>()
  */
 export async function assertHubSealable(hubId: string): Promise<void> {
   let status = statuses.get(hubId)
-  if (!status || status.kind === 'none') {
+  // A verification is good for VERIFIED_TTL_MS: after that, sealing re-checks
+  // the chain (a fork served since is caught), and a failed re-check refuses.
+  if (!status || status.kind === 'none' || (status.kind === 'verified' && Date.now() - status.at >= VERIFIED_TTL_MS)) {
     let pending = inFlight.get(hubId)
     if (!pending) {
       pending = loadHubChain(hubId).finally(() => inFlight.delete(hubId))

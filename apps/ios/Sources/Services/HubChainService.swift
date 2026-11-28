@@ -20,7 +20,7 @@ import Foundation
 final class HubChainService: @unchecked Sendable {
 
     enum Status: Equatable {
-        case verified(head: Head, staleSigners: Int)
+        case verified(head: Head, staleSigners: Int, at: Date = Date())
         /// The server serves no chain for the hub.
         case none
         case fork(String)
@@ -40,6 +40,7 @@ final class HubChainService: @unchecked Sendable {
     }
 
     static let statusDidChange = Notification.Name("HubChainService.statusDidChange")
+    static let verifiedLifetime: TimeInterval = 5 * 60
 
     private let apiService: APIService
     private let cryptoService: CryptoService
@@ -184,7 +185,15 @@ final class HubChainService: @unchecked Sendable {
     /// not "checked".
     func assertSealable(hubId: String) async throws {
         var status = self.status(hubId: hubId)
-        if status == nil || status == Status.none {
+        // A verification is good for `verifiedLifetime`: after that, sealing
+        // re-checks the chain (a fork served since is caught), and a failed
+        // re-check refuses.
+        switch status {
+        case .fork?, .refused?:
+            break
+        case .verified(_, _, let at)? where Date().timeIntervalSince(at) < Self.verifiedLifetime:
+            break
+        default:
             status = try await load(hubId: hubId)
         }
         guard case .verified = status else { throw ChainError.sealingStopped(hubId: hubId) }

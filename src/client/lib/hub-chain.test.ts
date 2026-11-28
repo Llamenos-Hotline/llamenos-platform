@@ -126,6 +126,20 @@ describe('assertHubSealable fails closed', () => {
     await expect(assertHubSealable(hub)).rejects.toBeInstanceOf(HubSealingStoppedError)
   })
 
+  it('re-verifies once a verification is older than its lifetime, and refuses if the re-check fails', async () => {
+    const hub = newHub()
+    mocks.pages = [{ links: [link(hub, 1)], head: null, hasMore: false }]
+    mocks.verify.mockReturnValue(verified(hub, 1))
+    await assertHubSealable(hub)
+    vi.useFakeTimers({ now: Date.now() + 6 * 60 * 1000 })
+    try {
+      mocks.fetchFails = true
+      await expect(assertHubSealable(hub)).rejects.toThrow('network down')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('refuses to seal when the chain cannot be fetched', async () => {
     const hub = newHub()
     mocks.fetchFails = true

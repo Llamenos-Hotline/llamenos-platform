@@ -20,7 +20,7 @@ struct HubChainBanner: View {
                     title: NSLocalizedString("hub_chain_alert_refused_title", comment: "Hub chain refused"),
                     kind: code == "chain_unauthorised_signer" ? "unauthorised" : "invalid"
                 )
-            case .verified(_, let stale)? where stale > 0:
+            case .verified(_, let stale, _)? where stale > 0:
                 HStack(spacing: 12) {
                     Image(systemName: "exclamationmark.shield").foregroundStyle(.orange).accessibilityHidden(true)
                     Text(L10n.format("hub_chain_alert_stale_signer", comment: "Stale signer", stale))
