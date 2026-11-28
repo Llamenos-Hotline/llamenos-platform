@@ -33,20 +33,12 @@ enum HubAdminReaders {
             throw HubChainService.ChainError.sealingStopped(hubId: sealingHub)
         }
         try await chain.assertSealable(hubId: sealingHub)
-        // The path is spelled inside each `request(...)` so the API contract guard
-        // can read the route it reaches (a path held in a variable is "unresolved").
-        let response: HubReadersResponse
-        if let hubId {
-            response = try await apiService.request(
-                method: "GET",
-                path: APIService.hubPath(hubId, "/api/readers?purpose=\(ReaderPurpose.admin.rawValue)")
-            )
-        } else {
-            response = try await apiService.request(
-                method: "GET",
-                path: try apiService.activeHubPath("/api/readers?purpose=\(ReaderPurpose.admin.rawValue)")
-            )
-        }
+        // The readers of exactly the hub the gate just passed — never the active hub
+        // read a second time, which could have changed in between.
+        let response: HubReadersResponse = try await apiService.request(
+            method: "GET",
+            path: APIService.hubPath(sealingHub, "/api/readers?purpose=\(ReaderPurpose.admin.rawValue)")
+        )
         return try admins(from: response.recipients)
     }
 

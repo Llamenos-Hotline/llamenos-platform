@@ -80,15 +80,25 @@ final class HubChainService: @unchecked Sendable {
 
     // MARK: - Anchors (Keychain)
 
-    private func anchors() -> [String: Head] {
-        guard let data = try? keychainService.retrieve(key: KeychainKey.hubChainAnchors) else { return [:] }
-        return (try? JSONDecoder().decode([String: Head].self, from: data)) ?? [:]
+    /// Every anchor this device holds. Fails closed: a Keychain read error or an
+    /// unreadable value throws — it is never "no anchors", which would let a
+    /// server's empty or substituted chain be taken on first use again.
+    private func anchors() throws -> [String: Head] {
+        guard let data = try keychainService.retrieve(key: KeychainKey.hubChainAnchors) else { return [:] }
+        return try JSONDecoder().decode([String: Head].self, from: data)
     }
 
-    func anchor(hubId: String) -> Head? { anchors()[hubId] }
+    func anchor(hubId: String) throws -> Head? {
+        lock.lock(); defer { lock.unlock() }
+        return try anchors()[hubId]
+    }
 
+    /// Advance the anchor for `hubId` — never backwards — under the lock, so two
+    /// verifications racing cannot lower it.
     func setAnchor(hubId: String, head: Head) throws {
-        var all = anchors()
+        lock.lock(); defer { lock.unlock() }
+        var all = try anchors()
+        if let known = all[hubId], known.seq > head.seq { return }
         all[hubId] = head
         try keychainService.store(key: KeychainKey.hubChainAnchors, data: try JSONEncoder().encode(all))
     }
@@ -138,7 +148,7 @@ final class HubChainService: @unchecked Sendable {
     @discardableResult
     func load(hubId: String) async throws -> Status {
         let links = try await fetchLinks(hubId: hubId)
-        let anchor = anchor(hubId: hubId)
+        let anchor = try anchor(hubId: hubId)
         if links.isEmpty {
             return record(hubId, anchor.map { .fork("the server serves no chain, but this device verified seq \($0.seq)") } ?? .none)
         }
