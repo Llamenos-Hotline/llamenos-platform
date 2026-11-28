@@ -44,7 +44,7 @@ Measured 2026-11-05 and again **2026-11-14**:
 
 1. **macOS TCC "Removable Volumes" blocks the runner service.** The user TCC
    database has a `kTCCServiceSystemPolicyRemovableVolumes` row for
-   `/Users/rhonda/actions-runner-ios-1/externals/node20/bin/node` with
+   `$HOME/actions-runner-ios-1/externals/node20/bin/node` (the runner account's home) with
    `auth_value 0` (**denied**). A process started by launchd
    (`launchctl submit`, the same kind of context the runner's `runsvc.sh`
    LaunchAgent gives its children) gets `Operation not permitted` from `ls` and
@@ -441,3 +441,61 @@ Check with `gh api repos/Llamenos-Hotline/llamenos-platform/actions/runners --jq
 '.runners[]|[.name,.status,.busy]|@tsv'` against each directory's `.runner`. Removing the
 stale three is the operator's call. If anyone does, measure the space it frees with
 `df`, not `du`.
+
+## Per-runner Rust toolchains (`~/.ci-rust/<runner name>`, #3115)
+
+iOS jobs no longer install Rust into the asdf toolchain (`~/.asdf/installs/rust/...`)
+that every runner used to share: two jobs adding targets at once lost a rename race
+and failed "Install Rust stable" on a PR with nothing wrong in it. Each runner now
+keeps its own rustup and cargo home at `~/.ci-rust/<runner name>/{rustup,cargo}`
+(`.github/actions/mac-rust-toolchain`, `scripts/ci/mac-rust-toolchain.sh`).
+
+- **Cost:** about 0.75 GiB per runner on the internal volume (minimal profile, host
+  triple plus the two iOS targets), so ~1.5 GiB for the two registered runners (a stale, unregistered directory never runs a job and never gets one). It is not part of
+  `_work`, so the disk guard's work-volume sweep never reclaims it.
+- **Cold start:** the first job on a runner (or after deleting its directory) bootstraps
+  rustup and downloads the toolchain; every later job finds it warm.
+- **Reclaiming space:** `rm -rf ~/.ci-rust/<runner name>` when that runner is idle is safe;
+  the next job rebuilds it. Never delete a directory whose runner has a job in flight.
+- The asdf Rust install is still there for interactive use (`scripts/ios-build.sh` over
+  ssh). CI no longer reads or writes it.
+
+### Debugging the Rust toolchain on this host (what #3115 measured)
+
+Read this before changing the toolchain setup again; each point cost a debugging round.
+
+**The symptom to recognise.** Two concurrent iOS jobs on the two runners, one succeeding
+and one failing at "Install Rust stable" with
+
+```
+could not rename 'component' file from '<shared asdf toolchain>/lib/rustlib/...'
+```
+
+is this race. It is not a network or rate-limit problem, and retrying only passes by
+luck of timing. It ejected a fully green PR (#3107) from the merge queue with every one of
+that PR's own checks passing. Look for two iOS jobs overlapping in time, one of them
+failing at that step.
+
+**Pre-installing the iOS targets does not prevent the race.** On that host both
+`aarch64-apple-ios` and `aarch64-apple-ios-sim` were already installed, and
+`rustup target add` still failed with the rename error when two jobs ran it concurrently.
+rustup rewrites component metadata in the toolchain directory even when the target is
+present, so making the command a no-op is not a fix. The toolchain directory itself must
+not be shared between concurrent jobs.
+
+**The asdf shim trap.** On that host `rustup` resolves through an asdf shim, while the
+installation lives under the asdf installs tree. A change that sets `RUSTUP_HOME` per
+runner but leaves the shim resolving to the shared install **looks correct and changes
+nothing**. After any change here, verify that isolation actually bites, from inside a job
+or an equivalent shell for each runner:
+
+```sh
+# each runner must report ITS OWN home, never the asdf installs tree
+RUSTUP_HOME=<home>/.ci-rust/<runner name>/rustup \
+CARGO_HOME=<home>/.ci-rust/<runner name>/cargo \
+  rustup show home       # expect .../.ci-rust/<runner name>/rustup
+command -v rustup cargo  # expect the per-runner cargo/bin, not an asdf shim
+```
+
+If either answer points into the asdf installs tree, the runners still share a
+toolchain regardless of what the environment variables say.

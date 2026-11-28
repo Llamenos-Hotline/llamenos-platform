@@ -256,7 +256,7 @@ describe('the setup-bun HOME check rejects the defect it was written for', () =>
   })
 
   test('a HOME that is not per-runner is rejected', () => {
-    const fixed = { ...shared, env: { HOME: '/Users/rhonda' } }
+    const fixed = { ...shared, env: { HOME: '/opt/shared-home' } }
     expect(one({ 'runs-on': mac, steps: [fixed] })).toHaveLength(1)
   })
 

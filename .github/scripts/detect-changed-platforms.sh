@@ -110,7 +110,7 @@ IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/(schemas/|templates/
 # `scripts/`. `package.json`, `bun.lock` and `tsconfig*.json` ARE here: the job
 # runs `bun install --frozen-lockfile` and then codegen, so a dependency bump
 # can change the generated Swift.
-IOS_COMPILE_RE='^(apps/ios/|packages/crypto/|packages/protocol/(schemas/|templates/|generated/|(README\.md|crypto-format\.ts|crypto-formats\.json|crypto-labels\.json|package\.json|template-types\.ts)$|tools/(codegen|schema-registry)\.ts$)|packages/i18n/|package\.json$|bun\.lock|tsconfig[^/]*\.json$|scripts/ci/mac-runner-disk-guard(-wait)?\.sh$|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
+IOS_COMPILE_RE='^(apps/ios/|packages/crypto/|packages/protocol/(schemas/|templates/|generated/|(README\.md|crypto-format\.ts|crypto-formats\.json|crypto-labels\.json|package\.json|template-types\.ts)$|tools/(codegen|schema-registry)\.ts$)|packages/i18n/|package\.json$|bun\.lock|tsconfig[^/]*\.json$|scripts/ci/mac-runner-disk-guard(-wait)?\.sh$|scripts/ci/mac-rust-toolchain\.sh$|\.github/actions/mac-rust-toolchain/action\.yml$|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
 # No `.github/workflows/desktop-e2e\.yml$` term: that workflow no longer
 # exists. Its chromium tier is ci.yml's `desktop-e2e` job, and ci.yml is in

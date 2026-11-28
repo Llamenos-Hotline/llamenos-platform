@@ -187,6 +187,12 @@ function jobInputs(): Input[] {
 
   // Repo scripts the steps run, closed transitively over the scripts' own references.
   const queue: { path: string; text: string; dir: string }[] = [{ path: `${workflow}#${JOB}`, text, dir: '' }]
+  // A local composite action is itself a source of script references: what its
+  // `run:` steps execute is read by this job exactly as if the job ran it inline.
+  for (const m of text.matchAll(/uses:\s*\.\/(\.github\/actions\/[A-Za-z0-9_./-]+)/g)) {
+    const path = `${m[1] as string}/action.yml`
+    queue.push({ path, text: executable(read(path), path), dir: dirname(path) })
+  }
   const seen = new Set<string>()
   while (queue.length > 0) {
     const src = queue.shift() as { path: string; text: string; dir: string }
@@ -399,6 +405,8 @@ describe('break-it: the guard FAILS when a dependency is dropped from the filter
     ['|bun\\.lock', 'bun.lock'],
     ['|tsconfig[^/]*\\.json$', 'tsconfig.json'],
     ['|scripts/ci/mac-runner-disk-guard(-wait)?\\.sh$', 'scripts/ci/mac-runner-disk-guard-wait.sh'],
+    ['|scripts/ci/mac-rust-toolchain\\.sh$', 'scripts/ci/mac-rust-toolchain.sh'],
+    ['|\\.github/actions/mac-rust-toolchain/action\\.yml$', '.github/actions/mac-rust-toolchain/action.yml'],
     ['|\\.github/workflows/ci\\.yml$', '.github/workflows/ci.yml'],
     ['|\\.github/scripts/detect-changed-platforms\\.sh$', SCRIPT],
   ])('dropping %s reports %s', async (needle, mustReport) => {
