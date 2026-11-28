@@ -102,7 +102,7 @@ export async function hubAdminReaders(hubId: string | null): Promise<AdminHpkeRe
   // Every hub-content seal resolves its admin readers here, so this is where a
   // hub whose authority chain this device found forked or invalid stops
   // sealing (#2963): nothing is written to readers a forked server chose.
-  assertHubSealable(hubId)
+  await assertHubSealable(hubId)
   const { recipients } = await getHubReaders(hubId, 'admin')
   const readers: AdminHpkeRecipient[] = []
   for (const key of recipients) {

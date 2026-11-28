@@ -27,6 +27,9 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
 }))
 
+// These tests compose READERS. Whether the hub's authority chain lets this
+// device seal at all is lib/hub-chain's verdict, tested in hub-chain.test.ts.
+vi.mock('@/lib/hub-chain', () => ({ assertHubSealable: async () => {} }))
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 vi.mock('@/lib/auth', () => ({ useAuth: () => mocks.auth }))
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))

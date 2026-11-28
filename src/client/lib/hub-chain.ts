@@ -114,6 +114,11 @@ export async function loadHubChain(hubId: string): Promise<HubChainStatus> {
       userChains: await userChainsFor(links),
       ...(anchor ? { anchor } : {}),
     })
+    // The crate verified A chain; it must be THIS hub's, or a server could
+    // answer one hub's request with another hub's valid chain.
+    if (verified.hub !== hubId) {
+      return record(hubId, { kind: 'refused', code: 'chain_hub_mismatch', detail: `the served chain is hub ${verified.hub}'s, not ${hubId}'s` })
+    }
     await setHubChainAnchor(hubId, verified.head)
     return record(hubId, { kind: 'verified', verified, alerts: verified.alerts })
   } catch (err) {
@@ -131,10 +136,27 @@ export class HubSealingStoppedError extends Error {
   }
 }
 
-/** Refuse to seal in a hub whose chain this device found forked or invalid. */
-export function assertHubSealable(hubId: string): void {
-  const status = statuses.get(hubId)
-  if (status && (status.kind === 'fork' || status.kind === 'refused')) throw new HubSealingStoppedError(hubId, status)
+const inFlight = new Map<string, Promise<HubChainStatus>>()
+
+/**
+ * Refuse to seal in a hub unless this device has verified its chain (fail
+ * closed): with no verdict yet, the chain is loaded and verified first; a
+ * fork or a refused chain throws {@link HubSealingStoppedError}; a fetch
+ * failure throws too, because "could not check" is not "checked". A hub with
+ * no chain at all is sealable only while this device holds no anchor for it
+ * (`loadHubChain` records a fork otherwise).
+ */
+export async function assertHubSealable(hubId: string): Promise<void> {
+  let status = statuses.get(hubId)
+  if (!status) {
+    let pending = inFlight.get(hubId)
+    if (!pending) {
+      pending = loadHubChain(hubId).finally(() => inFlight.delete(hubId))
+      inFlight.set(hubId, pending)
+    }
+    status = await pending
+  }
+  if (status.kind === 'fork' || status.kind === 'refused') throw new HubSealingStoppedError(hubId, status)
 }
 
 /**
