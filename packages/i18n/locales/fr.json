@@ -463,7 +463,8 @@
     "stop": "Arrêter l'enregistrement",
     "micDenied": "L'accès au micro est nécessaire pour la saisie vocale. Activez-le dans Réglages > Confidentialité et sécurité > Micro.",
     "speechDenied": "L'autorisation de reconnaissance vocale est nécessaire pour la saisie vocale. Activez-la dans Réglages > Confidentialité et sécurité > Reconnaissance vocale.",
-    "unavailable": "La reconnaissance vocale n'est pas disponible sur cet appareil"
+    "unavailable": "La reconnaissance vocale n'est pas disponible sur cet appareil",
+    "onDeviceUnavailable": "La saisie vocale nécessite une reconnaissance vocale sur l'appareil, qui n'est pas disponible pour votre langue sur cet appareil. L'audio n'est jamais envoyé à un service cloud."
   },
   "auditLog": {
     "actor": "Acteur",
@@ -4510,7 +4511,8 @@
     "transcriptionError": "Erreur de transcription",
     "transcriptionStopped": "Transcription arretee",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "La transcription des appels nécessite une reconnaissance vocale sur l'appareil, qui n'est pas disponible pour cette langue sur cet appareil. L'audio n'est jamais envoyé à un service cloud."
   },
   "triage": {
     "caseCreated": "Dossier créé et lié",

@@ -1859,7 +1859,8 @@
     "transcriptionError": "Transcription error",
     "transcriptionStopped": "Transcription stopped",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Qoritaanka wicitaanka waxay u baahan tahay aqoonsiga hadalka ee qalabka laftiisa, kaas oo aan u diyaarsanayn luuqaddan qalabkan. Codka waligii looma diro adeeg daruur ah (cloud)."
   },
   "userProfile": {
     "activity": "Dhaqdhaqaaqa",
@@ -4555,7 +4556,8 @@
     "stop": "Stop recording",
     "micDenied": "Gelinta codka waxay u baahan tahay oggolaanshaha makarafoonka. Ka shid Settings > Privacy & Security > Microphone.",
     "speechDenied": "Gelinta codka waxay u baahan tahay oggolaanshaha aqoonsiga hadalka. Ka shid Settings > Privacy & Security > Speech Recognition.",
-    "unavailable": "Aqoonsiga hadalka laguma heli karo qalabkan"
+    "unavailable": "Aqoonsiga hadalka laguma heli karo qalabkan",
+    "onDeviceUnavailable": "Gelinta codka waxay u baahan tahay aqoonsiga hadalka ee qalabka laftiisa, kaas oo aan u diyaarsanayn luuqaddaada qalabkan. Codka waligii looma diro adeeg daruur ah (cloud)."
   },
   "biometric": {
     "cancel": "Use PIN",

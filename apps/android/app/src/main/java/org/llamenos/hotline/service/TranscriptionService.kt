@@ -32,8 +32,8 @@ sealed interface TranscriptionState {
 
 /**
  * On-device speech transcription using Android's SpeechRecognizer.
- * Audio never leaves the device — all processing uses on-device recognition
- * when available (Android 12+). Supports real-time streaming transcription
+ * Audio never leaves the device — recognition is on-device only (Android 12+); when the
+ * device has no on-device recognizer transcription is unavailable, never cloud-backed. Supports real-time streaming transcription
  * during calls.
  *
  * Injected as a singleton via Hilt. Manages SpeechRecognizer lifecycle
@@ -54,14 +54,12 @@ class TranscriptionService @Inject constructor(
     private val _finalTranscript = MutableStateFlow("")
     val finalTranscript: StateFlow<String> = _finalTranscript.asStateFlow()
 
-    /** Whether speech recognition is available on this device. */
+    /**
+     * Whether on-device speech recognition is available (Android 12+ with an on-device model).
+     * Transcription never uses the default (cloud) recognition service (#2951).
+     */
     val isAvailable: Boolean
-        get() = SpeechRecognizer.isRecognitionAvailable(context)
-
-    /** Whether on-device recognition is available (Android 12+). */
-    val isOnDeviceAvailable: Boolean
-        get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        get() = OnDeviceSpeech.isAvailable(context)
 
     // MARK: - Preferences
 
@@ -93,9 +91,10 @@ class TranscriptionService @Inject constructor(
     fun startTranscription() {
         if (_state.value == TranscriptionState.Transcribing) return
 
-        if (!isAvailable) {
+        val recognizer = OnDeviceSpeech.create(context)
+        if (recognizer == null) {
             _state.value = TranscriptionState.Error(
-                context.getString(org.llamenos.hotline.R.string.transcription_speech_recognition_unavailable)
+                context.getString(org.llamenos.hotline.R.string.transcription_on_device_unavailable)
             )
             return
         }
@@ -103,12 +102,6 @@ class TranscriptionService @Inject constructor(
         accumulatedTranscript.clear()
         _liveTranscript.value = ""
         _finalTranscript.value = ""
-
-        val recognizer = if (isOnDeviceAvailable) {
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-        } else {
-            SpeechRecognizer.createSpeechRecognizer(context)
-        }
 
         recognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
@@ -236,10 +229,9 @@ class TranscriptionService @Inject constructor(
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
             }
 
-            // Request on-device recognition for privacy (Android 13+)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            }
+            // The recognizer is on-device by construction (OnDeviceSpeech.create); this extra
+            // only tells the on-device service not to reach for the network either.
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         }
     }
 

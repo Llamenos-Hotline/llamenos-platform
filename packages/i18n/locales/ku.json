@@ -1859,7 +1859,8 @@
     "transcriptionError": "Transcription error",
     "transcriptionStopped": "Transcription stopped",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Nivîsandina bangê hewceyî naskirina axaftinê ya li ser cihaza xwe ye, ku ji bo vî zimanî li ser vê cihazê peyda nabe. Deng qet nayê şandin bo karûbarekî ewr."
   },
   "userProfile": {
     "activity": "Çalakî",
@@ -4555,7 +4556,8 @@
     "stop": "Stop recording",
     "micDenied": "Microphone access is required for voice input. Enable it in Settings > Privacy & Security > Microphone.",
     "speechDenied": "Speech recognition permission is required for voice input. Enable it in Settings > Privacy & Security > Speech Recognition.",
-    "unavailable": "Speech recognition is not available on this device"
+    "unavailable": "Speech recognition is not available on this device",
+    "onDeviceUnavailable": "Têketina dengî hewceyî naskirina axaftinê ya li ser cihaza xwe ye, ku ji bo zimanê te li ser vê cihazê peyda nabe. Deng qet nayê şandin bo karûbarekî ewr."
   },
   "biometric": {
     "cancel": "Use PIN",

@@ -11,7 +11,8 @@ import SwiftUI
 /// - `NSSpeechRecognitionUsageDescription` in Info.plist
 /// - `NSMicrophoneUsageDescription` in Info.plist
 ///
-/// Falls back gracefully if permissions are denied or speech recognition is unavailable.
+/// Recognition is on-device only (#2951): when the locale has no on-device model the button
+/// is disabled and says why. It never falls back to Apple's servers.
 struct AudioInputButton: View {
     /// Binding to the text field that receives transcribed audio.
     @Binding var text: String
@@ -22,7 +23,9 @@ struct AudioInputButton: View {
         @Bindable var service = speechService
 
         Button {
-            if speechService.isRecording {
+            if !speechService.isOnDeviceAvailable {
+                speechService.reportOnDeviceUnavailable()
+            } else if speechService.isRecording {
                 speechService.stopRecording()
             } else {
                 Task {
@@ -33,6 +36,7 @@ struct AudioInputButton: View {
             Image(systemName: speechService.isRecording ? "mic.fill" : "mic")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(speechService.isRecording ? .white : Color.brandPrimary)
+                .opacity(speechService.isOnDeviceAvailable ? 1 : 0.4)
                 .frame(width: 36, height: 36)
                 .background(
                     Circle()
@@ -45,6 +49,11 @@ struct AudioInputButton: View {
             speechService.isRecording
                 ? NSLocalizedString("audio_input_stop", comment: "Stop recording")
                 : NSLocalizedString("audio_input_start", comment: "Start voice input")
+        )
+        .accessibilityHint(
+            speechService.isOnDeviceAvailable
+                ? ""
+                : NSLocalizedString("audio_input_on_device_unavailable", comment: "On-device speech recognition unavailable")
         )
         .accessibilityIdentifier("audio-input-button")
         .alert(
@@ -91,8 +100,23 @@ final class SpeechInputService {
     /// Text captured before this recording session started (to avoid overwriting).
     private var preRecordingText: String = ""
 
+    /// Whether this device can recognise the current locale without the network. When false
+    /// the mic button explains why instead of starting a session.
+    var isOnDeviceAvailable: Bool {
+        speechRecognizer?.supportsOnDeviceRecognition ?? false
+    }
+
     init() {
         self.speechRecognizer = SFSpeechRecognizer(locale: Locale.current)
+    }
+
+    /// Tell the user why dictation is unavailable (no on-device model for their language).
+    func reportOnDeviceUnavailable() {
+        permissionMessage = NSLocalizedString(
+            "audio_input_on_device_unavailable",
+            comment: "Voice input needs on-device speech recognition, which is unavailable for this language"
+        )
+        showPermissionAlert = true
     }
 
     // MARK: - Start Recording
@@ -100,6 +124,13 @@ final class SpeechInputService {
     /// Request permissions and begin live transcription, appending to the bound text.
     func startRecording(appendTo binding: Binding<String>) async {
         textBinding = binding
+
+        // Fail closed before asking for any permission: without an on-device model the only
+        // way to recognise this locale is Apple's servers, which dictation must never use.
+        guard isOnDeviceAvailable else {
+            reportOnDeviceUnavailable()
+            return
+        }
 
         // Check speech recognition authorization
         let speechStatus = await withCheckedContinuation { continuation in
@@ -155,6 +186,8 @@ final class SpeechInputService {
 
         do {
             try beginRecognitionSession(speechRecognizer: speechRecognizer)
+        } catch OnDeviceSpeech.OnDeviceSpeechError.onDeviceUnavailable {
+            reportOnDeviceUnavailable()
         } catch {
             permissionMessage = error.localizedDescription
             showPermissionAlert = true
@@ -189,13 +222,8 @@ final class SpeechInputService {
     }
 
     private func beginRecognitionSession(speechRecognizer: SFSpeechRecognizer) throws {
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-
-        // Use on-device recognition if available (privacy: audio never leaves device)
-        if speechRecognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
-        }
+        // On-device only; throws (and no audio is captured) if the locale has no local model.
+        let request = try OnDeviceSpeech.makeRequest(for: speechRecognizer)
 
         self.recognitionRequest = request
 

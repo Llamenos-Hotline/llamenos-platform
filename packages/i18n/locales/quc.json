@@ -1859,7 +1859,8 @@
     "transcriptionError": "Transcription error",
     "transcriptionStopped": "Transcription stopped",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "La transcripción de llamadas necesita reconocimiento de voz en el dispositivo, que no está disponible para este idioma en este dispositivo. El audio nunca se envía a un servicio en la nube."
   },
   "userProfile": {
     "activity": "B'antajik",
@@ -4555,7 +4556,8 @@
     "stop": "Stop recording",
     "micDenied": "Microphone access is required for voice input. Enable it in Settings > Privacy & Security > Microphone.",
     "speechDenied": "Speech recognition permission is required for voice input. Enable it in Settings > Privacy & Security > Speech Recognition.",
-    "unavailable": "Speech recognition is not available on this device"
+    "unavailable": "Speech recognition is not available on this device",
+    "onDeviceUnavailable": "La entrada de voz necesita reconocimiento de voz en el dispositivo, que no está disponible para tu idioma en este dispositivo. El audio nunca se envía a un servicio en la nube."
   },
   "biometric": {
     "cancel": "Use PIN",

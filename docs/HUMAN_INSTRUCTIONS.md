@@ -693,8 +693,10 @@ identifiers, and configuration values are consistent across the project.
       is needed. `tauri-release.yml` builds from the monorepo directly.
 - [ ] **All GitHub Secrets from Section 7** are set and populated
 - [ ] **CSP `connect-src`** in `apps/desktop/tauri.conf.json` is
-      `ipc: http://ipc.localhost` — it lists no remote origin, because the desktop
+      `'self' ipc: http://ipc.localhost` — it lists no remote origin, because the desktop
       app reaches the API through the Rust side over Tauri IPC, not from the webview.
+      `'self'` is the app's own bundle only: the transcription worker reads the bundled,
+      hash-pinned Whisper models from it (#2951); it is never a path to a model host.
       If a remote origin is ever added it must be the production API domain,
       `https://api.<domain>` (`https://api.llamenos-hotline.org` for the reference
       deployment). `app.<domain>` is **not** the API domain: nothing serves it — no DNS

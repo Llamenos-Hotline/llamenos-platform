@@ -463,7 +463,8 @@
     "stop": "إيقاف التسجيل",
     "micDenied": "يلزم الوصول إلى الميكروفون للإدخال الصوتي. فعّله من الإعدادات > الخصوصية والأمن > الميكروفون.",
     "speechDenied": "يلزم إذن التعرف على الكلام للإدخال الصوتي. فعّله من الإعدادات > الخصوصية والأمن > التعرف على الكلام.",
-    "unavailable": "التعرف على الكلام غير متاح على هذا الجهاز"
+    "unavailable": "التعرف على الكلام غير متاح على هذا الجهاز",
+    "onDeviceUnavailable": "يتطلب الإدخال الصوتي التعرّف على الكلام على الجهاز نفسه، وهو غير متاح للغتك على هذا الجهاز. لا يُرسَل الصوت أبدًا إلى أي خدمة سحابية."
   },
   "auditLog": {
     "actor": "الفاعل",
@@ -4510,7 +4511,8 @@
     "transcriptionError": "خطأ في النسخ",
     "transcriptionStopped": "تم ايقاف النسخ",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "يتطلب نسخ المكالمات نصيًا التعرّف على الكلام على الجهاز نفسه، وهو غير متاح لهذه اللغة على هذا الجهاز. لا يُرسَل الصوت أبدًا إلى أي خدمة سحابية."
   },
   "triage": {
     "caseCreated": "تم إنشاء القضية وربطها",

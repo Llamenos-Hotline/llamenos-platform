@@ -1859,7 +1859,8 @@
     "transcriptionError": "Transcription error",
     "transcriptionStopped": "Transcription stopped",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Çağrı transkripsiyonu, cihaz üzerinde konuşma tanıma gerektirir; bu özellik bu cihazda bu dil için kullanılamıyor. Ses hiçbir zaman bir bulut hizmetine gönderilmez."
   },
   "userProfile": {
     "activity": "Etkinlik",
@@ -4555,7 +4556,8 @@
     "stop": "Stop recording",
     "micDenied": "Sesli giriş için mikrofon erişimi gerekir. Ayarlar > Gizlilik ve Güvenlik > Mikrofon bölümünden etkinleştirin.",
     "speechDenied": "Sesli giriş için konuşma tanıma izni gerekir. Ayarlar > Gizlilik ve Güvenlik > Konuşma Tanıma bölümünden etkinleştirin.",
-    "unavailable": "Bu cihazda konuşma tanıma kullanılamıyor"
+    "unavailable": "Bu cihazda konuşma tanıma kullanılamıyor",
+    "onDeviceUnavailable": "Sesli giriş, cihaz üzerinde konuşma tanıma gerektirir; bu özellik bu cihazda diliniz için kullanılamıyor. Ses hiçbir zaman bir bulut hizmetine gönderilmez."
   },
   "biometric": {
     "cancel": "Use PIN",

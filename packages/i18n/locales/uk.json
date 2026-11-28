@@ -1859,7 +1859,8 @@
     "transcriptionError": "Transcription error",
     "transcriptionStopped": "Transcription stopped",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Для транскрибування дзвінків потрібне розпізнавання мовлення на пристрої, яке недоступне для цієї мови на цьому пристрої. Аудіо ніколи не надсилається до хмарного сервісу."
   },
   "userProfile": {
     "activity": "Активність",
@@ -4555,7 +4556,8 @@
     "stop": "Stop recording",
     "micDenied": "Для голосового введення потрібен доступ до мікрофона. Увімкніть його в Параметри > Приватність і безпека > Мікрофон.",
     "speechDenied": "Для голосового введення потрібен дозвіл на розпізнавання мовлення. Увімкніть його в Параметри > Приватність і безпека > Розпізнавання мовлення.",
-    "unavailable": "Розпізнавання мовлення недоступне на цьому пристрої"
+    "unavailable": "Розпізнавання мовлення недоступне на цьому пристрої",
+    "onDeviceUnavailable": "Для голосового введення потрібне розпізнавання мовлення на пристрої, яке недоступне для вашої мови на цьому пристрої. Аудіо ніколи не надсилається до хмарного сервісу."
   },
   "biometric": {
     "cancel": "Use PIN",

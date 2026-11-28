@@ -10,6 +10,13 @@ import {
   type AutomaticSpeechRecognitionPipeline,
   type AutomaticSpeechRecognitionOutput,
 } from '@huggingface/transformers'
+import {
+  configureOfflineEnv,
+  loadVerifiedModel,
+  modelPin,
+  verifyRuntime,
+  type OfflineEnv,
+} from './model-assets'
 
 // Force single-threaded WASM — avoids SharedArrayBuffer / COEP requirement
 // that would break Twilio Voice SDK
@@ -17,9 +24,10 @@ if (env.backends?.onnx?.wasm) {
   env.backends.onnx.wasm.numThreads = 1
 }
 
-// Disable remote model loading — we'll only use approved models
-// Models are fetched from HF Hub by default; self-hosting can be configured
-// by setting env.localModelPath and env.allowRemoteModels = false
+// Models and the ONNX runtime ship inside the app and are verified against pinned SHA-256
+// digests before use (#2951). Remote loading is disabled in `init` via configureOfflineEnv:
+// the worker never contacts a model host or CDN, so a model download cannot reveal that this
+// client transcribes and no unpinned model bytes are ever executed.
 
 type WorkerMessage =
   | { type: 'init'; model: string; language: string }
@@ -37,17 +45,17 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       try {
         self.postMessage({ type: 'status', status: 'loading' })
 
-        // Map our model names to HF Hub model IDs
-        // Use onnx-community models which have proper quantized ONNX exports
-        const modelMap: Record<string, string> = {
-          'tiny': 'onnx-community/whisper-tiny',
-          'tiny.en': 'onnx-community/whisper-tiny.en',
-          'base': 'onnx-community/whisper-base',
-          'base.en': 'onnx-community/whisper-base.en',
-        }
-
-        const modelId = modelMap[msg.model] || modelMap['tiny.en']
+        // `msg.model` selects a pinned entry in model-manifest.json; an unknown name is an error,
+        // never a default — substituting another model would run bytes the user did not choose.
+        const pin = modelPin(msg.model)
         modelLanguage = msg.language || 'en'
+
+        // Read every file from the app's own origin and prove it matches its pin BEFORE the
+        // pipeline sees it. A missing or tampered file fails here, loudly.
+        const fetchLocal = (url: string) => fetch(url, { cache: 'no-store' })
+        const verified = await loadVerifiedModel(msg.model, fetchLocal)
+        const runtime = configureOfflineEnv(env as unknown as OfflineEnv, verified)
+        await verifyRuntime(runtime, fetchLocal)
 
         // Dynamic import to avoid TypeScript union explosion from pipeline() overloads
         const { pipeline } = await import('@huggingface/transformers')
@@ -57,7 +65,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           options: Record<string, unknown>,
         ) => Promise<AutomaticSpeechRecognitionPipeline>)(
           'automatic-speech-recognition',
-          modelId,
+          pin.repo,
           {
             dtype: 'q8',  // 8-bit quantized — best balance of size and quality for WASM
             device: 'wasm',

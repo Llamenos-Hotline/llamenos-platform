@@ -463,7 +463,8 @@
     "stop": "Kanpe anrejistreman",
     "micDenied": "Ou bezwen bay aksè mikwofòn nan pou antre vwa. Aktive l nan Settings > Privacy & Security > Microphone.",
     "speechDenied": "Ou bezwen bay pèmisyon rekonesans vwa pou antre vwa. Aktive l nan Settings > Privacy & Security > Speech Recognition.",
-    "unavailable": "Rekonesans vwa pa disponib sou aparèy sa a"
+    "unavailable": "Rekonesans vwa pa disponib sou aparèy sa a",
+    "onDeviceUnavailable": "Antre vwa mande rekonesans vwa ki fèt sou aparèy la menm, ki pa disponib pou lang ou sou aparèy sa a. Yo pa janm voye son an bay yon sèvis nan nyaj."
   },
   "auditLog": {
     "actor": "Aktè",
@@ -4510,7 +4511,8 @@
     "transcriptionError": "Erè transkripsyon",
     "transcriptionStopped": "Transkripsyon kanpe",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Transkripsyon apèl mande rekonesans vwa ki fèt sou aparèy la menm, ki pa disponib pou lang sa a sou aparèy sa a. Yo pa janm voye son an bay yon sèvis nan nyaj."
   },
   "triage": {
     "caseCreated": "Dosye kreye epi lye",

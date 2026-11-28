@@ -463,7 +463,8 @@
     "stop": "Detener grabación",
     "micDenied": "Se necesita acceso al micrófono para la entrada de voz. Actívalo en Ajustes > Privacidad y seguridad > Micrófono.",
     "speechDenied": "Se necesita permiso de reconocimiento de voz para la entrada de voz. Actívalo en Ajustes > Privacidad y seguridad > Reconocimiento de voz.",
-    "unavailable": "El reconocimiento de voz no está disponible en este dispositivo"
+    "unavailable": "El reconocimiento de voz no está disponible en este dispositivo",
+    "onDeviceUnavailable": "La entrada de voz necesita reconocimiento de voz en el dispositivo, que no está disponible para tu idioma en este dispositivo. El audio nunca se envía a un servicio en la nube."
   },
   "auditLog": {
     "actor": "Actor",
@@ -4510,7 +4511,8 @@
     "transcriptionError": "Error de transcripcion",
     "transcriptionStopped": "Transcripcion detenida",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "La transcripción de llamadas necesita reconocimiento de voz en el dispositivo, que no está disponible para este idioma en este dispositivo. El audio nunca se envía a un servicio en la nube."
   },
   "triage": {
     "caseCreated": "Caso creado y vinculado al reporte",

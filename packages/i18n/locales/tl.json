@@ -463,7 +463,8 @@
     "stop": "Itigil ang recording",
     "micDenied": "Microphone access is required for voice input. Enable it in Settings > Privacy & Security > Microphone.",
     "speechDenied": "Speech recognition permission is required for voice input. Enable it in Settings > Privacy & Security > Speech Recognition.",
-    "unavailable": "Speech recognition is not available on this device"
+    "unavailable": "Speech recognition is not available on this device",
+    "onDeviceUnavailable": "Kailangan ng voice input ng speech recognition na tumatakbo sa mismong device, na hindi available para sa wika mo sa device na ito. Hindi kailanman ipinapadala ang audio sa isang cloud service."
   },
   "auditLog": {
     "actor": "Aktor",
@@ -4510,7 +4511,8 @@
     "transcriptionError": "Error sa transkripsyon",
     "transcriptionStopped": "Itinigil ang transkripsyon",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Kailangan ng transkripsyon ng tawag ng speech recognition na tumatakbo sa mismong device, na hindi available para sa wikang ito sa device na ito. Hindi kailanman ipinapadala ang audio sa isang cloud service."
   },
   "triage": {
     "caseCreated": "Nalikha at naka-link",

@@ -1859,7 +1859,8 @@
     "transcriptionError": "Transcription error",
     "transcriptionStopped": "Transcription stopped",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "ဖုန်းခေါ်ဆိုမှု စာသားပြောင်းရန် စက်ထဲတွင်ပင် လုပ်ဆောင်သော စကားပြောအသံ မှတ်သားမှု လိုအပ်ပါသည်။ ၎င်းသည် ဤစက်ပေါ်တွင် ဤဘာသာစကားအတွက် မရနိုင်ပါ။ အသံကို cloud ဝန်ဆောင်မှုသို့ ဘယ်တော့မှ မပို့ပါ။"
   },
   "userProfile": {
     "activity": "လုပ်ဆောင်ချက်",
@@ -4555,7 +4556,8 @@
     "stop": "Stop recording",
     "micDenied": "Microphone access is required for voice input. Enable it in Settings > Privacy & Security > Microphone.",
     "speechDenied": "Speech recognition permission is required for voice input. Enable it in Settings > Privacy & Security > Speech Recognition.",
-    "unavailable": "Speech recognition is not available on this device"
+    "unavailable": "Speech recognition is not available on this device",
+    "onDeviceUnavailable": "အသံဖြင့်ထည့်သွင်းရန် စက်ထဲတွင်ပင် လုပ်ဆောင်သော စကားပြောအသံ မှတ်သားမှု လိုအပ်ပါသည်။ ၎င်းသည် ဤစက်ပေါ်တွင် သင့်ဘာသာစကားအတွက် မရနိုင်ပါ။ အသံကို cloud ဝန်ဆောင်မှုသို့ ဘယ်တော့မှ မပို့ပါ။"
   },
   "biometric": {
     "cancel": "Use PIN",

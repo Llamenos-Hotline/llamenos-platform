@@ -12,11 +12,13 @@
 
 import i18next from 'i18next'
 
-export type TranscriptionModel = 'tiny' | 'tiny.en' | 'base' | 'base.en'
+import type { TranscriptionModel } from './model-assets'
+
+export type { TranscriptionModel }
 
 export type TranscriptionStatus =
   | 'idle'
-  | 'loading'        // Model downloading/initializing
+  | 'loading'        // Verifying and initializing the bundled model
   | 'ready'          // Model loaded, waiting to start
   | 'capturing'      // Audio capture active, transcribing chunks
   | 'finalizing'     // Final chunk processing
@@ -75,8 +77,8 @@ export class TranscriptionManager {
   }
 
   /**
-   * Initialize the transcription model. Downloads on first use (~40-75MB),
-   * then cached by the browser / transformers.js cache.
+   * Initialize the transcription model. The model ships inside the app and is verified
+   * against its pinned SHA-256 at load; nothing is downloaded and no model host is contacted.
    */
   async initialize(): Promise<void> {
     if (this.status !== 'idle' && this.status !== 'error') return
@@ -100,7 +102,7 @@ export class TranscriptionManager {
 
       // Initialize the model in the worker
       await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Model initialization timed out')), 300_000) // 5 min for download
+        const timeout = setTimeout(() => reject(new Error('Model initialization timed out')), 120_000) // verify + load bundled model
         const originalHandler = worker.onmessage
         worker.onmessage = (event) => {
           const msg = event.data

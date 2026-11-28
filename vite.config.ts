@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
@@ -45,8 +45,27 @@ function wsProxyTarget(): string {
   return apiProxyTarget().replace(/^http/, 'ws')
 }
 
+/**
+ * Serve the bundled ONNX runtime files (public/models/ort/, #2951) as plain static assets in
+ * `vite dev`. The transcription worker imports `ort-wasm-simd-threaded*.mjs` by URL; the dev
+ * server's import analysis appends `?import`, which it then refuses for files under /public.
+ * A production build copies the file as-is, so only the dev server needs this.
+ */
+function servePinnedOnnxRuntime(): Plugin {
+  return {
+    name: 'llamenos:pinned-onnx-runtime',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        if (req.url?.startsWith('/models/ort/')) req.url = req.url.split('?')[0]
+        next()
+      })
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
+    servePinnedOnnxRuntime(),
     tanstackRouter({
       target: 'react',
       autoCodeSplitting: true,

@@ -463,7 +463,8 @@
     "stop": "Dừng ghi âm",
     "micDenied": "Cần quyền truy cập micrô để nhập bằng giọng nói. Hãy bật trong Cài đặt > Quyền riêng tư & Bảo mật > Micrô.",
     "speechDenied": "Cần quyền nhận dạng giọng nói để nhập bằng giọng nói. Hãy bật trong Cài đặt > Quyền riêng tư & Bảo mật > Nhận dạng giọng nói.",
-    "unavailable": "Nhận dạng giọng nói không khả dụng trên thiết bị này"
+    "unavailable": "Nhận dạng giọng nói không khả dụng trên thiết bị này",
+    "onDeviceUnavailable": "Nhập liệu bằng giọng nói cần tính năng nhận dạng giọng nói ngay trên thiết bị, nhưng tính năng này không có cho ngôn ngữ của bạn trên thiết bị này. Âm thanh không bao giờ được gửi đến dịch vụ đám mây."
   },
   "auditLog": {
     "actor": "Người thực hiện",
@@ -4510,7 +4511,8 @@
     "transcriptionError": "Loi phien am",
     "transcriptionStopped": "Da dung phien am",
     "initializationFailed": "Initialization failed",
-    "microphoneAccessDenied": "Microphone access denied"
+    "microphoneAccessDenied": "Microphone access denied",
+    "onDeviceUnavailable": "Chép lời cuộc gọi cần tính năng nhận dạng giọng nói ngay trên thiết bị, nhưng tính năng này không có cho ngôn ngữ này trên thiết bị này. Âm thanh không bao giờ được gửi đến dịch vụ đám mây."
   },
   "triage": {
     "caseCreated": "Hồ sơ đã tạo và liên kết",
