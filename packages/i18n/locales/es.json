@@ -1274,7 +1274,9 @@
         "failed": "Failed",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rechazado",
+        "suspended": "Suspendido"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4624,7 +4626,8 @@
     "noActivity": "Sin actividad registrada",
     "noChannels": "No messaging",
     "noShifts": "Sin turnos asignados",
-    "selectChannels": "Select channels"
+    "selectChannels": "Select channels",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Activo",
@@ -4802,5 +4805,8 @@
     "push": "Hay actividad en su línea que requiere atención.",
     "signalAlert": "Alerta de la línea — {{category}}: {{state}}. Abra la aplicación para ver los detalles.",
     "title": "Incidentes activos"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

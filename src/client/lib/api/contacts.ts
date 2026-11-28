@@ -1,5 +1,5 @@
 import { request, activeHubPath } from './client'
-import type { ContactTimelineSummary, CallRecord, Conversation, EncryptedNote } from '@protocol/schemas'
+import type { ContactTimelineSummary, CallRecord, Conversation, EncryptedNote, ContactTimelineDetailResponse, ContactTimelineListResponse } from '@protocol/schemas'
 
 // Contacts (Epic 123)
 export type { ContactTimelineSummary }
@@ -18,9 +18,9 @@ export async function listContacts(params?: { page?: number; limit?: number }) {
   const qs = new URLSearchParams()
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ contacts: ContactSummary[]; total: number }>(activeHubPath(`/contacts?${qs}`))
+  return request<ContactTimelineListResponse>(activeHubPath(`/contacts?${qs}`))
 }
 
 export async function getContactTimeline(hash: string) {
-  return request<ContactTimeline>(activeHubPath(`/contacts/${hash}`))
+  return request<ContactTimelineDetailResponse>(activeHubPath(`/contacts/${hash}`))
 }

@@ -3,6 +3,7 @@ import type {
   FirehoseConnection,
   FirehoseConnectionHealth,
 } from '@protocol/schemas/firehose'
+import type { CreateFirehoseConnectionInput, UpdateFirehoseConnectionInput } from '@protocol/schemas'
 
 export type { FirehoseConnection, FirehoseConnectionHealth }
 
@@ -16,35 +17,14 @@ export async function getFirehoseConnection(id: string) {
   return request<{ connection: FirehoseConnection }>(hp(`/firehose/${id}`))
 }
 
-export async function createFirehoseConnection(data: {
-  displayName?: string
-  reportTypeId: string
-  geoContext?: string
-  geoContextCountryCodes?: string[]
-  inferenceEndpoint?: string
-  extractionIntervalSec?: number
-  systemPromptSuffix?: string
-  bufferTtlDays?: number
-  notifyViaSignal?: boolean
-}) {
+export async function createFirehoseConnection(data: CreateFirehoseConnectionInput) {
   return request<{ connection: FirehoseConnection }>(hp('/firehose'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
-export async function updateFirehoseConnection(id: string, data: Partial<{
-  displayName: string
-  reportTypeId: string
-  geoContext: string | null
-  geoContextCountryCodes: string[] | null
-  inferenceEndpoint: string | null
-  extractionIntervalSec: number
-  systemPromptSuffix: string | null
-  bufferTtlDays: number
-  notifyViaSignal: boolean
-  status: 'active' | 'paused' | 'disabled'
-}>) {
+export async function updateFirehoseConnection(id: string, data: UpdateFirehoseConnectionInput) {
   return request<{ connection: FirehoseConnection }>(hp(`/firehose/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(data),

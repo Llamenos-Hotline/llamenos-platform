@@ -5,7 +5,7 @@ import SwiftUI
 /// Detail view for a triage report. Shows report content, metadata, and a
 /// "Convert to Case" button that creates a new case record from the report.
 struct TriageDetailView: View {
-    let report: SharedConversation
+    let report: ReportConversation
     let viewModel: TriageViewModel
 
     @Environment(AppState.self) private var appState
@@ -204,7 +204,7 @@ struct TriageDetailView: View {
 #Preview("Triage Detail") {
     NavigationStack {
         TriageDetailView(
-            report: SharedConversation(
+            report: ReportConversation(
                 assignedTo: nil,
                 channelType: "reports",
                 contactIdentifierHash: "hash",
@@ -212,7 +212,7 @@ struct TriageDetailView: View {
                 id: "preview-1",
                 lastMessageAt: nil,
                 messageCount: 2,
-                metadata: Metadata(
+                metadata: SharedReportConversationMetadata(
                     conversionStatus: nil,
                     customFieldValues: nil,
                     linkedCallID: nil,

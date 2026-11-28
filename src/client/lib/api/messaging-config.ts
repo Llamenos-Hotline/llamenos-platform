@@ -1,7 +1,8 @@
 import { request } from './client'
-import type { MessagingConfig } from '@shared/types'
+import type { MessagingConfig } from '@protocol/schemas'
 
-export type { MessagingConfig, EnabledChannels } from '@shared/types'
+export type { MessagingConfig }
+export type { EnabledChannels } from '@shared/types'
 
 // --- Messaging Config ---
 
@@ -9,7 +10,7 @@ export async function getMessagingConfig() {
   return request<MessagingConfig>('/settings/messaging')
 }
 
-export async function updateMessagingConfig(data: Partial<MessagingConfig>) {
+export async function updateMessagingConfig(data: MessagingConfig) {
   return request<MessagingConfig>('/settings/messaging', {
     method: 'PATCH',
     body: JSON.stringify(data),

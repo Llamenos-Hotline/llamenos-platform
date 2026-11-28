@@ -1,7 +1,8 @@
 import { request, activeHubPath } from './client'
-import type { ConversionStatus, Report } from './reports'
+import type { ConversionStatus } from './reports'
 import { createRecord } from './records'
 import type { CreateRecordBody } from '@protocol/schemas/records'
+import type { Report, ReportLinkedCasesResponse, ReportListResponse } from '@protocol/schemas'
 
 // --- Triage Queue (Epic 342) ---
 
@@ -10,7 +11,7 @@ export async function listTriageQueue(params?: { conversionStatus?: ConversionSt
   if (params?.conversionStatus) qs.set('conversionStatus', params.conversionStatus)
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ conversations: Report[]; total: number }>(activeHubPath(`/reports?${qs}`))
+  return request<ReportListResponse>(activeHubPath(`/reports?${qs}`))
 }
 
 export async function updateReportConversionStatus(reportId: string, conversionStatus: ConversionStatus) {
@@ -21,7 +22,7 @@ export async function updateReportConversionStatus(reportId: string, conversionS
 }
 
 export async function getLinkedCasesForReport(reportId: string) {
-  return request<{ records: Array<{ reportId: string; caseId: string; linkedAt: string; linkedBy: string }>; total: number }>(activeHubPath(`/reports/${reportId}/records`))
+  return request<ReportLinkedCasesResponse>(activeHubPath(`/reports/${reportId}/records`))
 }
 
 export async function createCaseFromReport(

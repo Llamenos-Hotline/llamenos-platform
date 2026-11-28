@@ -14,15 +14,18 @@ export const shiftJoinRequestResponseSchema = z.object({
   reviewedAt: z.string().nullable(),
   createdAt: z.string(),
 })
+export type ShiftJoinRequestResponse = z.infer<typeof shiftJoinRequestResponseSchema>
 
 export const shiftJoinRequestListResponseSchema = z.object({
   requests: z.array(shiftJoinRequestResponseSchema),
 })
+export type ShiftJoinRequestListResponse = z.infer<typeof shiftJoinRequestListResponseSchema>
 
 export const createShiftJoinRequestBodySchema = z.object({
   shiftId: z.string(),
   type: requestTypeSchema,
 })
+export type CreateShiftJoinRequestBody = z.input<typeof createShiftJoinRequestBodySchema>
 
 export const reviewShiftJoinRequestBodySchema = z.object({
   status: z.enum(['approved', 'denied']),

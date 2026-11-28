@@ -56,13 +56,14 @@ export type TypeImportMap = Map<string, string>
 
 
 function apiClientFiles(): string[] {
-  const files = [API_MONOLITH]
-  for (const entry of readdirSync(API_DIR, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-      files.push(join(API_DIR, entry.name))
-    }
-  }
-  return files
+  // readdir order is the filesystem's, not the name's: two checkouts of the same tree can
+  // list it differently, and the committed report (`bind-report.ts --check`) compares row
+  // ORDER — so unsorted, a report regenerated on one machine read as stale on the CI runner.
+  const modules = readdirSync(API_DIR, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts'))
+    .map(entry => entry.name)
+    .sort((a, b) => a.localeCompare(b))
+  return [API_MONOLITH, ...modules.map(name => join(API_DIR, name))]
 }
 
 /**

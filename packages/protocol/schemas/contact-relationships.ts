@@ -152,10 +152,12 @@ export type ContactGroupResponse = z.infer<typeof contactGroupResponseSchema>
 export const contactRelationshipListResponseSchema = z.object({
   relationships: z.array(contactRelationshipSchema),
 })
+export type ContactRelationshipListResponse = z.infer<typeof contactRelationshipListResponseSchema>
 
 export const affinityGroupListResponseSchema = z.object({
   groups: z.array(affinityGroupSchema),
 })
+export type AffinityGroupListResponse = z.infer<typeof affinityGroupListResponseSchema>
 
 export const affinityGroupWithMembersResponseSchema = affinityGroupSchema.extend({
   members: z.array(groupMemberSchema),

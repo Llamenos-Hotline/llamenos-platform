@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { listNotes, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
+import type { NoteReply } from '@protocol/schemas'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
 import { hubAdminReaders, activeHubAdminReaders, NoAdminReaderError } from '@/lib/admin-recipient'
@@ -28,6 +29,12 @@ import { CustomFieldBadges } from '@/components/notes/custom-field-badges'
 import { Textarea } from '@/components/ui/textarea'
 
 type NotesSearch = { page: number; callId: string; search: string }
+
+/** A note reply, shaped for the shared message thread: the note is the thread's "conversation". */
+function replyAsThreadMessage(reply: NoteReply): ConversationMessage {
+  const { noteId, ...message } = reply
+  return { ...message, conversationId: noteId }
+}
 
 export const Route = createFileRoute('/notes')({
   validateSearch: (search: Record<string, unknown>): NotesSearch => ({
@@ -262,7 +269,7 @@ function NotesPage() {
     setThreadLoading(true)
     try {
       const res = await listNoteReplies(noteId)
-      setThreadReplies(res.replies)
+      setThreadReplies(res.replies.map(replyAsThreadMessage))
     } catch {
       toast(t('common.error'), 'error')
     } finally {
@@ -281,7 +288,7 @@ function NotesPage() {
         encryptedContent: encrypted.encryptedContent,
         readerEnvelopes: encrypted.readerEnvelopes,
       })
-      setThreadReplies(prev => [...prev, res.reply])
+      setThreadReplies(prev => [...prev, replyAsThreadMessage(res.reply)])
       setReplyText('')
       // Update reply count in the note list
       setNotes(prev => prev.map(n =>

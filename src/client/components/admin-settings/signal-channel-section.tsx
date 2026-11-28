@@ -31,6 +31,8 @@ export function SignalChannelSection({
   onToggle,
   statusSummary,
 }: ChannelConfigProps) {
+  // The server always answers with the channels list; only a PATCH body may omit it.
+  const currentChannels = config.enabledChannels ?? []
   const { t } = useTranslation()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
@@ -54,9 +56,9 @@ export function SignalChannelSection({
     try {
       await updateMessagingConfig({
         ...config,
-        enabledChannels: config.enabledChannels.includes('signal')
-          ? config.enabledChannels
-          : [...config.enabledChannels, 'signal' as const],
+        enabledChannels: currentChannels.includes('signal')
+          ? currentChannels
+          : [...currentChannels, 'signal' as const],
         signal: { ...signal },
       })
       toast(t('common.success'), 'success')

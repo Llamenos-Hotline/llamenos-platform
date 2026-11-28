@@ -45,10 +45,12 @@ export const hubMemberResponseSchema = z.object({
 export const hubListResponseSchema = z.object({
   hubs: z.array(hubResponseSchema),
 })
+export type HubListResponse = z.infer<typeof hubListResponseSchema>
 
 export const hubDetailResponseSchema = z.object({
   hub: hubResponseSchema,
 })
+export type HubDetailResponse = z.infer<typeof hubDetailResponseSchema>
 
 /**
  * The caller's own permissions IN one hub — what the server authorises with
@@ -60,6 +62,7 @@ export const hubPermissionsResponseSchema = z.object({
   hubId: z.string(),
   permissions: z.array(z.string()),
 })
+export type HubPermissionsResponse = z.infer<typeof hubPermissionsResponseSchema>
 
 export const hubKeyEnvelopeResponseSchema = z.object({
   envelope: recipientEnvelopeSchema,
@@ -200,6 +203,7 @@ export const createHubBodySchema = z.object({
   /** Defaults from the creating admin's device on the client; `UTC` when a client sends none. */
   timezone: ianaTimezoneSchema.optional().default(DEFAULT_HUB_TIMEZONE),
 })
+export type CreateHubBody = z.input<typeof createHubBodySchema>
 
 /**
  * PATCH body. Declared field by field and deliberately carrying NO `.default()`:
@@ -223,6 +227,7 @@ export const updateHubBodySchema = z.object({
   timezone: ianaTimezoneSchema.optional(),
   status: z.enum(['active', 'archived']).optional(),
 })
+export type UpdateHubBody = z.input<typeof updateHubBodySchema>
 
 export const addHubMemberBodySchema = z.object({
   pubkey: pubkeySchema,

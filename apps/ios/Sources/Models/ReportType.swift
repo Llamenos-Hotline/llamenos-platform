@@ -74,14 +74,14 @@ extension SharedField {
                   indexType: SharedIndexType(rawValue: indexType ?? "none") ?? .none,
                   label: label, locationOptions: nil, lookupID: lookupId, name: name,
                   options: options, order: order, placeholder: placeholder,
-                  sharedFielRequired: required, section: section, showWhen: showWhen,
+                  fieldRequired: required, section: section, showWhen: showWhen,
                   supportAudioInput: supportAudioInput, templateID: templateId,
                   type: SharedType(rawValue: type) ?? .text, validation: validation,
                   visibleToUsers: visibleToUsers ?? true)
     }
 
-    /// Wire `required` (quicktype-renamed `sharedFielRequired`).
-    var required: Bool { sharedFielRequired }
+    /// Wire `required` (quicktype-renamed `fieldRequired`).
+    var required: Bool { fieldRequired }
 
     /// Field type as a strongly-typed enum for switch exhaustivity (same raw
     /// values as generated `SharedType`, minus `location` which renders as text).

@@ -14,7 +14,7 @@
  * backslash-first ordering — makes this test fail.
  */
 import { describe, expect, test } from 'bun:test'
-import { escapeMarkdownCell, renderMarkdown, type BindingRow } from './bind-report'
+import { escapeMarkdownCell, evaluateCheck, renderMarkdown, type BindingRow } from './bind-report'
 
 function makeRow(overrides: Partial<BindingRow> = {}): BindingRow {
   return {
@@ -125,5 +125,15 @@ describe('renderMarkdown — field-level diff bullet section integrity', () => {
     const bulletLines = md.split('\n').filter(l => l.startsWith('- `weird'))
     expect(bulletLines).toHaveLength(1)
     expect(bulletLines[0].includes('\n')).toBe(false)
+  })
+})
+
+describe('evaluateCheck — the binding ratchet (`bind-report.ts --check`)', () => {
+  // This is what keeps the client bound to the protocol: a hand-written or mis-bound
+  // request/response shape in src/client/lib/api/** fails the repo-level bun tests, and so does
+  // a report.md / report.json that no longer matches the source (re-run bind-report.ts).
+  test('the committed report is current and has no UNBOUND or MISMATCHED shape', () => {
+    const { stale, unbound, mismatched } = evaluateCheck()
+    expect({ stale, unbound, mismatched }).toEqual({ stale: false, unbound: 0, mismatched: 0 })
   })
 })

@@ -32,6 +32,7 @@ export const auditListResponseSchema = z.object({
   entries: z.array(auditEntryResponseSchema),
   ...paginatedMeta,
 })
+export type AuditListResponse = z.infer<typeof auditListResponseSchema>
 
 // --- Chain verification ---
 

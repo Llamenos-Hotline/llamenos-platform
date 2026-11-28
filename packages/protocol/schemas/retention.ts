@@ -33,6 +33,7 @@ export const updateRetentionBodySchema = z.object({
     }),
   ).min(1).max(4),
 })
+export type UpdateRetentionBody = z.input<typeof updateRetentionBodySchema>
 
 // --- Platform floor ---
 
@@ -55,13 +56,16 @@ export const updateRetentionFloorsBodySchema = z.object({
     }),
   ).min(1).max(4),
 })
+export type UpdateRetentionFloorsBody = z.input<typeof updateRetentionFloorsBodySchema>
 
 // --- Response schemas ---
 
 export const retentionSettingsResponseSchema = z.object({
   settings: z.array(retentionSettingSchema),
 })
+export type RetentionSettingsResponse = z.infer<typeof retentionSettingsResponseSchema>
 
 export const retentionFloorsResponseSchema = z.object({
   floors: z.array(retentionPlatformFloorSchema),
 })
+export type RetentionFloorsResponse = z.infer<typeof retentionFloorsResponseSchema>

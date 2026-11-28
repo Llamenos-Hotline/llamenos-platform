@@ -1,39 +1,39 @@
 import { deviceTimezone } from '../timezone'
 import { request } from './client'
-import type { SetupState } from '@shared/types'
+import type { ConnectionTestResponse, SetupState, SetupStateResponse, TestSignalBody, TestWhatsAppBody } from '@protocol/schemas'
 
-export type { SetupState } from '@shared/types'
+export type { SetupState }
 
 // --- Setup State ---
 
 export async function getSetupState() {
-  return request<SetupState>('/setup/state')
+  return request<SetupStateResponse>('/setup/state')
 }
 
-export async function updateSetupState(data: Partial<SetupState>) {
-  return request<SetupState>('/setup/state', {
+export async function updateSetupState(data: SetupState) {
+  return request<SetupStateResponse>('/setup/state', {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
 }
 
 export async function completeSetup() {
-  return request<SetupState>('/setup/complete', {
+  return request<SetupStateResponse>('/setup/complete', {
     method: 'POST',
     // The default hub is created in the setup admin's own zone.
     body: JSON.stringify({ timezone: deviceTimezone() }),
   })
 }
 
-export async function testSignalBridge(data: { bridgeUrl: string; bridgeApiKey: string }) {
-  return request<{ ok: boolean; error?: string }>('/setup/test/signal', {
+export async function testSignalBridge(data: TestSignalBody) {
+  return request<ConnectionTestResponse>('/setup/test/signal', {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
-export async function testWhatsAppConnection(data: { phoneNumberId: string; accessToken: string }) {
-  return request<{ ok: boolean; error?: string }>('/setup/test/whatsapp', {
+export async function testWhatsAppConnection(data: TestWhatsAppBody) {
+  return request<ConnectionTestResponse>('/setup/test/whatsapp', {
     method: 'POST',
     body: JSON.stringify(data),
   })

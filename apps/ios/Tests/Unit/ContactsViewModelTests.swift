@@ -168,7 +168,13 @@ final class ContactsViewModelTests: XCTestCase {
     /// `contact` key the server never sends and so always failed.
     func testDetailLoadsTheMountedActivityRouteAndCountsItsRows() async throws {
         let hash = "aaaa1111"
-        let activity = #"{"notes":[{"id":"n1"},{"id":"n2"},{"id":"n3"}],"conversations":[{"id":"c1"}]}"#
+        // Full note and conversation rows: the response decodes them as the typed
+        // `SharedNote` / `SharedConversation` the list routes answer, not as raw objects.
+        let note = { (id: String) in
+            #"{"id":"\#(id)","authorPubkey":"aa","encryptedContent":"00","createdAt":"2026-10-01T09:00:00.000Z","updatedAt":"2026-10-01T09:00:00.000Z"}"#
+        }
+        let conversation = #"{"id":"c1","channelType":"sms","contactIdentifierHash":"\#(hash)","messageCount":2,"status":"closed","createdAt":"2026-10-20T10:00:00.000Z","updatedAt":"2026-10-20T10:05:00.000Z"}"#
+        let activity = #"{"notes":[\#(note("n1")),\#(note("n2")),\#(note("n3"))],"conversations":[\#(conversation)]}"#
         let api = try makeAPI(responses: ["GET /api/hubs/\(hubId)/contacts/\(hash)": activity])
         let row = try summary(hash, notes: 99, conversations: 99)
         let viewModel = ContactDetailViewModel(apiService: api, summary: row)

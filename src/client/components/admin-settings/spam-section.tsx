@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { updateSpamSettings, type SpamSettings } from '@/lib/api'
+import { updateSpamSettings } from '@/lib/api'
+import type { SpamSettingsResponse } from '@protocol/schemas'
 import { SettingsSection } from '@/components/settings-section'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
@@ -9,8 +10,8 @@ import { ShieldAlert, Bot, Timer } from 'lucide-react'
 
 interface Props {
   hubId: string
-  settings: SpamSettings
-  onChange: (settings: SpamSettings) => void
+  settings: SpamSettingsResponse
+  onChange: (settings: SpamSettingsResponse) => void
   onConfirmToggle: (key: string, newValue: boolean) => void
   expanded: boolean
   onToggle: (open: boolean) => void

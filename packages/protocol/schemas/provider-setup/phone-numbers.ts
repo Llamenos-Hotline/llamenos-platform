@@ -27,6 +27,12 @@ export const availableNumberSchema = z.object({
 })
 export type AvailableNumber = z.infer<typeof availableNumberSchema>
 
+export const ownedNumberListSchema = z.object({ numbers: z.array(ownedNumberSchema) })
+export type OwnedNumberList = z.infer<typeof ownedNumberListSchema>
+
+export const availableNumberListSchema = z.object({ numbers: z.array(availableNumberSchema) })
+export type AvailableNumberList = z.infer<typeof availableNumberListSchema>
+
 export const numberSearchQuerySchema = z.object({
   providerType: telephonyProviderTypeSchema,
   countryCode: z.string().optional().default('US'),

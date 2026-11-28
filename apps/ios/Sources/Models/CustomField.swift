@@ -1,7 +1,7 @@
 import Foundation
 
 // MARK: - Custom field UI extensions
-// Custom field definitions decode to generated `CustomFieldsListResponseField`
+// Custom field definitions decode to generated `ProtocolCustomFieldDefinition`
 // (GET /api/settings/custom-fields — the whole stored row, see
 // `customFieldDefinitionSchema`) and are written back as generated
 // `CustomFieldsBodyField` (PUT), which the server validator narrows to the
@@ -17,9 +17,9 @@ extension CustomFieldsBodyField: Identifiable {
     var orderOrZero: Int { order ?? 0 }
 }
 
-// `CustomFieldsListResponseField` carries the server `id` column, so it
+// `ProtocolCustomFieldDefinition` carries the server `id` column, so it
 // satisfies `Identifiable` with no client-side key.
-extension CustomFieldsListResponseField: Identifiable {
+extension ProtocolCustomFieldDefinition: Identifiable {
     /// Whether the field is required.
     var isRequired: Bool { fieldRequired }
 

@@ -23,7 +23,7 @@ import org.llamenos.hotline.MountedServer
  * `apps/worker/routes/contacts.ts` mounts under `/api/hubs/:hubId/contacts`:
  *
  *     GET /contacts        -> { contacts: [summary], total }
- *     GET /contacts/:hash  -> { notes: [row], conversations: [row] }   ← this IS the timeline
+ *     GET /contacts/:hash  -> { notes: [note row], conversations: [conversation row] }   ← this IS the timeline
  *
  * The Android screens called `GET /contacts/:hash/timeline` and `GET /contacts/:hash/relationships`
  * (neither mounted), decoded `GET /contacts/:hash` as `{ contact }` (a key the server never sends),
@@ -57,10 +57,13 @@ class ContactsRoutesTest {
                 } else {
                     json(
                         """{"notes":[
-                        |{"id":"note-old","authorPubkey":"aa","encryptedContent":"00","createdAt":"2026-10-01T09:00:00.000Z"},
-                        |{"id":"note-new","authorPubkey":"aa","encryptedContent":"00","createdAt":"2026-10-15T09:00:00.000Z"}
+                        |{"id":"note-old","authorPubkey":"aa","encryptedContent":"00","createdAt":"2026-10-01T09:00:00.000Z",
+                        |"updatedAt":"2026-10-01T09:00:00.000Z"},
+                        |{"id":"note-new","authorPubkey":"aa","encryptedContent":"00","createdAt":"2026-10-15T09:00:00.000Z",
+                        |"updatedAt":"2026-10-15T09:00:00.000Z"}
                         |],"conversations":[
-                        |{"id":"conv-1","channelType":"sms","status":"closed","createdAt":"2026-10-20T10:00:00.000Z",
+                        |{"id":"conv-1","channelType":"sms","contactIdentifierHash":"$hash","status":"closed",
+                        |"messageCount":3,"createdAt":"2026-10-20T10:00:00.000Z","updatedAt":"2026-10-20T10:05:00.000Z",
                         |"lastMessageAt":"2026-10-20T10:05:00.000Z"}
                         |]}""".trimMargin(),
                     )

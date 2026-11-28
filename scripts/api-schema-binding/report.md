@@ -7,494 +7,404 @@ against the same source produces byte-identical output. Do not hand-edit; regene
 
 | Verdict | Count |
 |---|---|
-| UNBOUND | 294 |
-| N/A | 220 |
-| UNRESOLVED | 118 |
-| BOUND | 73 |
-| MISMATCHED | 19 |
+| BOUND | 393 |
+| N/A | 222 |
+| UNRESOLVED | 153 |
 | NO_SERVER_ROUTE | 2 |
 
-Client functions analyzed: **363**
+Client functions analyzed: **385**
 Server mount targets that could not be statically resolved: **0**
 
 ## Per-function bindings
 
 | Function | File:Line | Method | Path | Body verdict | Response verdict | Notes |
 |---|---|---|---|---|---|---|
-| `getA2pStatus` | src/client/lib/api/a2p.ts:47 | GET | `/provider-setup/a2p/status` | N/A | UNBOUND | named type `A2pRegistration` is not imported from @protocol/schemas |
-| `submitA2pBrand` | src/client/lib/api/a2p.ts:55 | POST | `/provider-setup/a2p/brand` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `A2pRegistration` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `submitA2pCampaign` | src/client/lib/api/a2p.ts:62 | POST | `/provider-setup/a2p/campaign` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `A2pRegistration` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `skipA2p` | src/client/lib/api/a2p.ts:69 | POST | `/provider-setup/a2p/skip` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `A2pRegistration` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `listAuditLog` | src/client/lib/api/audit.ts:21 | GET | `/audit` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `auditListResponseSchema` — add `export type <Name> = z.infer<typeof auditListResponseSchema>` beside it in packages/protocol/schemas/audit.ts |
-| `listPlatformAuditLog` | src/client/lib/api/audit.ts:29 | GET | `/admin/audit` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `auditListResponseSchema` — add `export type <Name> = z.infer<typeof auditListResponseSchema>` beside it in packages/protocol/schemas/audit.ts |
-| `login` | src/client/lib/api/auth.ts:13 | POST | `/auth/login` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `loginResponseSchema` — add `export type <Name> = z.infer<typeof loginResponseSchema>` beside it in packages/protocol/schemas/auth.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `bootstrapAdmin` | src/client/lib/api/auth.ts:20 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `logout` | src/client/lib/api/auth.ts:44 | POST | `/auth/me/logout` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getMe` | src/client/lib/api/auth.ts:48 | GET | `/auth/me` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `meResponseSchema` — add `export type <Name> = z.infer<typeof meResponseSchema>` beside it in packages/protocol/schemas/auth.ts |
-| `listBans` | src/client/lib/api/bans.ts:13 | GET | `/bans` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `banListResponseSchema` — add `export type <Name> = z.infer<typeof banListResponseSchema>` beside it in packages/protocol/schemas/bans.ts |
-| `addBan` | src/client/lib/api/bans.ts:17 | POST | `/bans` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createBanBodySchema` — add `export type <Name> = z.infer<typeof createBanBodySchema>` beside it in packages/protocol/schemas/bans.ts<br>hand-written shape; no PascalCase type alias exists yet for `createBanResponseSchema` — add `export type <Name> = z.infer<typeof createBanResponseSchema>` beside it in packages/protocol/schemas/bans.ts |
-| `banAndHangup` | src/client/lib/api/bans.ts:24 | POST | `/calls/:param/ban` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `banCallResponseSchema` — add `export type <Name> = z.infer<typeof banCallResponseSchema>` beside it in packages/protocol/schemas/calls.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `removeBan` | src/client/lib/api/bans.ts:32 | DELETE | `/bans/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `bulkAddBans` | src/client/lib/api/bans.ts:37 | POST | `/bans/bulk` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `bulkBanBodySchema` — add `export type <Name> = z.infer<typeof bulkBanBodySchema>` beside it in packages/protocol/schemas/bans.ts<br>hand-written shape; no PascalCase type alias exists yet for `bulkBanResponseSchema` — add `export type <Name> = z.infer<typeof bulkBanResponseSchema>` beside it in packages/protocol/schemas/bans.ts |
-| `listSubscribers` | src/client/lib/api/blasts.ts:8 | GET | `/blasts/subscribers` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `subscriberListResponseSchema` — add `export type <Name> = z.infer<typeof subscriberListResponseSchema>` beside it in packages/protocol/schemas/blasts.ts |
-| `importSubscribers` | src/client/lib/api/blasts.ts:17 | POST | `/blasts/subscribers/import` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `importSubscribersBodySchema` — add `export type <Name> = z.infer<typeof importSubscribersBodySchema>` beside it in packages/protocol/schemas/blasts.ts<br>hand-written shape; no PascalCase type alias exists yet for `importSubscribersResponseSchema` — add `export type <Name> = z.infer<typeof importSubscribersResponseSchema>` beside it in packages/protocol/schemas/blasts.ts |
-| `removeSubscriber` | src/client/lib/api/blasts.ts:24 | DELETE | `/blasts/subscribers/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getSubscriberStats` | src/client/lib/api/blasts.ts:28 | GET | `/blasts/subscribers/stats` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `subscriberStatsResponseSchema` — add `export type <Name> = z.infer<typeof subscriberStatsResponseSchema>` beside it in packages/protocol/schemas/blasts.ts |
-| `listBlasts` | src/client/lib/api/blasts.ts:32 | GET | `/blasts` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `blastListResponseSchema` — add `export type <Name> = z.infer<typeof blastListResponseSchema>` beside it in packages/protocol/schemas/blasts.ts |
-| `createBlast` | src/client/lib/api/blasts.ts:36 | POST | `/blasts` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createBlastBodySchema` — add `export type <Name> = z.infer<typeof createBlastBodySchema>` beside it in packages/protocol/schemas/blasts.ts<br>hand-written shape; protocol already exports `BlastEnvelopeResponse` for this schema — import it instead |
-| `updateBlast` | src/client/lib/api/blasts.ts:43 | PATCH | `/blasts/:param` | UNBOUND | UNBOUND | named type `Partial<Blast>` is not imported from @protocol/schemas<br>hand-written shape; protocol already exports `BlastEnvelopeResponse` for this schema — import it instead |
-| `deleteBlast` | src/client/lib/api/blasts.ts:50 | DELETE | `/blasts/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `sendBlast` | src/client/lib/api/blasts.ts:54 | POST | `/blasts/:param/send` | N/A | UNBOUND | hand-written shape; protocol already exports `BlastEnvelopeResponse` for this schema — import it instead |
-| `scheduleBlast` | src/client/lib/api/blasts.ts:58 | POST | `/blasts/:param/schedule` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `BlastEnvelopeResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `cancelBlast` | src/client/lib/api/blasts.ts:65 | POST | `/blasts/:param/cancel` | N/A | UNBOUND | hand-written shape; protocol already exports `BlastEnvelopeResponse` for this schema — import it instead |
-| `getBlastStats` | src/client/lib/api/blasts.ts:69 | GET | `/blasts/:param/stats` | N/A | UNBOUND | named type `BlastStats` is not imported from @protocol/schemas |
-| `getBlastDeliveries` | src/client/lib/api/blasts.ts:73 | GET | `/blasts/:param/deliveries` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `blastDeliveryListResponseSchema` — add `export type <Name> = z.infer<typeof blastDeliveryListResponseSchema>` beside it in packages/protocol/schemas/blasts.ts |
-| `retryBlastDelivery` | src/client/lib/api/blasts.ts:84 | POST | `/blasts/:param/deliveries/:param/retry` | N/A | UNBOUND | hand-written shape; protocol already exports `BlastDelivery` for this schema — import it instead |
-| `retryAllFailedDeliveries` | src/client/lib/api/blasts.ts:90 | POST | `/blasts/:param/retry-failed` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getBlastSettings` | src/client/lib/api/blasts.ts:96 | GET | `/blasts/settings` | N/A | UNBOUND | named type `BlastSettings` is not imported from @protocol/schemas |
-| `updateBlastSettings` | src/client/lib/api/blasts.ts:100 | PATCH | `/blasts/settings` | UNBOUND | UNBOUND | named type `Partial<BlastSettings>` is not imported from @protocol/schemas<br>named type `BlastSettings` is not imported from @protocol/schemas |
-| `getSpamSettings` | src/client/lib/api/call-settings.ts:19 | GET | `/settings/spam` | N/A | UNBOUND | named type `SpamSettings` is not imported from @protocol/schemas |
-| `updateSpamSettings` | src/client/lib/api/call-settings.ts:23 | PATCH | `/settings/spam` | UNBOUND | UNBOUND | named type `Partial<SpamSettings>` is not imported from @protocol/schemas<br>named type `SpamSettings` is not imported from @protocol/schemas |
-| `getCallSettings` | src/client/lib/api/call-settings.ts:35 | GET | `/settings/call` | N/A | UNBOUND | named type `CallSettings` is not imported from @protocol/schemas |
-| `updateCallSettings` | src/client/lib/api/call-settings.ts:39 | PATCH | `/settings/call` | UNBOUND | UNBOUND | named type `Partial<CallSettings>` is not imported from @protocol/schemas<br>named type `CallSettings` is not imported from @protocol/schemas |
-| `getIvrLanguages` | src/client/lib/api/call-settings.ts:50 | GET | `/settings/ivr-languages` | N/A | UNBOUND | named type `IvrLanguageSettings` is not imported from @protocol/schemas |
-| `updateIvrLanguages` | src/client/lib/api/call-settings.ts:55 | PATCH | `/settings/ivr-languages` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `ivrLanguagesSchema` — add `export type <Name> = z.infer<typeof ivrLanguagesSchema>` beside it in packages/protocol/schemas/settings.ts<br>named type `IvrLanguageSettings` is not imported from @protocol/schemas |
-| `getTranscriptionSettings` | src/client/lib/api/call-settings.ts:65 | GET | `/settings/transcription` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `transcriptionSettingsSchema` — add `export type <Name> = z.infer<typeof transcriptionSettingsSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `updateTranscriptionSettings` | src/client/lib/api/call-settings.ts:69 | PATCH | `/settings/transcription` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `transcriptionSettingsSchema` — add `export type <Name> = z.infer<typeof transcriptionSettingsSchema>` beside it in packages/protocol/schemas/settings.ts<br>hand-written shape; no PascalCase type alias exists yet for `transcriptionSettingsSchema` — add `export type <Name> = z.infer<typeof transcriptionSettingsSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `updateMyTranscriptionPreference` | src/client/lib/api/call-settings.ts:76 | PATCH | `/auth/me/transcription` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `updateMyProfile` | src/client/lib/api/call-settings.ts:83 | PATCH | `/auth/me/profile` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `profileUpdateBodySchema` — add `export type <Name> = z.infer<typeof profileUpdateBodySchema>` beside it in packages/protocol/schemas/auth.ts<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `updateMyAvailability` | src/client/lib/api/call-settings.ts:90 | PATCH | `/auth/me/availability` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getCustomFields` | src/client/lib/api/call-settings.ts:106 | GET | `/settings/custom-fields` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `customFieldsListResponseSchema` — add `export type <Name> = z.infer<typeof customFieldsListResponseSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `deleteCustomField` | src/client/lib/api/call-settings.ts:114 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `updateCustomFields` | src/client/lib/api/call-settings.ts:126 | PUT | `/settings/custom-fields` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `customFieldsListResponseSchema` — add `export type <Name> = z.infer<typeof customFieldsListResponseSchema>` beside it in packages/protocol/schemas/settings.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `listActiveCalls` | src/client/lib/api/calls.ts:25 | GET | `/calls/active` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `activeCallsResponseSchema` — add `export type <Name> = z.infer<typeof activeCallsResponseSchema>` beside it in packages/protocol/schemas/calls.ts |
-| `getCallHistory` | src/client/lib/api/calls.ts:30 | GET | `/calls/history` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `callHistoryResponseSchema` — add `export type <Name> = z.infer<typeof callHistoryResponseSchema>` beside it in packages/protocol/schemas/calls.ts |
-| `answerCall` | src/client/lib/api/calls.ts:45 | POST | `/calls/:param/answer` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `callActionResponseSchema` — add `export type <Name> = z.infer<typeof callActionResponseSchema>` beside it in packages/protocol/schemas/calls.ts |
-| `hangupCall` | src/client/lib/api/calls.ts:49 | POST | `/calls/:param/hangup` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `callActionResponseSchema` — add `export type <Name> = z.infer<typeof callActionResponseSchema>` beside it in packages/protocol/schemas/calls.ts |
-| `reportCallSpam` | src/client/lib/api/calls.ts:53 | POST | `/calls/:param/spam` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getCallsTodayCount` | src/client/lib/api/calls.ts:59 | GET | `/calls/today-count` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `todayCountResponseSchema` — add `export type <Name> = z.infer<typeof todayCountResponseSchema>` beside it in packages/protocol/schemas/calls.ts |
+| `getA2pStatus` | src/client/lib/api/a2p.ts:35 | GET | `/provider-setup/a2p/status` | N/A | BOUND |  |
+| `submitA2pBrand` | src/client/lib/api/a2p.ts:43 | POST | `/provider-setup/a2p/brand` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `submitA2pCampaign` | src/client/lib/api/a2p.ts:50 | POST | `/provider-setup/a2p/campaign` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `skipA2p` | src/client/lib/api/a2p.ts:57 | POST | `/provider-setup/a2p/skip` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `listAuditLog` | src/client/lib/api/audit.ts:21 | GET | `/audit` | N/A | BOUND |  |
+| `listPlatformAuditLog` | src/client/lib/api/audit.ts:29 | GET | `/admin/audit` | N/A | BOUND |  |
+| `login` | src/client/lib/api/auth.ts:14 | POST | `/auth/login` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `bootstrapAdmin` | src/client/lib/api/auth.ts:21 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `logout` | src/client/lib/api/auth.ts:45 | POST | `/auth/me/logout` | N/A | BOUND |  |
+| `getMe` | src/client/lib/api/auth.ts:49 | GET | `/auth/me` | N/A | BOUND |  |
+| `listBans` | src/client/lib/api/bans.ts:13 | GET | `/bans` | N/A | BOUND |  |
+| `addBan` | src/client/lib/api/bans.ts:17 | POST | `/bans` | BOUND | BOUND |  |
+| `banAndHangup` | src/client/lib/api/bans.ts:24 | POST | `/calls/:param/ban` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `removeBan` | src/client/lib/api/bans.ts:32 | DELETE | `/bans/:param` | N/A | BOUND |  |
+| `bulkAddBans` | src/client/lib/api/bans.ts:37 | POST | `/bans/bulk` | BOUND | BOUND |  |
+| `dismissBanReentry` | src/client/lib/api/bans.ts:45 | DELETE | `/bans/reentries/:param` | N/A | BOUND |  |
+| `listSubscribers` | src/client/lib/api/blasts.ts:9 | GET | `/blasts/subscribers` | N/A | BOUND |  |
+| `importSubscribers` | src/client/lib/api/blasts.ts:18 | POST | `/blasts/subscribers/import` | BOUND | BOUND |  |
+| `removeSubscriber` | src/client/lib/api/blasts.ts:25 | DELETE | `/blasts/subscribers/:param` | N/A | BOUND |  |
+| `getSubscriberStats` | src/client/lib/api/blasts.ts:29 | GET | `/blasts/subscribers/stats` | N/A | BOUND |  |
+| `listBlasts` | src/client/lib/api/blasts.ts:33 | GET | `/blasts` | N/A | BOUND |  |
+| `createBlast` | src/client/lib/api/blasts.ts:37 | POST | `/blasts` | BOUND | BOUND |  |
+| `updateBlast` | src/client/lib/api/blasts.ts:44 | PATCH | `/blasts/:param` | BOUND | BOUND |  |
+| `deleteBlast` | src/client/lib/api/blasts.ts:51 | DELETE | `/blasts/:param` | N/A | BOUND |  |
+| `sendBlast` | src/client/lib/api/blasts.ts:55 | POST | `/blasts/:param/send` | N/A | BOUND |  |
+| `scheduleBlast` | src/client/lib/api/blasts.ts:59 | POST | `/blasts/:param/schedule` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `cancelBlast` | src/client/lib/api/blasts.ts:66 | POST | `/blasts/:param/cancel` | N/A | BOUND |  |
+| `getBlastStats` | src/client/lib/api/blasts.ts:70 | GET | `/blasts/:param/stats` | N/A | BOUND |  |
+| `getBlastDeliveries` | src/client/lib/api/blasts.ts:74 | GET | `/blasts/:param/deliveries` | N/A | BOUND |  |
+| `retryBlastDelivery` | src/client/lib/api/blasts.ts:85 | POST | `/blasts/:param/deliveries/:param/retry` | N/A | BOUND |  |
+| `retryAllFailedDeliveries` | src/client/lib/api/blasts.ts:91 | POST | `/blasts/:param/retry-failed` | N/A | BOUND |  |
+| `getBlastSettings` | src/client/lib/api/blasts.ts:97 | GET | `/blasts/settings` | N/A | BOUND |  |
+| `updateBlastSettings` | src/client/lib/api/blasts.ts:101 | PATCH | `/blasts/settings` | BOUND | BOUND |  |
+| `getSpamSettings` | src/client/lib/api/call-settings.ts:17 | GET | `/settings/spam` | N/A | BOUND |  |
+| `updateSpamSettings` | src/client/lib/api/call-settings.ts:21 | PATCH | `/settings/spam` | BOUND | BOUND |  |
+| `getCallSettings` | src/client/lib/api/call-settings.ts:30 | GET | `/settings/call` | N/A | BOUND |  |
+| `updateCallSettings` | src/client/lib/api/call-settings.ts:34 | PATCH | `/settings/call` | BOUND | BOUND |  |
+| `getIvrLanguages` | src/client/lib/api/call-settings.ts:44 | GET | `/settings/ivr-languages` | N/A | BOUND |  |
+| `updateIvrLanguages` | src/client/lib/api/call-settings.ts:49 | PATCH | `/settings/ivr-languages` | BOUND | BOUND |  |
+| `getTranscriptionSettings` | src/client/lib/api/call-settings.ts:59 | GET | `/settings/transcription` | N/A | BOUND |  |
+| `updateTranscriptionSettings` | src/client/lib/api/call-settings.ts:63 | PATCH | `/settings/transcription` | BOUND | BOUND |  |
+| `updateMyTranscriptionPreference` | src/client/lib/api/call-settings.ts:70 | PATCH | `/auth/me/transcription` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `updateMyProfile` | src/client/lib/api/call-settings.ts:77 | PATCH | `/auth/me/profile` | BOUND | BOUND |  |
+| `updateMyAvailability` | src/client/lib/api/call-settings.ts:84 | PATCH | `/auth/me/availability` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getCustomFields` | src/client/lib/api/call-settings.ts:100 | GET | `/settings/custom-fields` | N/A | BOUND |  |
+| `deleteCustomField` | src/client/lib/api/call-settings.ts:108 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `updateCustomFields` | src/client/lib/api/call-settings.ts:120 | PUT | `/settings/custom-fields` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `listActiveCalls` | src/client/lib/api/calls.ts:25 | GET | `/calls/active` | N/A | BOUND |  |
+| `getCallHistory` | src/client/lib/api/calls.ts:30 | GET | `/calls/history` | N/A | BOUND |  |
+| `answerCall` | src/client/lib/api/calls.ts:45 | POST | `/calls/:param/answer` | N/A | BOUND |  |
+| `hangupCall` | src/client/lib/api/calls.ts:49 | POST | `/calls/:param/hangup` | N/A | BOUND |  |
+| `reportCallSpam` | src/client/lib/api/calls.ts:53 | POST | `/calls/:param/spam` | N/A | BOUND |  |
+| `getCallsTodayCount` | src/client/lib/api/calls.ts:59 | GET | `/calls/today-count` | N/A | BOUND |  |
 | `getCallRecording` | src/client/lib/api/calls.ts:65 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getUserPresence` | src/client/lib/api/calls.ts:101 | GET | `/calls/presence` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `callPresenceResponseSchema` — add `export type <Name> = z.infer<typeof callPresenceResponseSchema>` beside it in packages/protocol/schemas/calls.ts |
-| `setOnAuthExpired` | src/client/lib/api/client.ts:10 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `notifyAuthExpired` | src/client/lib/api/client.ts:17 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getAuthHeaders` | src/client/lib/api/client.ts:31 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getAuthHeadersForReplay` | src/client/lib/api/client.ts:55 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `setOnApiActivity` | src/client/lib/api/client.ts:61 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `notifyApiActivity` | src/client/lib/api/client.ts:64 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `isRetryable` | src/client/lib/api/client.ts:94 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `request` | src/client/lib/api/client.ts:110 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getApiErrorCode` | src/client/lib/api/client.ts:222 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `isNetworkError` | src/client/lib/api/client.ts:240 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `setActiveHub` | src/client/lib/api/client.ts:259 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getActiveHub` | src/client/lib/api/client.ts:264 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `subscribeActiveHub` | src/client/lib/api/client.ts:271 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `hp` | src/client/lib/api/client.ts:277 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `activeHubPath` | src/client/lib/api/client.ts:295 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `hubPath` | src/client/lib/api/client.ts:305 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getConfig` | src/client/lib/api/client.ts:316 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `listCmsReportTypes` | src/client/lib/api/cms-report-types.ts:9 | GET | `/settings/cms/report-types` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `cmsReportTypeListResponseSchema` — add `export type <Name> = z.infer<typeof cmsReportTypeListResponseSchema>` beside it in packages/protocol/schemas/report-types.ts |
-| `getCmsReportType` | src/client/lib/api/cms-report-types.ts:13 | GET | `/settings/cms/report-types/:param` | N/A | BOUND |  |
-| `createCmsReportType` | src/client/lib/api/cms-report-types.ts:17 | POST | `/settings/cms/report-types` | UNBOUND | BOUND | hand-written shape; no PascalCase type alias exists yet for `createCmsReportTypeBodySchema` — add `export type <Name> = z.infer<typeof createCmsReportTypeBodySchema>` beside it in packages/protocol/schemas/report-types.ts |
-| `updateCmsReportType` | src/client/lib/api/cms-report-types.ts:40 | PATCH | `/settings/cms/report-types/:param` | UNBOUND | BOUND | hand-written shape; no PascalCase type alias exists yet for `updateCmsReportTypeBodySchema` — add `export type <Name> = z.infer<typeof updateCmsReportTypeBodySchema>` beside it in packages/protocol/schemas/report-types.ts |
-| `deleteCmsReportType` | src/client/lib/api/cms-report-types.ts:63 | DELETE | `/settings/cms/report-types/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getCaseManagementEnabled` | src/client/lib/api/cms.ts:11 | GET | `/settings/cms/case-management` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `enabledResponseSchema` — add `export type <Name> = z.infer<typeof enabledResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts |
-| `setCaseManagementEnabled` | src/client/lib/api/cms.ts:15 | PUT | `/settings/cms/case-management` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `enabledResponseSchema` — add `export type <Name> = z.infer<typeof enabledResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `listEntityTypes` | src/client/lib/api/cms.ts:22 | GET | `/settings/cms/entity-types` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `entityTypeListResponseSchema` — add `export type <Name> = z.infer<typeof entityTypeListResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts |
-| `createEntityType` | src/client/lib/api/cms.ts:26 | POST | `/settings/cms/entity-types` | MISMATCHED | UNBOUND | client imports `CreateEntityTypeBody` from @protocol/schemas, but this route's schema (`createEntityTypeBodySchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof createEntityTypeBodySchema>` beside it in packages/protocol/schemas/entity-schema.ts<br>named type `EntityTypeDefinition` is not imported from @protocol/schemas |
-| `updateEntityType` | src/client/lib/api/cms.ts:33 | PATCH | `/settings/cms/entity-types/:param` | UNBOUND | UNBOUND | named type `Partial<CreateEntityTypeBody> & { isArchived?: boolean }` is not imported from @protocol/schemas<br>named type `EntityTypeDefinition` is not imported from @protocol/schemas |
-| `customizeEntityType` | src/client/lib/api/cms.ts:40 | PATCH | `/settings/cms/entity-types/:param/customize` | UNBOUND | UNBOUND | named type `import('@protocol/schemas/entity-schema').EntityTemplateCustomizeBody` is not imported from @protocol/schemas<br>named type `EntityTypeDefinition` is not imported from @protocol/schemas |
-| `deleteEntityType` | src/client/lib/api/cms.ts:50 | DELETE | `/settings/cms/entity-types/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listTemplates` | src/client/lib/api/cms.ts:56 | GET | `/settings/cms/templates` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `templateListResponseSchema` — add `export type <Name> = z.infer<typeof templateListResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts |
-| `applyTemplate` | src/client/lib/api/cms.ts:60 | POST | `/settings/cms/templates/apply` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `templateApplyResponseSchema` — add `export type <Name> = z.infer<typeof templateApplyResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getTemplateDetails` | src/client/lib/api/cms.ts:68 | GET | `/settings/cms/templates/:param` | N/A | N/A |  |
-| `createRolesFromTemplate` | src/client/lib/api/cms.ts:77 | POST | `/settings/cms/roles/from-template` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `rolesFromTemplateResponseSchema` — add `export type <Name> = z.infer<typeof rolesFromTemplateResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `listEntityTemplates` | src/client/lib/api/cms.ts:93 | GET | `/settings/cms/templates` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `templateListResponseSchema` — add `export type <Name> = z.infer<typeof templateListResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts |
-| `applyEntityTemplate` | src/client/lib/api/cms.ts:97 | POST | `/settings/cms/templates/apply` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `templateApplyResponseSchema` — add `export type <Name> = z.infer<typeof templateApplyResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `listContacts` | src/client/lib/api/contacts.ts:17 | GET | `/contacts` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `contactTimelineListResponseSchema` — add `export type <Name> = z.infer<typeof contactTimelineListResponseSchema>` beside it in packages/protocol/schemas/contacts.ts |
-| `getContactTimeline` | src/client/lib/api/contacts.ts:24 | GET | `/contacts/:param` | N/A | UNBOUND | named type `ContactTimeline` is not imported from @protocol/schemas |
+| `getUserPresence` | src/client/lib/api/calls.ts:101 | GET | `/calls/presence` | N/A | BOUND |  |
+| `setOnAuthExpired` | src/client/lib/api/client.ts:11 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `notifyAuthExpired` | src/client/lib/api/client.ts:18 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `setOnHubGone` | src/client/lib/api/client.ts:24 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `notifyHubGone` | src/client/lib/api/client.ts:27 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `holdsSession` | src/client/lib/api/client.ts:50 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `getAuthHeaders` | src/client/lib/api/client.ts:55 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `getAuthHeadersForReplay` | src/client/lib/api/client.ts:79 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `setOnApiActivity` | src/client/lib/api/client.ts:85 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `notifyApiActivity` | src/client/lib/api/client.ts:88 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `isRetryable` | src/client/lib/api/client.ts:121 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `request` | src/client/lib/api/client.ts:137 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `isHubNotFound` | src/client/lib/api/client.ts:271 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `getApiErrorCode` | src/client/lib/api/client.ts:282 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `isNetworkError` | src/client/lib/api/client.ts:323 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `setActiveHub` | src/client/lib/api/client.ts:342 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `getActiveHub` | src/client/lib/api/client.ts:347 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `subscribeActiveHub` | src/client/lib/api/client.ts:354 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `hp` | src/client/lib/api/client.ts:360 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `activeHubPath` | src/client/lib/api/client.ts:378 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `hubPath` | src/client/lib/api/client.ts:388 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `getConfig` | src/client/lib/api/client.ts:399 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `listCmsReportTypes` | src/client/lib/api/cms-report-types.ts:10 | GET | `/settings/cms/report-types` | N/A | BOUND |  |
+| `getCmsReportType` | src/client/lib/api/cms-report-types.ts:14 | GET | `/settings/cms/report-types/:param` | N/A | BOUND |  |
+| `createCmsReportType` | src/client/lib/api/cms-report-types.ts:18 | POST | `/settings/cms/report-types` | BOUND | BOUND |  |
+| `updateCmsReportType` | src/client/lib/api/cms-report-types.ts:25 | PATCH | `/settings/cms/report-types/:param` | BOUND | BOUND |  |
+| `deleteCmsReportType` | src/client/lib/api/cms-report-types.ts:32 | DELETE | `/settings/cms/report-types/:param` | N/A | BOUND |  |
+| `getCaseManagementEnabled` | src/client/lib/api/cms.ts:12 | GET | `/settings/cms/case-management` | N/A | BOUND |  |
+| `setCaseManagementEnabled` | src/client/lib/api/cms.ts:16 | PUT | `/settings/cms/case-management` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `listEntityTypes` | src/client/lib/api/cms.ts:23 | GET | `/settings/cms/entity-types` | N/A | BOUND |  |
+| `createEntityType` | src/client/lib/api/cms.ts:27 | POST | `/settings/cms/entity-types` | BOUND | BOUND |  |
+| `updateEntityType` | src/client/lib/api/cms.ts:34 | PATCH | `/settings/cms/entity-types/:param` | BOUND | BOUND |  |
+| `customizeEntityType` | src/client/lib/api/cms.ts:41 | PATCH | `/settings/cms/entity-types/:param/customize` | BOUND | BOUND |  |
+| `deleteEntityType` | src/client/lib/api/cms.ts:51 | DELETE | `/settings/cms/entity-types/:param` | N/A | BOUND |  |
+| `listTemplates` | src/client/lib/api/cms.ts:57 | GET | `/settings/cms/templates` | N/A | BOUND |  |
+| `applyTemplate` | src/client/lib/api/cms.ts:61 | POST | `/settings/cms/templates/apply` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getTemplateDetails` | src/client/lib/api/cms.ts:69 | GET | `/settings/cms/templates/:param` | N/A | N/A |  |
+| `listEntityTemplates` | src/client/lib/api/cms.ts:87 | GET | `/settings/cms/templates` | N/A | BOUND |  |
+| `applyEntityTemplate` | src/client/lib/api/cms.ts:91 | POST | `/settings/cms/templates/apply` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `listContacts` | src/client/lib/api/contacts.ts:17 | GET | `/contacts` | N/A | BOUND |  |
+| `getContactTimeline` | src/client/lib/api/contacts.ts:24 | GET | `/contacts/:param` | N/A | BOUND |  |
 | `listConversations` | src/client/lib/api/conversations.ts:27 | GET | `/conversations` | N/A | BOUND |  |
 | `getConversationMessages` | src/client/lib/api/conversations.ts:42 | GET | `/conversations/:param/messages` | N/A | BOUND |  |
-| `sendConversationMessage` | src/client/lib/api/conversations.ts:49 | POST | `/conversations/:param/messages` | UNBOUND | BOUND | hand-written shape; no PascalCase type alias exists yet for `sendMessageBodySchema` — add `export type <Name> = z.infer<typeof sendMessageBodySchema>` beside it in packages/protocol/schemas/conversations.ts |
-| `claimConversation` | src/client/lib/api/conversations.ts:60 | POST | `/conversations/:param/claim` | N/A | BOUND |  |
-| `updateConversation` | src/client/lib/api/conversations.ts:65 | PATCH | `/conversations/:param` | UNBOUND | BOUND | hand-written shape; no PascalCase type alias exists yet for `updateConversationBodySchema` — add `export type <Name> = z.infer<typeof updateConversationBodySchema>` beside it in packages/protocol/schemas/conversations.ts |
-| `getUserLoads` | src/client/lib/api/conversations.ts:73 | GET | `/conversations/load` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `volunteerLoadResponseSchema` — add `export type <Name> = z.infer<typeof volunteerLoadResponseSchema>` beside it in packages/protocol/schemas/conversations.ts |
-| `listActiveConversationsInHub` | src/client/lib/api/conversations.ts:86 | GET | `/conversations` | N/A | UNBOUND | named type `Pick<ConversationListResponse, 'conversations' \| 'total'>` is not imported from @protocol/schemas |
-| `getAssigneeEnvelopeGaps` | src/client/lib/api/conversations.ts:92 | GET | `/conversations/:param/assignee-envelopes` | N/A | BOUND |  |
-| `addAssigneeEnvelopes` | src/client/lib/api/conversations.ts:99 | POST | `/conversations/:param/assignee-envelopes` | BOUND | BOUND |  |
-| `listRawContacts` | src/client/lib/api/directory.ts:28 | GET | `/directory` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `contactListResponseSchema` — add `export type <Name> = z.infer<typeof contactListResponseSchema>` beside it in packages/protocol/schemas/contacts-v2.ts |
-| `getRawContact` | src/client/lib/api/directory.ts:43 | GET | `/directory/:param` | N/A | UNBOUND | named type `RawContact` is not imported from @protocol/schemas |
-| `createRawContact` | src/client/lib/api/directory.ts:48 | POST | `/directory` | MISMATCHED | UNBOUND | client imports `CreateRawContactBody` from @protocol/schemas, but this route's schema (`createContactBodySchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof createContactBodySchema>` beside it in packages/protocol/schemas/contacts-v2.ts<br>named type `RawContact` is not imported from @protocol/schemas |
-| `listDirectoryContacts` | src/client/lib/api/directory.ts:56 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getDirectoryContact` | src/client/lib/api/directory.ts:68 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `updateDirectoryContact` | src/client/lib/api/directory.ts:72 | PATCH | `/directory/:param` | UNBOUND | UNBOUND | named type `Partial<CreateRawContactBody>` is not imported from @protocol/schemas<br>named type `RawContact` is not imported from @protocol/schemas |
-| `deleteDirectoryContact` | src/client/lib/api/directory.ts:79 | DELETE | `/directory/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listDirectoryContactRelationships` | src/client/lib/api/directory.ts:83 | GET | `/directory/:param/relationships` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `contactRelationshipListResponseSchema` — add `export type <Name> = z.infer<typeof contactRelationshipListResponseSchema>` beside it in packages/protocol/schemas/contact-relationships.ts |
-| `listDirectoryContactGroups` | src/client/lib/api/directory.ts:87 | GET | `/directory/:param/groups` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `affinityGroupListResponseSchema` — add `export type <Name> = z.infer<typeof affinityGroupListResponseSchema>` beside it in packages/protocol/schemas/contact-relationships.ts |
-| `createContactRelationship` | src/client/lib/api/directory.ts:93 | POST | `/directory/:param/relationships` | BOUND | UNBOUND | named type `ContactRelationship` is not imported from @protocol/schemas |
-| `deleteContactRelationship` | src/client/lib/api/directory.ts:103 | DELETE | `/directory/:param/relationships/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listAffinityGroups` | src/client/lib/api/directory.ts:113 | GET | `/directory/groups` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `affinityGroupListResponseSchema` — add `export type <Name> = z.infer<typeof affinityGroupListResponseSchema>` beside it in packages/protocol/schemas/contact-relationships.ts |
-| `createAffinityGroup` | src/client/lib/api/directory.ts:117 | POST | `/directory/groups` | BOUND | BOUND |  |
-| `updateAffinityGroup` | src/client/lib/api/directory.ts:121 | PATCH | `/directory/groups/:param` | BOUND | BOUND |  |
-| `deleteAffinityGroup` | src/client/lib/api/directory.ts:125 | DELETE | `/directory/groups/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `addGroupMember` | src/client/lib/api/directory.ts:129 | POST | `/directory/groups/:param/members` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `removeGroupMember` | src/client/lib/api/directory.ts:136 | DELETE | `/directory/groups/:param/members/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listDirectoryContactCases` | src/client/lib/api/directory.ts:142 | GET | `/directory/:param/cases` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `contactCaseListResponseSchema` — add a PascalCase type alias for it in packages/protocol/schemas |
-| `mergeContacts` | src/client/lib/api/directory.ts:148 | POST | `/directory/merge` | BOUND | BOUND |  |
-| `bulkContactAction` | src/client/lib/api/directory.ts:155 | POST | `/directory/bulk` | BOUND | BOUND |  |
-| `bulkCreateContacts` | src/client/lib/api/directory.ts:162 | POST | `/directory/bulk-create` | BOUND | BOUND |  |
-| `listEvidence` | src/client/lib/api/evidence.ts:9 | GET | `/records/:param/evidence` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `evidenceListResponseSchema` — add `export type <Name> = z.infer<typeof evidenceListResponseSchema>` beside it in packages/protocol/schemas/evidence.ts |
-| `uploadEvidence` | src/client/lib/api/evidence.ts:27 | POST | `/records/:param/evidence` | UNBOUND | BOUND | hand-written shape; protocol already exports `UploadEvidenceBody` for this schema — import it instead |
-| `getEvidenceMetadata` | src/client/lib/api/evidence.ts:46 | GET | `/evidence/:param` | N/A | BOUND |  |
-| `getEvidenceCustody` | src/client/lib/api/evidence.ts:50 | GET | `/evidence/:param/custody` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `custodyChainResponseSchema` — add `export type <Name> = z.infer<typeof custodyChainResponseSchema>` beside it in packages/protocol/schemas/evidence.ts |
-| `logEvidenceAccess` | src/client/lib/api/evidence.ts:57 | POST | `/evidence/:param/access` | UNBOUND | BOUND | hand-written shape; protocol already exports `LogCustodyEventBody` for this schema — import it instead |
-| `verifyEvidenceIntegrity` | src/client/lib/api/evidence.ts:68 | POST | `/evidence/:param/verify` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `verifyIntegrityResponseSchema` — add `export type <Name> = z.infer<typeof verifyIntegrityResponseSchema>` beside it in packages/protocol/schemas/evidence.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `initUpload` | src/client/lib/api/files.ts:19 | POST | `/uploads/init` | BOUND | BOUND |  |
-| `uploadChunk` | src/client/lib/api/files.ts:26 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `completeUpload` | src/client/lib/api/files.ts:71 | POST | `/uploads/:param/complete` | N/A | BOUND |  |
-| `getUploadStatus` | src/client/lib/api/files.ts:75 | GET | `/uploads/:param/status` | N/A | BOUND |  |
-| `downloadFile` | src/client/lib/api/files.ts:79 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getFileEnvelopes` | src/client/lib/api/files.ts:113 | GET | `/files/:param/envelopes` | N/A | BOUND |  |
-| `getFileMetadata` | src/client/lib/api/files.ts:117 | GET | `/files/:param/metadata` | N/A | BOUND |  |
-| `shareFile` | src/client/lib/api/files.ts:121 | POST | `/files/:param/share` | BOUND | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listFirehoseConnections` | src/client/lib/api/firehose.ts:11 | GET | `/firehose` | N/A | N/A |  |
-| `getFirehoseConnection` | src/client/lib/api/firehose.ts:15 | GET | `/firehose/:param` | N/A | N/A |  |
-| `createFirehoseConnection` | src/client/lib/api/firehose.ts:19 | POST | `/firehose` | UNBOUND | N/A | hand-written shape; protocol already exports `CreateFirehoseConnectionInput` for this schema — import it instead |
-| `updateFirehoseConnection` | src/client/lib/api/firehose.ts:36 | PATCH | `/firehose/:param` | UNBOUND | N/A | hand-written shape; protocol already exports `UpdateFirehoseConnectionInput` for this schema — import it instead |
-| `deleteFirehoseConnection` | src/client/lib/api/firehose.ts:54 | DELETE | `/firehose/:param` | N/A | N/A |  |
-| `activateFirehoseConnection` | src/client/lib/api/firehose.ts:58 | POST | `/firehose/:param/activate` | N/A | N/A |  |
-| `pauseFirehoseConnection` | src/client/lib/api/firehose.ts:62 | POST | `/firehose/:param/pause` | N/A | N/A |  |
-| `getFirehoseStatus` | src/client/lib/api/firehose.ts:66 | GET | `/firehose/status` | N/A | N/A |  |
-| `getFirehoseBuffer` | src/client/lib/api/firehose.ts:70 | GET | `/firehose/:param/buffer` | N/A | N/A |  |
-| `purgeFirehoseBuffer` | src/client/lib/api/firehose.ts:80 | DELETE | `/firehose/:param/buffer` | N/A | N/A |  |
-| `optoutFirehoseNotifications` | src/client/lib/api/firehose.ts:84 | POST | `/firehose/:param/optout` | N/A | N/A |  |
-| `optinFirehoseNotifications` | src/client/lib/api/firehose.ts:91 | DELETE | `/firehose/:param/optout` | N/A | N/A |  |
-| `getMyErasureRequest` | src/client/lib/api/governance.ts:18 | GET | `/erasure/me` | N/A | BOUND |  |
-| `createMyErasureRequest` | src/client/lib/api/governance.ts:22 | POST | `/erasure/me` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `erasureRequestResponseSchema` — add `export type <Name> = z.infer<typeof erasureRequestResponseSchema>` beside it in packages/protocol/schemas/erasure.ts |
-| `cancelMyErasureRequest` | src/client/lib/api/governance.ts:26 | DELETE | `/erasure/me` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listErasureRequests` | src/client/lib/api/governance.ts:30 | GET | `/erasure/requests` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `erasureRequestListResponseSchema` — add `export type <Name> = z.infer<typeof erasureRequestListResponseSchema>` beside it in packages/protocol/schemas/erasure.ts |
-| `adminEraseUser` | src/client/lib/api/governance.ts:37 | POST | `/erasure/:param` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `remoteWipeDevice` | src/client/lib/api/governance.ts:44 | POST | `/erasure/:param/wipe-device/:param` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getErasureConfig` | src/client/lib/api/governance.ts:50 | GET | `/erasure/config` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `erasureConfigResponseSchema` — add `export type <Name> = z.infer<typeof erasureConfigResponseSchema>` beside it in packages/protocol/schemas/erasure.ts |
-| `updateErasureConfig` | src/client/lib/api/governance.ts:54 | PATCH | `/erasure/config` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `updateErasureConfigBodySchema` — add `export type <Name> = z.infer<typeof updateErasureConfigBodySchema>` beside it in packages/protocol/schemas/erasure.ts<br>hand-written shape; no PascalCase type alias exists yet for `erasureConfigResponseSchema` — add `export type <Name> = z.infer<typeof erasureConfigResponseSchema>` beside it in packages/protocol/schemas/erasure.ts |
-| `listEnvelopeRevocationJobs` | src/client/lib/api/governance.ts:61 | GET | `/erasure/envelope-revocation-jobs` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `envelopeRevocationJobListResponseSchema` — add `export type <Name> = z.infer<typeof envelopeRevocationJobListResponseSchema>` beside it in packages/protocol/schemas/erasure.ts |
-| `getRetentionSettings` | src/client/lib/api/governance.ts:70 | GET | `/retention` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `retentionSettingsResponseSchema` — add `export type <Name> = z.infer<typeof retentionSettingsResponseSchema>` beside it in packages/protocol/schemas/retention.ts |
-| `updateRetentionSettings` | src/client/lib/api/governance.ts:74 | PATCH | `/retention` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `updateRetentionBodySchema` — add `export type <Name> = z.infer<typeof updateRetentionBodySchema>` beside it in packages/protocol/schemas/retention.ts<br>hand-written shape; no PascalCase type alias exists yet for `retentionSettingsResponseSchema` — add `export type <Name> = z.infer<typeof retentionSettingsResponseSchema>` beside it in packages/protocol/schemas/retention.ts |
-| `getRetentionPlatformFloors` | src/client/lib/api/governance.ts:81 | GET | `/retention/platform-floors` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `retentionFloorsResponseSchema` — add `export type <Name> = z.infer<typeof retentionFloorsResponseSchema>` beside it in packages/protocol/schemas/retention.ts |
-| `updateRetentionPlatformFloor` | src/client/lib/api/governance.ts:85 | PATCH | `/retention/platform-floors` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `updateRetentionFloorsBodySchema` — add `export type <Name> = z.infer<typeof updateRetentionFloorsBodySchema>` beside it in packages/protocol/schemas/retention.ts<br>hand-written shape; no PascalCase type alias exists yet for `retentionFloorsResponseSchema` — add `export type <Name> = z.infer<typeof retentionFloorsResponseSchema>` beside it in packages/protocol/schemas/retention.ts |
-| `listPlatformBans` | src/client/lib/api/governance.ts:94 | GET | `/admin/bans` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `platformBanListResponseSchema` — add `export type <Name> = z.infer<typeof platformBanListResponseSchema>` beside it in packages/protocol/schemas/bans.ts |
-| `createPlatformBan` | src/client/lib/api/governance.ts:102 | POST | `/admin/bans` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createPlatformBanBodySchema` — add `export type <Name> = z.infer<typeof createPlatformBanBodySchema>` beside it in packages/protocol/schemas/bans.ts<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `deletePlatformBan` | src/client/lib/api/governance.ts:110 | DELETE | `/admin/bans/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `bulkImportPlatformBans` | src/client/lib/api/governance.ts:115 | POST | `/admin/bans/bulk` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `bulkPlatformBanBodySchema` — add `export type <Name> = z.infer<typeof bulkPlatformBanBodySchema>` beside it in packages/protocol/schemas/bans.ts<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `searchPlatformBans` | src/client/lib/api/governance.ts:122 | GET | `/admin/bans/search` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `searchBansResponseSchema` — add `export type <Name> = z.infer<typeof searchBansResponseSchema>` beside it in packages/protocol/schemas/bans.ts |
-| `promoteHubBan` | src/client/lib/api/governance.ts:129 | POST | `/admin/bans/promote` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getPlatformSettings` | src/client/lib/api/governance.ts:138 | GET | `/settings/platform` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `platformSettingsResponseSchema` — add `export type <Name> = z.infer<typeof platformSettingsResponseSchema>` beside it in packages/protocol/schemas/platform-settings.ts |
-| `updatePlatformSettings` | src/client/lib/api/governance.ts:142 | PATCH | `/settings/platform` | UNBOUND | UNBOUND | named type `Partial<PlatformSettings>` is not imported from @protocol/schemas<br>hand-written shape; no PascalCase type alias exists yet for `platformSettingsResponseSchema` — add `export type <Name> = z.infer<typeof platformSettingsResponseSchema>` beside it in packages/protocol/schemas/platform-settings.ts |
+| `sendConversationMessage` | src/client/lib/api/conversations.ts:49 | POST | `/conversations/:param/messages` | BOUND | BOUND |  |
+| `claimConversation` | src/client/lib/api/conversations.ts:56 | POST | `/conversations/:param/claim` | N/A | BOUND |  |
+| `updateConversation` | src/client/lib/api/conversations.ts:61 | PATCH | `/conversations/:param` | BOUND | BOUND |  |
+| `getUserLoads` | src/client/lib/api/conversations.ts:69 | GET | `/conversations/load` | N/A | BOUND |  |
+| `listActiveConversationsInHub` | src/client/lib/api/conversations.ts:82 | GET | `/conversations` | N/A | BOUND |  |
+| `getAssigneeEnvelopeGaps` | src/client/lib/api/conversations.ts:88 | GET | `/conversations/:param/assignee-envelopes` | N/A | BOUND |  |
+| `addAssigneeEnvelopes` | src/client/lib/api/conversations.ts:95 | POST | `/conversations/:param/assignee-envelopes` | BOUND | BOUND |  |
+| `listRawContacts` | src/client/lib/api/directory.ts:27 | GET | `/directory` | N/A | BOUND |  |
+| `getRawContact` | src/client/lib/api/directory.ts:42 | GET | `/directory/:param` | N/A | BOUND |  |
+| `createRawContact` | src/client/lib/api/directory.ts:47 | POST | `/directory` | BOUND | BOUND |  |
+| `listDirectoryContacts` | src/client/lib/api/directory.ts:55 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `getDirectoryContact` | src/client/lib/api/directory.ts:67 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `updateDirectoryContact` | src/client/lib/api/directory.ts:71 | PATCH | `/directory/:param` | BOUND | BOUND |  |
+| `deleteDirectoryContact` | src/client/lib/api/directory.ts:78 | DELETE | `/directory/:param` | N/A | BOUND |  |
+| `listDirectoryContactRelationships` | src/client/lib/api/directory.ts:82 | GET | `/directory/:param/relationships` | N/A | BOUND |  |
+| `listDirectoryContactGroups` | src/client/lib/api/directory.ts:86 | GET | `/directory/:param/groups` | N/A | BOUND |  |
+| `createContactRelationship` | src/client/lib/api/directory.ts:92 | POST | `/directory/:param/relationships` | BOUND | BOUND |  |
+| `deleteContactRelationship` | src/client/lib/api/directory.ts:102 | DELETE | `/directory/:param/relationships/:param` | N/A | BOUND |  |
+| `listAffinityGroups` | src/client/lib/api/directory.ts:112 | GET | `/directory/groups` | N/A | BOUND |  |
+| `createAffinityGroup` | src/client/lib/api/directory.ts:116 | POST | `/directory/groups` | BOUND | BOUND |  |
+| `updateAffinityGroup` | src/client/lib/api/directory.ts:120 | PATCH | `/directory/groups/:param` | BOUND | BOUND |  |
+| `deleteAffinityGroup` | src/client/lib/api/directory.ts:124 | DELETE | `/directory/groups/:param` | N/A | BOUND |  |
+| `addGroupMember` | src/client/lib/api/directory.ts:128 | POST | `/directory/groups/:param/members` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `removeGroupMember` | src/client/lib/api/directory.ts:135 | DELETE | `/directory/groups/:param/members/:param` | N/A | BOUND |  |
+| `listDirectoryContactCases` | src/client/lib/api/directory.ts:141 | GET | `/directory/:param/cases` | N/A | BOUND |  |
+| `mergeContacts` | src/client/lib/api/directory.ts:147 | POST | `/directory/merge` | BOUND | BOUND |  |
+| `bulkContactAction` | src/client/lib/api/directory.ts:154 | POST | `/directory/bulk` | BOUND | BOUND |  |
+| `bulkCreateContacts` | src/client/lib/api/directory.ts:161 | POST | `/directory/bulk-create` | BOUND | BOUND |  |
+| `listEvidence` | src/client/lib/api/evidence.ts:9 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `hubId ? hubPath(hubId, `/records/${recordId}/evidence?${qs}`) : activeHubPath(`/records/${recordId}/evidence?${qs}`)` |
+| `uploadEvidence` | src/client/lib/api/evidence.ts:31 | POST | `/records/:param/evidence` | BOUND | BOUND |  |
+| `getEvidenceMetadata` | src/client/lib/api/evidence.ts:38 | GET | `/evidence/:param` | N/A | BOUND |  |
+| `getEvidenceCustody` | src/client/lib/api/evidence.ts:42 | GET | `/evidence/:param/custody` | N/A | BOUND |  |
+| `logEvidenceAccess` | src/client/lib/api/evidence.ts:46 | POST | `/evidence/:param/access` | BOUND | BOUND |  |
+| `verifyEvidenceIntegrity` | src/client/lib/api/evidence.ts:53 | POST | `/evidence/:param/verify` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `initUpload` | src/client/lib/api/files.ts:36 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `uploadHubPath(hubId, '/uploads/init')` |
+| `uploadChunk` | src/client/lib/api/files.ts:43 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `completeUpload` | src/client/lib/api/files.ts:88 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `uploadHubPath(hubId, `/uploads/${uploadId}/complete`)` |
+| `getUploadStatus` | src/client/lib/api/files.ts:92 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `uploadHubPath(hubId, `/uploads/${uploadId}/status`)` |
+| `downloadFile` | src/client/lib/api/files.ts:96 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `getFileEnvelopes` | src/client/lib/api/files.ts:130 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `uploadHubPath(hubId, `/files/${fileId}/envelopes`)` |
+| `getFileMetadata` | src/client/lib/api/files.ts:134 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `uploadHubPath(hubId, `/files/${fileId}/metadata`)` |
+| `shareFile` | src/client/lib/api/files.ts:138 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `uploadHubPath(hubId, `/files/${fileId}/share`)` |
+| `listFirehoseConnections` | src/client/lib/api/firehose.ts:12 | GET | `/firehose` | N/A | N/A |  |
+| `getFirehoseConnection` | src/client/lib/api/firehose.ts:16 | GET | `/firehose/:param` | N/A | N/A |  |
+| `createFirehoseConnection` | src/client/lib/api/firehose.ts:20 | POST | `/firehose` | BOUND | N/A |  |
+| `updateFirehoseConnection` | src/client/lib/api/firehose.ts:27 | PATCH | `/firehose/:param` | BOUND | N/A |  |
+| `deleteFirehoseConnection` | src/client/lib/api/firehose.ts:34 | DELETE | `/firehose/:param` | N/A | N/A |  |
+| `activateFirehoseConnection` | src/client/lib/api/firehose.ts:38 | POST | `/firehose/:param/activate` | N/A | N/A |  |
+| `pauseFirehoseConnection` | src/client/lib/api/firehose.ts:42 | POST | `/firehose/:param/pause` | N/A | N/A |  |
+| `getFirehoseStatus` | src/client/lib/api/firehose.ts:46 | GET | `/firehose/status` | N/A | N/A |  |
+| `getFirehoseBuffer` | src/client/lib/api/firehose.ts:50 | GET | `/firehose/:param/buffer` | N/A | N/A |  |
+| `purgeFirehoseBuffer` | src/client/lib/api/firehose.ts:60 | DELETE | `/firehose/:param/buffer` | N/A | N/A |  |
+| `optoutFirehoseNotifications` | src/client/lib/api/firehose.ts:64 | POST | `/firehose/:param/optout` | N/A | N/A |  |
+| `optinFirehoseNotifications` | src/client/lib/api/firehose.ts:71 | DELETE | `/firehose/:param/optout` | N/A | N/A |  |
+| `getMyErasureRequest` | src/client/lib/api/governance.ts:23 | GET | `/erasure/me` | N/A | BOUND |  |
+| `createMyErasureRequest` | src/client/lib/api/governance.ts:27 | POST | `/erasure/me` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined |
+| `cancelMyErasureRequest` | src/client/lib/api/governance.ts:31 | DELETE | `/erasure/me` | N/A | BOUND |  |
+| `listErasureRequests` | src/client/lib/api/governance.ts:35 | GET | `/erasure/requests` | N/A | BOUND |  |
+| `adminEraseUser` | src/client/lib/api/governance.ts:42 | POST | `/erasure/:param` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `remoteWipeDevice` | src/client/lib/api/governance.ts:49 | POST | `/erasure/:param/wipe-device/:param` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined |
+| `getErasureConfig` | src/client/lib/api/governance.ts:55 | GET | `/erasure/config` | N/A | BOUND |  |
+| `updateErasureConfig` | src/client/lib/api/governance.ts:59 | PATCH | `/erasure/config` | BOUND | BOUND |  |
+| `listEnvelopeRevocationJobs` | src/client/lib/api/governance.ts:66 | GET | `/erasure/envelope-revocation-jobs` | N/A | BOUND |  |
+| `getRetentionSettings` | src/client/lib/api/governance.ts:75 | GET | `/retention` | N/A | BOUND |  |
+| `updateRetentionSettings` | src/client/lib/api/governance.ts:79 | PATCH | `/retention` | BOUND | BOUND |  |
+| `getRetentionPlatformFloors` | src/client/lib/api/governance.ts:86 | GET | `/retention/platform-floors` | N/A | BOUND |  |
+| `updateRetentionPlatformFloor` | src/client/lib/api/governance.ts:90 | PATCH | `/retention/platform-floors` | BOUND | BOUND |  |
+| `listPlatformBans` | src/client/lib/api/governance.ts:99 | GET | `/admin/bans` | N/A | BOUND |  |
+| `platformBanDigests` | src/client/lib/api/governance.ts:113 | POST | `/admin/bans/evaluate` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `banLookups` | src/client/lib/api/governance.ts:135 | POST | `/admin/bans/search/evaluate` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `createPlatformBan` | src/client/lib/api/governance.ts:161 | POST | `/admin/bans` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `deletePlatformBan` | src/client/lib/api/governance.ts:170 | DELETE | `/admin/bans/:param` | N/A | BOUND |  |
+| `dismissPlatformBanReentry` | src/client/lib/api/governance.ts:176 | DELETE | `/admin/bans/reentries/:param` | N/A | BOUND |  |
+| `bulkImportPlatformBans` | src/client/lib/api/governance.ts:180 | POST | `/admin/bans/bulk` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `searchPlatformBans` | src/client/lib/api/governance.ts:192 | POST | `/admin/bans/search` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `promoteHubBan` | src/client/lib/api/governance.ts:204 | POST | `/admin/bans/promote` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getPlatformSettings` | src/client/lib/api/governance.ts:217 | GET | `/settings/platform` | N/A | BOUND |  |
+| `updatePlatformSettings` | src/client/lib/api/governance.ts:221 | PATCH | `/settings/platform` | BOUND | BOUND |  |
 | `startOnboarding` | src/client/lib/api/hub-onboard.ts:11 | POST | `/hubs/:param/onboard` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
 | `getOnboardingStatus` | src/client/lib/api/hub-onboard.ts:21 | GET | `/hubs/:param/onboard/status` | N/A | N/A |  |
 | `completeOnboardingStep` | src/client/lib/api/hub-onboard.ts:29 | PUT | `/hubs/:param/onboard/step` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
 | `getProviderStatus` | src/client/lib/api/hub-onboard.ts:43 | GET | `/hubs/:param/onboard/provider-status` | N/A | N/A |  |
 | `getHubUsage` | src/client/lib/api/hub-onboard.ts:49 | GET | `/hubs/:param/onboard/usage` | N/A | N/A |  |
-| `setHubQuotas` | src/client/lib/api/hub-onboard.ts:55 | PUT | `/hubs/:param/onboard/quotas` | MISMATCHED | N/A | client imports `HubQuota` from @protocol/schemas, but this route's schema (`hubQuotaSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas |
+| `setHubQuotas` | src/client/lib/api/hub-onboard.ts:55 | PUT | `/hubs/:param/onboard/quotas` | BOUND | N/A |  |
 | `updateChannel` | src/client/lib/api/hub-onboard.ts:68 | PUT | `/hubs/:param/onboard/channels` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
 | `provisionSubAccount` | src/client/lib/api/hub-onboard.ts:82 | POST | `/hubs/:param/onboard/sub-account` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
 | `listProviderTemplates` | src/client/lib/api/hub-onboard.ts:95 | GET | `/provider-templates` | N/A | N/A |  |
 | `getProviderTemplate` | src/client/lib/api/hub-onboard.ts:101 | GET | `/provider-templates/:param` | N/A | N/A |  |
-| `listHubs` | src/client/lib/api/hubs.ts:9 | GET | `/hubs` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `hubListResponseSchema` — add `export type <Name> = z.infer<typeof hubListResponseSchema>` beside it in packages/protocol/schemas/hubs.ts |
-| `createHub` | src/client/lib/api/hubs.ts:13 | POST | `/hubs` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createHubBodySchema` — add `export type <Name> = z.infer<typeof createHubBodySchema>` beside it in packages/protocol/schemas/hubs.ts<br>hand-written shape; no PascalCase type alias exists yet for `hubDetailResponseSchema` — add `export type <Name> = z.infer<typeof hubDetailResponseSchema>` beside it in packages/protocol/schemas/hubs.ts |
-| `getHub` | src/client/lib/api/hubs.ts:20 | GET | `/hubs/:param` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `hubDetailResponseSchema` — add `export type <Name> = z.infer<typeof hubDetailResponseSchema>` beside it in packages/protocol/schemas/hubs.ts |
-| `updateHub` | src/client/lib/api/hubs.ts:24 | PATCH | `/hubs/:param` | UNBOUND | UNBOUND | named type `Partial<Hub>` is not imported from @protocol/schemas<br>hand-written shape; protocol already exports `Hub` for this schema — import it instead |
-| `deleteHub` | src/client/lib/api/hubs.ts:31 | DELETE | `/hubs/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `addHubMember` | src/client/lib/api/hubs.ts:37 | POST | `/hubs/:param/members` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `removeHubMember` | src/client/lib/api/hubs.ts:44 | DELETE | `/hubs/:param/members/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `fetchSystemHealth` | src/client/lib/api/hubs.ts:50 | GET | `/system/health` | N/A | BOUND |  |
+| `listHubs` | src/client/lib/api/hubs.ts:21 | GET | `/hubs` | N/A | BOUND |  |
+| `getMyHubPermissions` | src/client/lib/api/hubs.ts:31 | GET | `/hubs/:param/permissions/me` | N/A | BOUND |  |
+| `createHub` | src/client/lib/api/hubs.ts:35 | POST | `/hubs` | BOUND | BOUND |  |
+| `getHub` | src/client/lib/api/hubs.ts:42 | GET | `/hubs/:param` | N/A | BOUND |  |
+| `updateHub` | src/client/lib/api/hubs.ts:46 | PATCH | `/hubs/:param` | BOUND | BOUND |  |
+| `deleteHub` | src/client/lib/api/hubs.ts:53 | DELETE | `/hubs/:param` | N/A | BOUND |  |
+| `addHubMember` | src/client/lib/api/hubs.ts:59 | POST | `/hubs/:param/members` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `removeHubMember` | src/client/lib/api/hubs.ts:66 | DELETE | `/hubs/:param/members/:param` | N/A | BOUND |  |
+| `getHubReaders` | src/client/lib/api/hubs.ts:78 | GET | `/hubs/:param/readers` | N/A | BOUND |  |
+| `getHubKeyEnvelope` | src/client/lib/api/hubs.ts:85 | GET | `/hubs/:param/key` | N/A | BOUND |  |
+| `getHubKeyRecipients` | src/client/lib/api/hubs.ts:90 | GET | `/hubs/:param/key/recipients` | N/A | BOUND |  |
+| `getHubKeyRotation` | src/client/lib/api/hubs.ts:95 | GET | `/hubs/:param/key/rotation` | N/A | BOUND |  |
+| `rotateHubKey` | src/client/lib/api/hubs.ts:104 | POST | `/hubs/:param/key/rotate` | BOUND | BOUND |  |
+| `setHubKeyEnvelopes` | src/client/lib/api/hubs.ts:112 | PUT | `/hubs/:param/key` | BOUND | BOUND |  |
+| `fetchSystemHealth` | src/client/lib/api/hubs.ts:121 | GET | `/system/health` | N/A | BOUND |  |
 | `getSigchain` | src/client/lib/api/identity.ts:13 | GET | `/users/:param/sigchain` | N/A | BOUND |  |
 | `appendSigchainLink` | src/client/lib/api/identity.ts:17 | POST | `/users/:param/sigchain` | BOUND | BOUND |  |
 | `distributePukEnvelopes` | src/client/lib/api/identity.ts:26 | POST | `/puk/envelopes` | BOUND | BOUND |  |
 | `getPukEnvelope` | src/client/lib/api/identity.ts:33 | GET | `/puk/envelopes/:param` | N/A | BOUND |  |
 | `listOpenIncidents` | src/client/lib/api/incidents.ts:14 | GET | `/incidents` | N/A | BOUND |  |
-| `listInteractions` | src/client/lib/api/interactions.ts:11 | GET | `/records/:param/interactions` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `interactionListResponseSchema` — add `export type <Name> = z.infer<typeof interactionListResponseSchema>` beside it in packages/protocol/schemas/interactions.ts |
-| `createInteraction` | src/client/lib/api/interactions.ts:33 | POST | `/records/:param/interactions` | UNBOUND | BOUND | hand-written shape; protocol already exports `CreateInteractionBody` for this schema — import it instead |
-| `listInvites` | src/client/lib/api/invites.ts:10 | GET | `/invites` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `inviteListResponseSchema` — add `export type <Name> = z.infer<typeof inviteListResponseSchema>` beside it in packages/protocol/schemas/invites.ts |
+| `listInteractions` | src/client/lib/api/interactions.ts:17 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `recordPath(hubId, `/records/${recordId}/interactions?${qs}`)` |
+| `createInteraction` | src/client/lib/api/interactions.ts:43 | POST | `/records/:param/interactions` | BOUND | BOUND |  |
+| `listInvites` | src/client/lib/api/invites.ts:10 | GET | `/invites` | N/A | BOUND |  |
 | `createInvite` | src/client/lib/api/invites.ts:20 | POST | `/invites` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `revokeInvite` | src/client/lib/api/invites.ts:28 | DELETE | `/invites/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
+| `revokeInvite` | src/client/lib/api/invites.ts:28 | DELETE | `/invites/:param` | N/A | BOUND |  |
 | `validateInvite` | src/client/lib/api/invites.ts:63 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
 | `redeemInvite` | src/client/lib/api/invites.ts:86 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `listIvrAudio` | src/client/lib/api/ivr-audio.ts:11 | GET | `/settings/ivr-audio` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `ivrAudioPromptsResponseSchema` — add `export type <Name> = z.infer<typeof ivrAudioPromptsResponseSchema>` beside it in packages/protocol/schemas/settings.ts |
+| `listIvrAudio` | src/client/lib/api/ivr-audio.ts:11 | GET | `/settings/ivr-audio` | N/A | BOUND |  |
 | `uploadIvrAudio` | src/client/lib/api/ivr-audio.ts:46 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
 | `downloadIvrAudio` | src/client/lib/api/ivr-audio.ts:53 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `deleteIvrAudio` | src/client/lib/api/ivr-audio.ts:58 | DELETE | `/settings/ivr-audio/:param/:param` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `successResponseSchema` — add `export type <Name> = z.infer<typeof successResponseSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `getMessagingConfig` | src/client/lib/api/messaging-config.ts:8 | GET | `/settings/messaging` | N/A | UNBOUND | named type `MessagingConfig` is not imported from @protocol/schemas |
-| `updateMessagingConfig` | src/client/lib/api/messaging-config.ts:12 | PATCH | `/settings/messaging` | UNBOUND | UNBOUND | named type `Partial<MessagingConfig>` is not imported from @protocol/schemas<br>named type `MessagingConfig` is not imported from @protocol/schemas |
-| `testMessagingChannel` | src/client/lib/api/messaging-config.ts:19 | POST | `/settings/messaging/test` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getMigrationStatus` | src/client/lib/api/migrations.ts:5 | GET | `/settings/migrations` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `migrationStatusResponseSchema` — add `export type <Name> = z.infer<typeof migrationStatusResponseSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `listNotes` | src/client/lib/api/notes.ts:8 | GET | `/notes` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `noteListResponseSchema` — add `export type <Name> = z.infer<typeof noteListResponseSchema>` beside it in packages/protocol/schemas/notes.ts |
-| `createNote` | src/client/lib/api/notes.ts:18 | POST | `/notes` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createNoteBodySchema` — add `export type <Name> = z.infer<typeof createNoteBodySchema>` beside it in packages/protocol/schemas/notes.ts<br>hand-written shape; no PascalCase type alias exists yet for `noteStoredResponseSchema` — add `export type <Name> = z.infer<typeof noteStoredResponseSchema>` beside it in packages/protocol/schemas/notes.ts |
-| `updateNote` | src/client/lib/api/notes.ts:37 | PATCH | `/notes/:param` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `updateNoteBodySchema` — add `export type <Name> = z.infer<typeof updateNoteBodySchema>` beside it in packages/protocol/schemas/notes.ts<br>hand-written shape; no PascalCase type alias exists yet for `noteStoredResponseSchema` — add `export type <Name> = z.infer<typeof noteStoredResponseSchema>` beside it in packages/protocol/schemas/notes.ts |
-| `listNoteReplies` | src/client/lib/api/notes.ts:49 | GET | `/notes/:param/replies` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `noteRepliesResponseSchema` — add `export type <Name> = z.infer<typeof noteRepliesResponseSchema>` beside it in packages/protocol/schemas/notes.ts |
-| `createNoteReply` | src/client/lib/api/notes.ts:53 | POST | `/notes/:param/replies` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createReplyBodySchema` — add `export type <Name> = z.infer<typeof createReplyBodySchema>` beside it in packages/protocol/schemas/notes.ts<br>hand-written shape; no PascalCase type alias exists yet for `noteReplyStoredResponseSchema` — add `export type <Name> = z.infer<typeof noteReplyStoredResponseSchema>` beside it in packages/protocol/schemas/notes.ts |
-| `startOAuth` | src/client/lib/api/provider-setup.ts:19 | POST | `/provider-setup/oauth/start` | MISMATCHED | MISMATCHED | client imports `StartOAuthRequest` from @protocol/schemas, but this route's schema (`startOAuthRequestSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas<br>client imports `StartOAuthResponse` from @protocol/schemas, but this route's schema (`startOAuthResponseSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas |
-| `getOAuthStatus` | src/client/lib/api/provider-setup.ts:30 | GET | `/provider-setup/oauth/status/:param` | N/A | MISMATCHED | client imports `OauthFlowState` from @protocol/schemas, but this route's schema (`oauthFlowStateSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas |
-| `getWebhookUrls` | src/client/lib/api/provider-setup.ts:42 | GET | `/provider-setup/webhook-urls` | N/A | MISMATCHED | client imports `WebhookUrlsResponse` from @protocol/schemas, but this route's schema (`webhookUrlsResponseSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas |
-| `configureProvider` | src/client/lib/api/provider-setup.ts:48 | POST | `/provider-setup/configure` | MISMATCHED | UNBOUND | client imports `ConfigureProviderRequest` from @protocol/schemas, but this route's schema (`configureProviderRequestSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
+| `deleteIvrAudio` | src/client/lib/api/ivr-audio.ts:58 | DELETE | `/settings/ivr-audio/:param/:param` | N/A | BOUND |  |
+| `getMessagingConfig` | src/client/lib/api/messaging-config.ts:9 | GET | `/settings/messaging` | N/A | BOUND |  |
+| `updateMessagingConfig` | src/client/lib/api/messaging-config.ts:13 | PATCH | `/settings/messaging` | BOUND | BOUND |  |
+| `testMessagingChannel` | src/client/lib/api/messaging-config.ts:20 | POST | `/settings/messaging/test` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getMigrationStatus` | src/client/lib/api/migrations.ts:6 | GET | `/settings/migrations` | N/A | BOUND |  |
+| `listNotes` | src/client/lib/api/notes.ts:8 | GET | `/notes` | N/A | BOUND |  |
+| `createNote` | src/client/lib/api/notes.ts:18 | POST | `/notes` | BOUND | BOUND |  |
+| `updateNote` | src/client/lib/api/notes.ts:30 | PATCH | `/notes/:param` | BOUND | BOUND |  |
+| `listNoteReplies` | src/client/lib/api/notes.ts:38 | GET | `/notes/:param/replies` | N/A | BOUND |  |
+| `createNoteReply` | src/client/lib/api/notes.ts:42 | POST | `/notes/:param/replies` | BOUND | BOUND |  |
+| `startOAuth` | src/client/lib/api/provider-setup.ts:19 | POST | `/provider-setup/oauth/start` | BOUND | BOUND |  |
+| `getOAuthStatus` | src/client/lib/api/provider-setup.ts:30 | GET | `/provider-setup/oauth/status/:param` | N/A | BOUND |  |
+| `getWebhookUrls` | src/client/lib/api/provider-setup.ts:42 | GET | `/provider-setup/webhook-urls` | N/A | BOUND |  |
+| `configureProvider` | src/client/lib/api/provider-setup.ts:48 | POST | `/provider-setup/configure` | BOUND | BOUND |  |
 | `testProviderConnection` | src/client/lib/api/provider-setup.ts:59 | POST | `/provider-setup/test` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getProviderStatus` | src/client/lib/api/provider-setup.ts:75 | GET | `/provider-setup/status/:param` | N/A | MISMATCHED | client imports `ProviderStatusResponse` from @protocol/schemas, but this route's schema (`providerStatusResponseSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas |
-| `listPhoneNumbers` | src/client/lib/api/provider-setup.ts:86 | GET | `/provider-setup/phone-numbers` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `ownedNumberListSchema` — add a PascalCase type alias for it in packages/protocol/schemas |
-| `searchPhoneNumbers` | src/client/lib/api/provider-setup.ts:96 | POST | `/provider-setup/phone-numbers/search` | MISMATCHED | UNBOUND | client imports `NumberSearchQuery` from @protocol/schemas, but this route's schema (`numberSearchQuerySchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas<br>hand-written shape; no PascalCase type alias exists yet for `availableNumberListSchema` — add a PascalCase type alias for it in packages/protocol/schemas |
-| `provisionPhoneNumber` | src/client/lib/api/provider-setup.ts:103 | POST | `/provider-setup/phone-numbers/provision` | MISMATCHED | MISMATCHED | client imports `NumberProvisionRequest` from @protocol/schemas, but this route's schema (`numberProvisionRequestSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas<br>client imports `OwnedNumber` from @protocol/schemas, but this route's schema (`ownedNumberSchema`) has no type alias yet to compare against — add a PascalCase type alias for it in packages/protocol/schemas |
-| `configureWebhooks` | src/client/lib/api/provider-setup.ts:112 | POST | `/provider-setup/configure-webhooks` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getProviderStatus` | src/client/lib/api/provider-setup.ts:75 | GET | `/provider-setup/status/:param` | N/A | BOUND |  |
+| `listPhoneNumbers` | src/client/lib/api/provider-setup.ts:86 | GET | `/provider-setup/phone-numbers` | N/A | BOUND |  |
+| `searchPhoneNumbers` | src/client/lib/api/provider-setup.ts:96 | POST | `/provider-setup/phone-numbers/search` | BOUND | BOUND |  |
+| `provisionPhoneNumber` | src/client/lib/api/provider-setup.ts:103 | POST | `/provider-setup/phone-numbers/provision` | BOUND | BOUND |  |
+| `configureWebhooks` | src/client/lib/api/provider-setup.ts:112 | POST | `/provider-setup/configure-webhooks` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
 | `createSipTrunk` | src/client/lib/api/provider-setup.ts:128 | POST | `/provider-setup/create-sip-trunk` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `startSignalRegistration` | src/client/lib/api/provider-setup.ts:174 | POST | `/provider-setup/signal/register` | UNBOUND | UNBOUND | named type `SignalRegisterBody` is not imported from @protocol/schemas<br>named type `SignalRegistrationResult` is not imported from @protocol/schemas |
-| `getSignalStatus` | src/client/lib/api/provider-setup.ts:183 | GET | `/provider-setup/signal/status` | N/A | UNBOUND | named type `SignalRegistrationResult` is not imported from @protocol/schemas |
-| `verifySignalCode` | src/client/lib/api/provider-setup.ts:192 | POST | `/provider-setup/signal/verify` | UNBOUND | UNBOUND | named type `SignalVerifyBody` is not imported from @protocol/schemas<br>named type `SignalRegistrationResult` is not imported from @protocol/schemas |
-| `unregisterSignal` | src/client/lib/api/provider-setup.ts:199 | DELETE | `/provider-setup/signal/unregister` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
+| `startSignalRegistration` | src/client/lib/api/provider-setup.ts:174 | POST | `/provider-setup/signal/register` | BOUND | BOUND |  |
+| `getSignalStatus` | src/client/lib/api/provider-setup.ts:183 | GET | `/provider-setup/signal/status` | N/A | BOUND |  |
+| `verifySignalCode` | src/client/lib/api/provider-setup.ts:192 | POST | `/provider-setup/signal/verify` | BOUND | BOUND |  |
+| `unregisterSignal` | src/client/lib/api/provider-setup.ts:199 | DELETE | `/provider-setup/signal/unregister` | N/A | BOUND |  |
 | `getSignalAccount` | src/client/lib/api/provider-setup.ts:209 | GET | `/provider-setup/signal/account` | N/A | N/A |  |
-| `submitA2PBrand` | src/client/lib/api/provider-setup.ts:246 | POST | `/provider-setup/a2p/brand` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `a2pRegistrationStateSchema` — add a PascalCase type alias for it in packages/protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `submitA2PCampaign` | src/client/lib/api/provider-setup.ts:257 | POST | `/provider-setup/a2p/campaign` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `a2pRegistrationStateSchema` — add a PascalCase type alias for it in packages/protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getA2PStatus` | src/client/lib/api/provider-setup.ts:268 | GET | `/provider-setup/a2p/status` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `a2pRegistrationStateSchema` — add a PascalCase type alias for it in packages/protocol/schemas |
-| `skipA2P` | src/client/lib/api/provider-setup.ts:277 | POST | `/provider-setup/a2p/skip` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `a2pRegistrationStateSchema` — add a PascalCase type alias for it in packages/protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `listRecords` | src/client/lib/api/records.ts:11 | GET | `/records` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `recordListResponseSchema` — add `export type <Name> = z.infer<typeof recordListResponseSchema>` beside it in packages/protocol/schemas/records.ts |
-| `getRecord` | src/client/lib/api/records.ts:29 | GET | `/records/:param` | N/A | BOUND |  |
-| `createRecord` | src/client/lib/api/records.ts:33 | POST | `/records` | MISMATCHED | BOUND | client imports `CreateRecordBody` from @protocol/schemas, but this route's schema (`createRecordBodySchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof createRecordBodySchema>` beside it in packages/protocol/schemas/records.ts |
-| `updateRecord` | src/client/lib/api/records.ts:40 | PATCH | `/records/:param` | MISMATCHED | BOUND | client imports `UpdateRecordBody` from @protocol/schemas, but this route's schema (`updateRecordBodySchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof updateRecordBodySchema>` beside it in packages/protocol/schemas/records.ts |
-| `deleteRecord` | src/client/lib/api/records.ts:47 | DELETE | `/records/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listEventLinkedRecords` | src/client/lib/api/records.ts:56 | GET | `/events/:param/records` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `caseEventListResponseSchema` — add `export type <Name> = z.infer<typeof caseEventListResponseSchema>` beside it in packages/protocol/schemas/events.ts |
-| `listEventLinkedReports` | src/client/lib/api/records.ts:60 | GET | `/events/:param/reports` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `reportEventListResponseSchema` — add `export type <Name> = z.infer<typeof reportEventListResponseSchema>` beside it in packages/protocol/schemas/events.ts |
-| `linkRecordToEvent` | src/client/lib/api/records.ts:64 | POST | `/events/:param/records` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `EventRecordLink` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `linkReportToEvent` | src/client/lib/api/records.ts:71 | POST | `/events/:param/reports` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `EventReportLink` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `listChildRecords` | src/client/lib/api/records.ts:78 | GET | `/records` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `recordListResponseSchema` — add `export type <Name> = z.infer<typeof recordListResponseSchema>` beside it in packages/protocol/schemas/records.ts |
-| `listRecordContacts` | src/client/lib/api/records.ts:85 | GET | `/records/:param/contacts` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `recordContactListResponseSchema` — add `export type <Name> = z.infer<typeof recordContactListResponseSchema>` beside it in packages/protocol/schemas/records.ts |
-| `linkContactToRecord` | src/client/lib/api/records.ts:89 | POST | `/records/:param/contacts` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `unlinkContactFromRecord` | src/client/lib/api/records.ts:96 | DELETE | `/records/:param/contacts/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `assignRecord` | src/client/lib/api/records.ts:100 | POST | `/records/:param/assign` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `unassignRecord` | src/client/lib/api/records.ts:107 | POST | `/records/:param/unassign` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getAssignmentSuggestions` | src/client/lib/api/records.ts:116 | GET | `/records/:param/suggest-assignees` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `suggestAssigneesResponseSchema` — add `export type <Name> = z.infer<typeof suggestAssigneesResponseSchema>` beside it in packages/protocol/schemas/records.ts |
-| `getAutoAssignmentStatus` | src/client/lib/api/records.ts:120 | GET | `/settings/cms/auto-assignment` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `enabledResponseSchema` — add `export type <Name> = z.infer<typeof enabledResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts |
-| `setAutoAssignment` | src/client/lib/api/records.ts:124 | PUT | `/settings/cms/auto-assignment` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `enabledResponseSchema` — add `export type <Name> = z.infer<typeof enabledResponseSchema>` beside it in packages/protocol/schemas/entity-schema.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `convertReportToEntity` | src/client/lib/api/records.ts:148 | POST | `/records/convert-from-report` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `ConvertFromReportResult` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `notifyContacts` | src/client/lib/api/records.ts:170 | POST | `/records/:param/notify-contacts` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `NotifyContactsResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getRecordEnvelopeRecipients` | src/client/lib/api/records.ts:185 | GET | `/records/:param/envelope-recipients` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `envelopeRecipientsResponseSchema` — add `export type <Name> = z.infer<typeof envelopeRecipientsResponseSchema>` beside it in packages/protocol/schemas/records.ts |
-| `getRecordEnvelopeRecipients [call site 2]` | src/client/lib/api/records.ts:185 | GET | `/records/envelope-recipients` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `envelopeRecipientsResponseSchema` — add `export type <Name> = z.infer<typeof envelopeRecipientsResponseSchema>` beside it in packages/protocol/schemas/records.ts |
-| `mergeEntities` | src/client/lib/api/records.ts:211 | POST | `/records/merge` | BOUND | BOUND |  |
-| `listEntitiesCrossHub` | src/client/lib/api/records.ts:220 | GET | `/records` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `recordListResponseSchema` — add `export type <Name> = z.infer<typeof recordListResponseSchema>` beside it in packages/protocol/schemas/records.ts |
-| `getRecoveryGroup` | src/client/lib/api/recovery.ts:54 | GET | `/recovery-group/:param` | N/A | BOUND |  |
-| `enrollRecoveryGroup` | src/client/lib/api/recovery.ts:63 | POST | `/recovery-group/enroll` | UNBOUND | UNBOUND | named type `RecoveryGroupEnrollBody` is not imported from @protocol/schemas<br>named type `void` is not imported from @protocol/schemas |
-| `getRecoverySessions` | src/client/lib/api/recovery.ts:70 | GET | `/recovery-group/sessions` | N/A | UNBOUND | named type `RecoverySessionInfo[]` is not imported from @protocol/schemas |
-| `getRecoverySession` | src/client/lib/api/recovery.ts:74 | GET | `/recovery-group/session/:param` | N/A | UNBOUND | named type `RecoverySessionInfo` is not imported from @protocol/schemas |
-| `contributeShare` | src/client/lib/api/recovery.ts:78 | POST | `/recovery-group/session/:param/contribute` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `RecoveryContributeResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `cancelRecoverySession` | src/client/lib/api/recovery.ts:89 | POST | `/recovery-group/session/:param/cancel` | N/A | UNBOUND | named type `void` is not imported from @protocol/schemas |
-| `initiateRecovery` | src/client/lib/api/recovery.ts:93 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `verifyRecoveryCode` | src/client/lib/api/recovery.ts:110 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `getRecoveryGroupCandidates` | src/client/lib/api/recovery.ts:143 | GET | `/hubs/:param/recovery-group/candidates` | NO_SERVER_ROUTE | NO_SERVER_ROUTE | no server route matched key "GET /hubs/:param/recovery-group/candidates" |
-| `listReports` | src/client/lib/api/reports.ts:15 | GET | `/reports` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `reportListResponseSchema` — add `export type <Name> = z.infer<typeof reportListResponseSchema>` beside it in packages/protocol/schemas/reports.ts |
-| `createReport` | src/client/lib/api/reports.ts:24 | POST | `/reports` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createReportBodySchema` — add `export type <Name> = z.infer<typeof createReportBodySchema>` beside it in packages/protocol/schemas/reports.ts<br>named type `Report` is not imported from @protocol/schemas |
-| `getReport` | src/client/lib/api/reports.ts:37 | GET | `/reports/:param` | N/A | UNBOUND | named type `Report` is not imported from @protocol/schemas |
-| `getReportMessages` | src/client/lib/api/reports.ts:41 | GET | `/reports/:param/messages` | N/A | UNBOUND | hand-written shape; protocol already exports `ConversationMessage` for this schema — import it instead |
-| `sendReportMessage` | src/client/lib/api/reports.ts:48 | POST | `/reports/:param/messages` | UNBOUND | BOUND | hand-written shape; no PascalCase type alias exists yet for `reportMessageBodySchema` — add `export type <Name> = z.infer<typeof reportMessageBodySchema>` beside it in packages/protocol/schemas/reports.ts |
-| `assignReport` | src/client/lib/api/reports.ts:59 | POST | `/reports/:param/assign` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `Report` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `updateReport` | src/client/lib/api/reports.ts:66 | PATCH | `/reports/:param` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `updateReportBodySchema` — add `export type <Name> = z.infer<typeof updateReportBodySchema>` beside it in packages/protocol/schemas/reports.ts<br>named type `Report` is not imported from @protocol/schemas |
-| `getReportCategories` | src/client/lib/api/reports.ts:73 | GET | `/reports/categories` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `reportCategoriesResponseSchema` — add `export type <Name> = z.infer<typeof reportCategoriesResponseSchema>` beside it in packages/protocol/schemas/reports.ts |
-| `getReportTypes` | src/client/lib/api/reports.ts:79 | GET | `/reports/types` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `reportTypeListResponseSchema` — add `export type <Name> = z.infer<typeof reportTypeListResponseSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `getReportTypesAdmin` | src/client/lib/api/reports.ts:85 | GET | `/settings/report-types` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `reportTypeListResponseSchema` — add `export type <Name> = z.infer<typeof reportTypeListResponseSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `createReportType` | src/client/lib/api/reports.ts:89 | POST | `/settings/report-types` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createReportTypeBodySchema` — add `export type <Name> = z.infer<typeof createReportTypeBodySchema>` beside it in packages/protocol/schemas/settings.ts<br>named type `import('@shared/types').ReportType` is not imported from @protocol/schemas |
-| `updateReportType` | src/client/lib/api/reports.ts:102 | PATCH | `/settings/report-types/:param` | UNBOUND | UNBOUND | named type `Partial<import('@shared/types').ReportType>` is not imported from @protocol/schemas<br>named type `import('@shared/types').ReportType` is not imported from @protocol/schemas |
-| `archiveReportType` | src/client/lib/api/reports.ts:110 | DELETE | `/settings/report-types/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getReportFiles` | src/client/lib/api/reports.ts:117 | GET | `/reports/:param/files` | N/A | UNBOUND | named type `import('@protocol/schemas').ReportFilesResponse` is not imported from @protocol/schemas |
-| `listRingGroups` | src/client/lib/api/ring-groups.ts:6 | GET | `/ring-groups` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `ringGroupListResponseSchema` — add `export type <Name> = z.infer<typeof ringGroupListResponseSchema>` beside it in packages/protocol/schemas/ring-group.ts |
-| `getRingGroup` | src/client/lib/api/ring-groups.ts:10 | GET | `/ring-groups/:param` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `ringGroupDetailResponseSchema` — add `export type <Name> = z.infer<typeof ringGroupDetailResponseSchema>` beside it in packages/protocol/schemas/ring-group.ts |
-| `createRingGroup` | src/client/lib/api/ring-groups.ts:14 | POST | `/ring-groups` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createRingGroupBodySchema` — add `export type <Name> = z.infer<typeof createRingGroupBodySchema>` beside it in packages/protocol/schemas/ring-group.ts<br>hand-written shape; no PascalCase type alias exists yet for `ringGroupDetailResponseSchema` — add `export type <Name> = z.infer<typeof ringGroupDetailResponseSchema>` beside it in packages/protocol/schemas/ring-group.ts |
-| `updateRingGroup` | src/client/lib/api/ring-groups.ts:21 | PUT | `/ring-groups/:param` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `updateRingGroupBodySchema` — add `export type <Name> = z.infer<typeof updateRingGroupBodySchema>` beside it in packages/protocol/schemas/ring-group.ts<br>hand-written shape; no PascalCase type alias exists yet for `ringGroupDetailResponseSchema` — add `export type <Name> = z.infer<typeof ringGroupDetailResponseSchema>` beside it in packages/protocol/schemas/ring-group.ts |
-| `deleteRingGroup` | src/client/lib/api/ring-groups.ts:29 | DELETE | `/ring-groups/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `addRingGroupMembers` | src/client/lib/api/ring-groups.ts:34 | POST | `/ring-groups/:param/members` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `ringGroupDetailResponseSchema` — add `export type <Name> = z.infer<typeof ringGroupDetailResponseSchema>` beside it in packages/protocol/schemas/ring-group.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `removeRingGroupMembers` | src/client/lib/api/ring-groups.ts:41 | DELETE | `/ring-groups/:param/members` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `ringGroupDetailResponseSchema` — add `export type <Name> = z.infer<typeof ringGroupDetailResponseSchema>` beside it in packages/protocol/schemas/ring-group.ts |
-| `listRoles` | src/client/lib/api/roles.ts:8 | GET | `/settings/roles` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `roleListResponseSchema` — add `export type <Name> = z.infer<typeof roleListResponseSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `createRole` | src/client/lib/api/roles.ts:12 | POST | `/settings/roles` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createRoleSchema` — add `export type <Name> = z.infer<typeof createRoleSchema>` beside it in packages/protocol/schemas/settings.ts<br>hand-written shape; protocol already exports `RoleDefinition` for this schema — import it instead |
-| `updateRole` | src/client/lib/api/roles.ts:26 | PATCH | `/settings/roles/:param` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `updateRoleSchema` — add `export type <Name> = z.infer<typeof updateRoleSchema>` beside it in packages/protocol/schemas/settings.ts<br>hand-written shape; protocol already exports `RoleDefinition` for this schema — import it instead |
-| `deleteRole` | src/client/lib/api/roles.ts:33 | DELETE | `/settings/roles/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `addRoleEnvelopes` | src/client/lib/api/roles.ts:37 | POST | `/settings/roles/:param/envelopes` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getPermissionsCatalog` | src/client/lib/api/roles.ts:44 | GET | `/settings/permissions` | N/A | BOUND |  |
-| `getSetupState` | src/client/lib/api/setup.ts:9 | GET | `/setup/state` | N/A | UNBOUND | named type `SetupState` is not imported from @protocol/schemas |
-| `updateSetupState` | src/client/lib/api/setup.ts:13 | PATCH | `/setup/state` | UNBOUND | UNBOUND | named type `Partial<SetupState>` is not imported from @protocol/schemas<br>named type `SetupState` is not imported from @protocol/schemas |
-| `completeSetup` | src/client/lib/api/setup.ts:20 | POST | `/setup/complete` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `SetupState` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `testSignalBridge` | src/client/lib/api/setup.ts:28 | POST | `/setup/test/signal` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `testSignalBodySchema` — add `export type <Name> = z.infer<typeof testSignalBodySchema>` beside it in packages/protocol/schemas/setup.ts<br>hand-written shape; no PascalCase type alias exists yet for `connectionTestResponseSchema` — add `export type <Name> = z.infer<typeof connectionTestResponseSchema>` beside it in packages/protocol/schemas/setup.ts |
-| `testWhatsAppConnection` | src/client/lib/api/setup.ts:35 | POST | `/setup/test/whatsapp` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `testWhatsAppBodySchema` — add `export type <Name> = z.infer<typeof testWhatsAppBodySchema>` beside it in packages/protocol/schemas/setup.ts<br>hand-written shape; no PascalCase type alias exists yet for `connectionTestResponseSchema` — add `export type <Name> = z.infer<typeof connectionTestResponseSchema>` beside it in packages/protocol/schemas/setup.ts |
-| `getMyShiftStatus` | src/client/lib/api/shifts.ts:10 | GET | `/shifts/my-status` | N/A | BOUND |  |
-| `listShifts` | src/client/lib/api/shifts.ts:16 | GET | `/shifts` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `shiftListResponseSchema` — add `export type <Name> = z.infer<typeof shiftListResponseSchema>` beside it in packages/protocol/schemas/shifts.ts |
-| `createShift` | src/client/lib/api/shifts.ts:20 | POST | `/shifts` | BOUND | BOUND |  |
-| `updateShift` | src/client/lib/api/shifts.ts:27 | PATCH | `/shifts/:param` | UNBOUND | BOUND | named type `Partial<Shift>` is not imported from @protocol/schemas |
-| `deleteShift` | src/client/lib/api/shifts.ts:35 | DELETE | `/shifts/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getFallbackGroup` | src/client/lib/api/shifts.ts:40 | GET | `/shifts/fallback` | N/A | BOUND |  |
-| `setFallbackGroup` | src/client/lib/api/shifts.ts:44 | PUT | `/shifts/fallback` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `clockIn` | src/client/lib/api/shifts.ts:53 | POST | `/shifts/clock-in` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `clockOut` | src/client/lib/api/shifts.ts:57 | POST | `/shifts/clock-out` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `sendHeartbeat` | src/client/lib/api/shifts.ts:61 | POST | `/shifts/heartbeat` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listActiveShifts` | src/client/lib/api/shifts.ts:65 | GET | `/shifts/active` | N/A | N/A |  |
-| `listShiftOverrides` | src/client/lib/api/shifts.ts:71 | GET | `/shifts/overrides` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `shiftOverrideListResponseSchema` — add `export type <Name> = z.infer<typeof shiftOverrideListResponseSchema>` beside it in packages/protocol/schemas/shift-override.ts |
-| `createShiftOverride` | src/client/lib/api/shifts.ts:77 | POST | `/shifts/overrides` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createShiftOverrideBodySchema` — add `export type <Name> = z.infer<typeof createShiftOverrideBodySchema>` beside it in packages/protocol/schemas/shift-override.ts<br>hand-written shape; no PascalCase type alias exists yet for `shiftOverrideResponseSchema` — add `export type <Name> = z.infer<typeof shiftOverrideResponseSchema>` beside it in packages/protocol/schemas/shift-override.ts |
-| `deleteShiftOverride` | src/client/lib/api/shifts.ts:85 | DELETE | `/shifts/overrides/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listAvailabilityBlocks` | src/client/lib/api/shifts.ts:92 | GET | `/shifts/availability` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `availabilityBlockListResponseSchema` — add `export type <Name> = z.infer<typeof availabilityBlockListResponseSchema>` beside it in packages/protocol/schemas/shift-availability.ts |
-| `listMyAvailabilityBlocks` | src/client/lib/api/shifts.ts:98 | GET | `/shifts/availability/my` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `availabilityBlockListResponseSchema` — add `export type <Name> = z.infer<typeof availabilityBlockListResponseSchema>` beside it in packages/protocol/schemas/shift-availability.ts |
-| `createAvailabilityBlock` | src/client/lib/api/shifts.ts:102 | POST | `/shifts/availability` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createAvailabilityBlockBodySchema` — add `export type <Name> = z.infer<typeof createAvailabilityBlockBodySchema>` beside it in packages/protocol/schemas/shift-availability.ts<br>hand-written shape; no PascalCase type alias exists yet for `availabilityBlockResponseSchema` — add `export type <Name> = z.infer<typeof availabilityBlockResponseSchema>` beside it in packages/protocol/schemas/shift-availability.ts |
-| `deleteAvailabilityBlock` | src/client/lib/api/shifts.ts:109 | DELETE | `/shifts/availability/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listShiftRequests` | src/client/lib/api/shifts.ts:115 | GET | `/shifts/requests` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `shiftJoinRequestListResponseSchema` — add `export type <Name> = z.infer<typeof shiftJoinRequestListResponseSchema>` beside it in packages/protocol/schemas/shift-request.ts |
-| `createShiftRequest` | src/client/lib/api/shifts.ts:119 | POST | `/shifts/requests` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `createShiftJoinRequestBodySchema` — add `export type <Name> = z.infer<typeof createShiftJoinRequestBodySchema>` beside it in packages/protocol/schemas/shift-request.ts<br>hand-written shape; no PascalCase type alias exists yet for `shiftJoinRequestResponseSchema` — add `export type <Name> = z.infer<typeof shiftJoinRequestResponseSchema>` beside it in packages/protocol/schemas/shift-request.ts |
-| `approveShiftRequest` | src/client/lib/api/shifts.ts:126 | POST | `/shifts/requests/:param/approve` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `shiftJoinRequestResponseSchema` — add `export type <Name> = z.infer<typeof shiftJoinRequestResponseSchema>` beside it in packages/protocol/schemas/shift-request.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `rejectShiftRequest` | src/client/lib/api/shifts.ts:133 | POST | `/shifts/requests/:param/reject` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; no PascalCase type alias exists yet for `shiftJoinRequestResponseSchema` — add `export type <Name> = z.infer<typeof shiftJoinRequestResponseSchema>` beside it in packages/protocol/schemas/shift-request.ts<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `signalRegister` | src/client/lib/api/signal.ts:25 | POST | `/setup/signal/register` | UNBOUND | BOUND | hand-written shape; no PascalCase type alias exists yet for `signalRegisterBodySchema` — add `export type <Name> = z.infer<typeof signalRegisterBodySchema>` beside it in packages/protocol/schemas/setup.ts |
-| `signalVerify` | src/client/lib/api/signal.ts:38 | POST | `/setup/signal/verify` | UNBOUND | BOUND | hand-written shape; no PascalCase type alias exists yet for `signalVerifyBodySchema` — add `export type <Name> = z.infer<typeof signalVerifyBodySchema>` beside it in packages/protocol/schemas/setup.ts |
-| `signalUnregister` | src/client/lib/api/signal.ts:50 | POST | `/setup/signal/unregister` | UNBOUND | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `signalUnregisterBodySchema` — add `export type <Name> = z.infer<typeof signalUnregisterBodySchema>` beside it in packages/protocol/schemas/setup.ts<br>hand-written shape; no PascalCase type alias exists yet for `connectionTestResponseSchema` — add `export type <Name> = z.infer<typeof connectionTestResponseSchema>` beside it in packages/protocol/schemas/setup.ts |
-| `getSignalAccountInfo` | src/client/lib/api/signal.ts:61 | GET | `/setup/signal/account` | N/A | BOUND |  |
-| `getSignalIdentities` | src/client/lib/api/signal.ts:65 | GET | `/messaging/signal/identities` | N/A | N/A |  |
-| `updateSignalIdentityTrust` | src/client/lib/api/signal.ts:69 | POST | `/messaging/signal/identities/trust` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getSignalQueueStats` | src/client/lib/api/signal.ts:76 | GET | `/messaging/signal/queue/stats` | N/A | BOUND |  |
-| `getSignalContact` | src/client/lib/api/signal.ts:82 | GET | `/signal-notification/contact` | N/A | BOUND |  |
-| `registerSignalContact` | src/client/lib/api/signal.ts:91 | PUT | `/signal-notification/contact` | BOUND | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getSignalSidecarToken` | src/client/lib/api/signal.ts:99 | POST | `/signal-notification/contact/sidecar-token` | N/A | BOUND | body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `registerSignalContactEverywhere` | src/client/lib/api/signal.ts:142 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
-| `deleteSignalContact` | src/client/lib/api/signal.ts:166 | DELETE | `/signal-notification/contact` | N/A | N/A |  |
-| `getSignalHmacKey` | src/client/lib/api/signal.ts:170 | GET | `/signal-notification/hmac-key` | N/A | UNBOUND | hand-written shape; protocol already exports `HmacKeyResponse` for this schema — import it instead |
-| `getSecurityPrefs` | src/client/lib/api/signal.ts:174 | GET | `/signal-notification/security-prefs` | N/A | MISMATCHED | client imports `SecurityPrefs` from @protocol/schemas, but this route's schema (`securityPrefsResponseSchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof securityPrefsResponseSchema>` beside it in packages/protocol/schemas/signal-notification.ts |
-| `updateSecurityPrefs` | src/client/lib/api/signal.ts:178 | PATCH | `/signal-notification/security-prefs` | UNBOUND | MISMATCHED | named type `Partial<Omit<SecurityPrefs, 'updatedAt'>>` is not imported from @protocol/schemas<br>client imports `SecurityPrefs` from @protocol/schemas, but this route's schema (`securityPrefsResponseSchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof securityPrefsResponseSchema>` beside it in packages/protocol/schemas/signal-notification.ts |
-| `listTags` | src/client/lib/api/tags.ts:8 | GET | `/tags` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `tagListResponseSchema` — add `export type <Name> = z.infer<typeof tagListResponseSchema>` beside it in packages/protocol/schemas/tag.ts |
-| `createTag` | src/client/lib/api/tags.ts:12 | POST | `/tags` | UNBOUND | BOUND | hand-written shape; protocol already exports `CreateTagBody` for this schema — import it instead |
-| `updateTag` | src/client/lib/api/tags.ts:22 | PATCH | `/tags/:param` | UNBOUND | BOUND | hand-written shape; protocol already exports `UpdateTagBody` for this schema — import it instead |
-| `deleteTag` | src/client/lib/api/tags.ts:30 | DELETE | `/tags/:param` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `tagDeleteResponseSchema` — add `export type <Name> = z.infer<typeof tagDeleteResponseSchema>` beside it in packages/protocol/schemas/tag.ts |
-| `listTeams` | src/client/lib/api/teams.ts:8 | GET | `/teams` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `teamListResponseSchema` — add `export type <Name> = z.infer<typeof teamListResponseSchema>` beside it in packages/protocol/schemas/team.ts |
-| `createTeam` | src/client/lib/api/teams.ts:12 | POST | `/teams` | UNBOUND | BOUND | hand-written shape; protocol already exports `CreateTeamBody` for this schema — import it instead |
-| `getTeam` | src/client/lib/api/teams.ts:20 | GET | `/teams/:param` | N/A | BOUND |  |
-| `updateTeam` | src/client/lib/api/teams.ts:24 | PATCH | `/teams/:param` | UNBOUND | BOUND | hand-written shape; protocol already exports `UpdateTeamBody` for this schema — import it instead |
-| `deleteTeam` | src/client/lib/api/teams.ts:31 | DELETE | `/teams/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listTeamMembers` | src/client/lib/api/teams.ts:35 | GET | `/teams/:param/members` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `teamMemberListResponseSchema` — add `export type <Name> = z.infer<typeof teamMemberListResponseSchema>` beside it in packages/protocol/schemas/team.ts |
-| `addTeamMembers` | src/client/lib/api/teams.ts:39 | POST | `/teams/:param/members` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `removeTeamMember` | src/client/lib/api/teams.ts:43 | DELETE | `/teams/:param/members/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `listTeamContacts` | src/client/lib/api/teams.ts:47 | GET | `/teams/:param/contacts` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `contactTeamAssignmentListResponseSchema` — add `export type <Name> = z.infer<typeof contactTeamAssignmentListResponseSchema>` beside it in packages/protocol/schemas/team.ts |
-| `assignTeamContacts` | src/client/lib/api/teams.ts:51 | POST | `/teams/:param/contacts` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `unassignTeamContact` | src/client/lib/api/teams.ts:55 | DELETE | `/teams/:param/contacts/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getTelephonyProvider` | src/client/lib/api/telephony.ts:8 | GET | `/settings/telephony-provider` | N/A | N/A |  |
-| `updateTelephonyProvider` | src/client/lib/api/telephony.ts:12 | POST | `/provider-setup/configure` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `testTelephonyProvider` | src/client/lib/api/telephony.ts:33 | POST | `/settings/telephony-provider/test` | UNBOUND | UNBOUND | named type `Partial<TelephonyProviderConfig> & { type: string }` is not imported from @protocol/schemas<br>hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getWebRtcToken` | src/client/lib/api/telephony.ts:42 | GET | `/telephony/webrtc-token` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `webrtcTokenResponseSchema` — add `export type <Name> = z.infer<typeof webrtcTokenResponseSchema>` beside it in packages/protocol/schemas/webrtc.ts |
-| `getWebRtcStatus` | src/client/lib/api/telephony.ts:46 | GET | `/telephony/webrtc-status` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `telephonyStatusResponseSchema` — add `export type <Name> = z.infer<typeof telephonyStatusResponseSchema>` beside it in packages/protocol/schemas/webrtc.ts |
-| `listTriageQueue` | src/client/lib/api/triage.ts:8 | GET | `/reports` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `reportListResponseSchema` — add `export type <Name> = z.infer<typeof reportListResponseSchema>` beside it in packages/protocol/schemas/reports.ts |
-| `updateReportConversionStatus` | src/client/lib/api/triage.ts:16 | PATCH | `/reports/:param` | UNRESOLVED | UNBOUND | server validates/returns a schema here but no client type could be statically determined<br>named type `Report` is not imported from @protocol/schemas<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `getLinkedCasesForReport` | src/client/lib/api/triage.ts:23 | GET | `/reports/:param/records` | N/A | UNBOUND | hand-written shape; no PascalCase type alias exists yet for `reportLinkedCasesResponseSchema` — add `export type <Name> = z.infer<typeof reportLinkedCasesResponseSchema>` beside it in packages/protocol/schemas/reports.ts |
-| `createCaseFromReport` | src/client/lib/api/triage.ts:27 | POST | `/reports/:param/records` | UNRESOLVED | UNRESOLVED | server validates/returns a schema here but no client type could be statically determined<br>server validates/returns a schema here but no client type could be statically determined<br>no explicit request<T>() type argument and no declared function return type to infer from; body is constructed from an inline object literal or non-identifier expression — no single declared body type |
-| `listUsers` | src/client/lib/api/users.ts:11 | GET | `/users` | N/A | UNBOUND | hand-written shape; protocol already exports `UserListResponse` for this schema — import it instead |
-| `listHubUsers` | src/client/lib/api/users.ts:20 | GET | `/users` | N/A | UNBOUND | hand-written shape; protocol already exports `UserListResponse` for this schema — import it instead |
-| `updateUser` | src/client/lib/api/users.ts:24 | PATCH | `/users/:param` | UNBOUND | MISMATCHED | hand-written shape; protocol already exports `AdminUpdateUserBody` for this schema — import it instead<br>client imports `User` from @protocol/schemas, but this route's schema (`userResponseSchema`) is aliased as `UserResponse` — likely referencing a sibling/stale schema |
-| `deleteUser` | src/client/lib/api/users.ts:38 | DELETE | `/users/:param` | N/A | UNBOUND | hand-written shape; protocol already exports `OkResponse` for this schema — import it instead |
-| `getWebAuthnSettings` | src/client/lib/api/webauthn-settings.ts:8 | GET | `/settings/webauthn` | N/A | MISMATCHED | client imports `WebAuthnSettings` from @protocol/schemas, but this route's schema (`webauthnSettingsSchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof webauthnSettingsSchema>` beside it in packages/protocol/schemas/settings.ts |
-| `updateWebAuthnSettings` | src/client/lib/api/webauthn-settings.ts:12 | PATCH | `/settings/webauthn` | UNBOUND | MISMATCHED | named type `Partial<WebAuthnSettings>` is not imported from @protocol/schemas<br>client imports `WebAuthnSettings` from @protocol/schemas, but this route's schema (`webauthnSettingsSchema`) has no type alias yet to compare against — add `export type <Name> = z.infer<typeof webauthnSettingsSchema>` beside it in packages/protocol/schemas/settings.ts |
+| `submitA2PBrand` | src/client/lib/api/provider-setup.ts:246 | POST | `/provider-setup/a2p/brand` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `submitA2PCampaign` | src/client/lib/api/provider-setup.ts:257 | POST | `/provider-setup/a2p/campaign` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getA2PStatus` | src/client/lib/api/provider-setup.ts:268 | GET | `/provider-setup/a2p/status` | N/A | BOUND |  |
+| `skipA2P` | src/client/lib/api/provider-setup.ts:277 | POST | `/provider-setup/a2p/skip` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `listRecords` | src/client/lib/api/records.ts:12 | GET | `/records` | N/A | BOUND |  |
+| `getRecord` | src/client/lib/api/records.ts:30 | GET | `/records/:param` | N/A | BOUND |  |
+| `createRecord` | src/client/lib/api/records.ts:34 | POST | `/records` | BOUND | BOUND |  |
+| `updateRecord` | src/client/lib/api/records.ts:47 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `hubId ? hubPath(hubId, `/records/${id}`) : activeHubPath(`/records/${id}`)` |
+| `deleteRecord` | src/client/lib/api/records.ts:54 | DELETE | `/records/:param` | N/A | BOUND |  |
+| `listEventLinkedRecords` | src/client/lib/api/records.ts:63 | GET | `/events/:param/records` | N/A | BOUND |  |
+| `listEventLinkedReports` | src/client/lib/api/records.ts:67 | GET | `/events/:param/reports` | N/A | BOUND |  |
+| `linkRecordToEvent` | src/client/lib/api/records.ts:71 | POST | `/events/:param/records` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `linkReportToEvent` | src/client/lib/api/records.ts:78 | POST | `/events/:param/reports` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `listChildRecords` | src/client/lib/api/records.ts:85 | GET | `/records` | N/A | BOUND |  |
+| `listRecordContacts` | src/client/lib/api/records.ts:92 | GET | `/records/:param/contacts` | N/A | BOUND |  |
+| `linkContactToRecord` | src/client/lib/api/records.ts:96 | POST | `/records/:param/contacts` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `unlinkContactFromRecord` | src/client/lib/api/records.ts:103 | DELETE | `/records/:param/contacts/:param` | N/A | BOUND |  |
+| `assignRecord` | src/client/lib/api/records.ts:107 | POST | `/records/:param/assign` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `unassignRecord` | src/client/lib/api/records.ts:114 | POST | `/records/:param/unassign` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getAssignmentSuggestions` | src/client/lib/api/records.ts:123 | GET | `/records/:param/suggest-assignees` | N/A | BOUND |  |
+| `getAutoAssignmentStatus` | src/client/lib/api/records.ts:127 | GET | `/settings/cms/auto-assignment` | N/A | BOUND |  |
+| `setAutoAssignment` | src/client/lib/api/records.ts:131 | PUT | `/settings/cms/auto-assignment` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `convertReportToEntity` | src/client/lib/api/records.ts:155 | POST | `/records/convert-from-report` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `notifyContacts` | src/client/lib/api/records.ts:177 | POST | `/records/:param/notify-contacts` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getRecordEnvelopeRecipients` | src/client/lib/api/records.ts:192 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `params.hubId ? hubPath(params.hubId, path) : activeHubPath(path)` |
+| `getRecordEnvelopeRecipients [call site 2]` | src/client/lib/api/records.ts:192 | GET | `/records/envelope-recipients` | N/A | BOUND |  |
+| `mergeEntities` | src/client/lib/api/records.ts:213 | POST | `/records/merge` | BOUND | BOUND |  |
+| `listEntitiesCrossHub` | src/client/lib/api/records.ts:222 | GET | `/records` | N/A | BOUND |  |
+| `getRecoveryGroup` | src/client/lib/api/recovery.ts:20 | GET | `/recovery-group/:param` | N/A | BOUND |  |
+| `enrollRecoveryGroup` | src/client/lib/api/recovery.ts:29 | POST | `/recovery-group/enroll` | BOUND | BOUND |  |
+| `getMyShareEnvelope` | src/client/lib/api/recovery.ts:41 | GET | `/recovery-group/shares/my` | N/A | BOUND |  |
+| `requestLivenessChallenge` | src/client/lib/api/recovery.ts:53 | POST | `/recovery-group/shares/liveness/challenge` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `submitLivenessProof` | src/client/lib/api/recovery.ts:61 | POST | `/recovery-group/shares/liveness` | BOUND | BOUND |  |
+| `getRecoverySessions` | src/client/lib/api/recovery.ts:74 | GET | `/recovery-group/sessions` | N/A | BOUND |  |
+| `getRecoverySession` | src/client/lib/api/recovery.ts:79 | GET | `/recovery-group/session/:param` | N/A | BOUND |  |
+| `contributeShare` | src/client/lib/api/recovery.ts:83 | POST | `/recovery-group/session/:param/contribute` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `cancelRecoverySession` | src/client/lib/api/recovery.ts:94 | POST | `/recovery-group/session/:param/cancel` | N/A | BOUND |  |
+| `initiateRecovery` | src/client/lib/api/recovery.ts:98 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `verifyRecoveryCode` | src/client/lib/api/recovery.ts:115 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `getRecoveryGroupCandidates` | src/client/lib/api/recovery.ts:148 | GET | `/hubs/:param/recovery-group/candidates` | NO_SERVER_ROUTE | NO_SERVER_ROUTE | no server route matched key "GET /hubs/:param/recovery-group/candidates" |
+| `listReports` | src/client/lib/api/reports.ts:12 | GET | `/reports` | N/A | BOUND |  |
+| `createReport` | src/client/lib/api/reports.ts:21 | POST | `/reports` | BOUND | BOUND |  |
+| `getReport` | src/client/lib/api/reports.ts:28 | GET | `/reports/:param` | N/A | BOUND |  |
+| `getReportMessages` | src/client/lib/api/reports.ts:32 | GET | `/reports/:param/messages` | N/A | BOUND |  |
+| `sendReportMessage` | src/client/lib/api/reports.ts:39 | POST | `/reports/:param/messages` | BOUND | BOUND |  |
+| `assignReport` | src/client/lib/api/reports.ts:46 | POST | `/reports/:param/assign` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `updateReport` | src/client/lib/api/reports.ts:53 | PATCH | `/reports/:param` | BOUND | BOUND |  |
+| `getReportCategories` | src/client/lib/api/reports.ts:60 | GET | `/reports/categories` | N/A | BOUND |  |
+| `getReportTypes` | src/client/lib/api/reports.ts:66 | GET | `/reports/types` | N/A | BOUND |  |
+| `getReportTypesAdmin` | src/client/lib/api/reports.ts:72 | GET | `/settings/report-types` | N/A | BOUND |  |
+| `createReportType` | src/client/lib/api/reports.ts:76 | POST | `/settings/report-types` | BOUND | BOUND |  |
+| `updateReportType` | src/client/lib/api/reports.ts:83 | PATCH | `/settings/report-types/:param` | BOUND | BOUND |  |
+| `archiveReportType` | src/client/lib/api/reports.ts:91 | DELETE | `/settings/report-types/:param` | N/A | BOUND |  |
+| `getReportFiles` | src/client/lib/api/reports.ts:98 | GET | `/reports/:param/files` | N/A | BOUND |  |
+| `listRingGroups` | src/client/lib/api/ring-groups.ts:7 | GET | `/ring-groups` | N/A | BOUND |  |
+| `getRingGroup` | src/client/lib/api/ring-groups.ts:11 | GET | `/ring-groups/:param` | N/A | BOUND |  |
+| `createRingGroup` | src/client/lib/api/ring-groups.ts:15 | POST | `/ring-groups` | BOUND | BOUND |  |
+| `updateRingGroup` | src/client/lib/api/ring-groups.ts:22 | PUT | `/ring-groups/:param` | BOUND | BOUND |  |
+| `deleteRingGroup` | src/client/lib/api/ring-groups.ts:30 | DELETE | `/ring-groups/:param` | N/A | BOUND |  |
+| `addRingGroupMembers` | src/client/lib/api/ring-groups.ts:35 | POST | `/ring-groups/:param/members` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `removeRingGroupMembers` | src/client/lib/api/ring-groups.ts:42 | DELETE | `/ring-groups/:param/members` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined |
+| `listRoles` | src/client/lib/api/roles.ts:24 | GET | `/settings/roles` | N/A | BOUND |  |
+| `createRole` | src/client/lib/api/roles.ts:29 | POST | `/settings/roles` | BOUND | BOUND |  |
+| `updateRole` | src/client/lib/api/roles.ts:36 | PATCH | `/settings/roles/:param` | BOUND | BOUND |  |
+| `deleteRole` | src/client/lib/api/roles.ts:43 | DELETE | `/settings/roles/:param` | N/A | BOUND |  |
+| `addRoleEnvelopes` | src/client/lib/api/roles.ts:47 | POST | `/settings/roles/:param/envelopes` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `listHubRoles` | src/client/lib/api/roles.ts:58 | GET | `?` | UNRESOLVED | UNRESOLVED | path argument is not a string/template literal: `path` |
+| `createHubRole` | src/client/lib/api/roles.ts:67 | POST | `/settings/roles` | BOUND | BOUND |  |
+| `updateHubRole` | src/client/lib/api/roles.ts:74 | PATCH | `/settings/roles/:param` | BOUND | BOUND |  |
+| `deleteHubRole` | src/client/lib/api/roles.ts:81 | DELETE | `/settings/roles/:param` | N/A | BOUND |  |
+| `getPermissionsCatalog` | src/client/lib/api/roles.ts:85 | GET | `/settings/permissions` | N/A | BOUND |  |
+| `getSetupState` | src/client/lib/api/setup.ts:9 | GET | `/setup/state` | N/A | BOUND |  |
+| `updateSetupState` | src/client/lib/api/setup.ts:13 | PATCH | `/setup/state` | BOUND | BOUND |  |
+| `completeSetup` | src/client/lib/api/setup.ts:20 | POST | `/setup/complete` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `testSignalBridge` | src/client/lib/api/setup.ts:28 | POST | `/setup/test/signal` | BOUND | BOUND |  |
+| `testWhatsAppConnection` | src/client/lib/api/setup.ts:35 | POST | `/setup/test/whatsapp` | BOUND | BOUND |  |
+| `getMyShiftStatus` | src/client/lib/api/shifts.ts:12 | GET | `/shifts/my-status` | N/A | BOUND |  |
+| `getMyShiftStatusIn` | src/client/lib/api/shifts.ts:22 | GET | `/shifts/my-status` | N/A | BOUND |  |
+| `listShifts` | src/client/lib/api/shifts.ts:28 | GET | `/shifts` | N/A | BOUND |  |
+| `createShift` | src/client/lib/api/shifts.ts:32 | POST | `/shifts` | BOUND | BOUND |  |
+| `updateShift` | src/client/lib/api/shifts.ts:39 | PATCH | `/shifts/:param` | BOUND | BOUND |  |
+| `deleteShift` | src/client/lib/api/shifts.ts:47 | DELETE | `/shifts/:param` | N/A | BOUND |  |
+| `getFallbackGroup` | src/client/lib/api/shifts.ts:52 | GET | `/shifts/fallback` | N/A | BOUND |  |
+| `setFallbackGroup` | src/client/lib/api/shifts.ts:56 | PUT | `/shifts/fallback` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `clockIn` | src/client/lib/api/shifts.ts:65 | POST | `/shifts/clock-in` | N/A | BOUND |  |
+| `clockOut` | src/client/lib/api/shifts.ts:69 | POST | `/shifts/clock-out` | N/A | BOUND |  |
+| `sendHeartbeat` | src/client/lib/api/shifts.ts:79 | POST | `/shifts/heartbeat` | N/A | BOUND |  |
+| `listActiveShifts` | src/client/lib/api/shifts.ts:83 | GET | `/shifts/active` | N/A | N/A |  |
+| `listShiftOverrides` | src/client/lib/api/shifts.ts:89 | GET | `/shifts/overrides` | N/A | BOUND |  |
+| `createShiftOverride` | src/client/lib/api/shifts.ts:95 | POST | `/shifts/overrides` | BOUND | BOUND |  |
+| `deleteShiftOverride` | src/client/lib/api/shifts.ts:103 | DELETE | `/shifts/overrides/:param` | N/A | BOUND |  |
+| `listAvailabilityBlocks` | src/client/lib/api/shifts.ts:110 | GET | `/shifts/availability` | N/A | BOUND |  |
+| `listMyAvailabilityBlocks` | src/client/lib/api/shifts.ts:116 | GET | `/shifts/availability/my` | N/A | BOUND |  |
+| `createAvailabilityBlock` | src/client/lib/api/shifts.ts:120 | POST | `/shifts/availability` | BOUND | BOUND |  |
+| `deleteAvailabilityBlock` | src/client/lib/api/shifts.ts:127 | DELETE | `/shifts/availability/:param` | N/A | BOUND |  |
+| `listShiftRequests` | src/client/lib/api/shifts.ts:133 | GET | `/shifts/requests` | N/A | BOUND |  |
+| `createShiftRequest` | src/client/lib/api/shifts.ts:137 | POST | `/shifts/requests` | BOUND | BOUND |  |
+| `approveShiftRequest` | src/client/lib/api/shifts.ts:144 | POST | `/shifts/requests/:param/approve` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `rejectShiftRequest` | src/client/lib/api/shifts.ts:151 | POST | `/shifts/requests/:param/reject` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `signalRegister` | src/client/lib/api/signal.ts:25 | POST | `/setup/signal/register` | BOUND | BOUND |  |
+| `signalVerify` | src/client/lib/api/signal.ts:32 | POST | `/setup/signal/verify` | BOUND | BOUND |  |
+| `signalUnregister` | src/client/lib/api/signal.ts:39 | POST | `/setup/signal/unregister` | BOUND | BOUND |  |
+| `getSignalAccountInfo` | src/client/lib/api/signal.ts:46 | GET | `/setup/signal/account` | N/A | BOUND |  |
+| `getSignalIdentities` | src/client/lib/api/signal.ts:50 | GET | `/messaging/signal/identities` | N/A | N/A |  |
+| `updateSignalIdentityTrust` | src/client/lib/api/signal.ts:54 | POST | `/messaging/signal/identities/trust` | UNRESOLVED | N/A | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getSignalQueueStats` | src/client/lib/api/signal.ts:61 | GET | `/messaging/signal/queue/stats` | N/A | BOUND |  |
+| `getSignalContact` | src/client/lib/api/signal.ts:67 | GET | `/signal-notification/contact` | N/A | BOUND |  |
+| `registerSignalContact` | src/client/lib/api/signal.ts:76 | PUT | `/signal-notification/contact` | BOUND | BOUND |  |
+| `getSignalSidecarToken` | src/client/lib/api/signal.ts:84 | POST | `/signal-notification/contact/sidecar-token` | N/A | BOUND | body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `registerSignalContactEverywhere` | src/client/lib/api/signal.ts:127 | GET | `?` | UNRESOLVED | UNRESOLVED | no request() call in function body (custom fetch, pure helper, or delegates elsewhere) |
+| `deleteSignalContact` | src/client/lib/api/signal.ts:151 | DELETE | `/signal-notification/contact` | N/A | N/A |  |
+| `getSignalHmacKey` | src/client/lib/api/signal.ts:155 | GET | `/signal-notification/hmac-key` | N/A | BOUND |  |
+| `getSecurityPrefs` | src/client/lib/api/signal.ts:159 | GET | `/signal-notification/security-prefs` | N/A | BOUND |  |
+| `updateSecurityPrefs` | src/client/lib/api/signal.ts:163 | PATCH | `/signal-notification/security-prefs` | BOUND | BOUND |  |
+| `listTags` | src/client/lib/api/tags.ts:8 | GET | `/tags` | N/A | BOUND |  |
+| `createTag` | src/client/lib/api/tags.ts:12 | POST | `/tags` | BOUND | BOUND |  |
+| `updateTag` | src/client/lib/api/tags.ts:16 | PATCH | `/tags/:param` | BOUND | BOUND |  |
+| `deleteTag` | src/client/lib/api/tags.ts:20 | DELETE | `/tags/:param` | N/A | BOUND |  |
+| `listTeams` | src/client/lib/api/teams.ts:8 | GET | `/teams` | N/A | BOUND |  |
+| `createTeam` | src/client/lib/api/teams.ts:12 | POST | `/teams` | BOUND | BOUND |  |
+| `getTeam` | src/client/lib/api/teams.ts:16 | GET | `/teams/:param` | N/A | BOUND |  |
+| `updateTeam` | src/client/lib/api/teams.ts:20 | PATCH | `/teams/:param` | BOUND | BOUND |  |
+| `deleteTeam` | src/client/lib/api/teams.ts:24 | DELETE | `/teams/:param` | N/A | BOUND |  |
+| `listTeamMembers` | src/client/lib/api/teams.ts:28 | GET | `/teams/:param/members` | N/A | BOUND |  |
+| `addTeamMembers` | src/client/lib/api/teams.ts:32 | POST | `/teams/:param/members` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `removeTeamMember` | src/client/lib/api/teams.ts:36 | DELETE | `/teams/:param/members/:param` | N/A | BOUND |  |
+| `listTeamContacts` | src/client/lib/api/teams.ts:40 | GET | `/teams/:param/contacts` | N/A | BOUND |  |
+| `assignTeamContacts` | src/client/lib/api/teams.ts:44 | POST | `/teams/:param/contacts` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `unassignTeamContact` | src/client/lib/api/teams.ts:48 | DELETE | `/teams/:param/contacts/:param` | N/A | BOUND |  |
+| `getTelephonyProvider` | src/client/lib/api/telephony.ts:9 | GET | `/settings/telephony-provider` | N/A | N/A |  |
+| `updateTelephonyProvider` | src/client/lib/api/telephony.ts:13 | POST | `/provider-setup/configure` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `testTelephonyProvider` | src/client/lib/api/telephony.ts:34 | POST | `/settings/telephony-provider/test` | BOUND | BOUND |  |
+| `getWebRtcToken` | src/client/lib/api/telephony.ts:43 | GET | `/telephony/webrtc-token` | N/A | BOUND |  |
+| `getWebRtcStatus` | src/client/lib/api/telephony.ts:47 | GET | `/telephony/webrtc-status` | N/A | BOUND |  |
+| `listTriageQueue` | src/client/lib/api/triage.ts:9 | GET | `/reports` | N/A | BOUND |  |
+| `updateReportConversionStatus` | src/client/lib/api/triage.ts:17 | PATCH | `/reports/:param` | UNRESOLVED | BOUND | server validates/returns a schema here but no client type could be statically determined<br>body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `getLinkedCasesForReport` | src/client/lib/api/triage.ts:24 | GET | `/reports/:param/records` | N/A | BOUND |  |
+| `createCaseFromReport` | src/client/lib/api/triage.ts:28 | POST | `/reports/:param/records` | UNRESOLVED | UNRESOLVED | server validates/returns a schema here but no client type could be statically determined<br>server validates/returns a schema here but no client type could be statically determined<br>no explicit request<T>() type argument and no declared function return type to infer from; body is constructed from an inline object literal or non-identifier expression — no single declared body type |
+| `listUsers` | src/client/lib/api/users.ts:11 | GET | `/users` | N/A | BOUND |  |
+| `listHubUsers` | src/client/lib/api/users.ts:20 | GET | `/users` | N/A | BOUND |  |
+| `updateUser` | src/client/lib/api/users.ts:24 | PATCH | `/users/:param` | BOUND | BOUND |  |
+| `deleteUser` | src/client/lib/api/users.ts:31 | DELETE | `/users/:param` | N/A | BOUND |  |
+| `getWebAuthnSettings` | src/client/lib/api/webauthn-settings.ts:8 | GET | `/settings/webauthn` | N/A | BOUND |  |
+| `updateWebAuthnSettings` | src/client/lib/api/webauthn-settings.ts:12 | PATCH | `/settings/webauthn` | BOUND | BOUND |  |
 
 ## Field-level diffs (schema fields vs. hand-written client shape)
 
-- `getReportMessages` (response, schema `messageResponseSchema`):
-  - missing on client: `id`, `conversationId`, `direction`, `authorPubkey`, `encryptedContent`, `readerEnvelopes`, `createdAt`, `status`, `hasAttachments`, `attachmentIds`, `deliveredAt`, `readAt`, `failureReason`, `retryCount`, `externalId`
-  - extra on client (not in schema): `messages`, `total`
-- `updateReport` (body, schema `updateReportBodySchema`):
-  - missing on client: `conversionStatus`
-- `createReportType` (body, schema `createReportTypeBodySchema`):
-  - extra on client (not in schema): `isDefault`
-- `createCmsReportType` (body, schema `createCmsReportTypeBodySchema`):
-  - missing on client: `hubId`, `templateId`, `templateVersion`
-- `deleteCmsReportType` (response, schema `okResponseSchema`):
-  - missing on client: `ok`
-  - extra on client (not in schema): `archived`, `id`
-- `listErasureRequests` (response, schema `erasureRequestListResponseSchema`):
-  - missing on client: `total`
-- `updateRetentionSettings` (body, schema `updateRetentionBodySchema`):
-  - missing on client: `settings`
-  - extra on client (not in schema): `category`, `retentionDays`
-- `updateRetentionSettings` (response, schema `retentionSettingsResponseSchema`):
-  - missing on client: `settings`
-  - extra on client (not in schema): `setting`
-- `updateRetentionPlatformFloor` (body, schema `updateRetentionFloorsBodySchema`):
-  - missing on client: `floors`
-  - extra on client (not in schema): `category`, `minRetentionDays`
-- `updateRetentionPlatformFloor` (response, schema `retentionFloorsResponseSchema`):
-  - missing on client: `floors`
-  - extra on client (not in schema): `floor`
-- `createPlatformBan` (body, schema `createPlatformBanBodySchema`):
-  - missing on client: `phone`
-  - extra on client (not in schema): `phoneHash`
-- `createPlatformBan` (response, schema `okResponseSchema`):
-  - missing on client: `ok`
-  - extra on client (not in schema): `ban`
-- `bulkImportPlatformBans` (body, schema `bulkPlatformBanBodySchema`):
-  - missing on client: `phones`
-  - extra on client (not in schema): `phoneHashes`
-- `bulkImportPlatformBans` (response, schema `okResponseSchema`):
-  - missing on client: `ok`
-  - extra on client (not in schema): `count`
-- `getMigrationStatus` (response, schema `migrationStatusResponseSchema`):
-  - missing on client: `note`
-- `listNotes` (response, schema `noteListResponseSchema`):
-  - extra on client (not in schema): `total`
-- `importSubscribers` (response, schema `importSubscribersResponseSchema`):
-  - missing on client: `errors`
-- `getSubscriberStats` (response, schema `subscriberStatsResponseSchema`):
-  - missing on client: `byStatus`
-  - extra on client (not in schema): `active`, `paused`
-- `createBlast` (body, schema `createBlastBodySchema`):
-  - extra on client (not in schema): `targetTags`, `targetLanguages`
-- `getBlastDeliveries` (response, schema `blastDeliveryListResponseSchema`):
-  - extra on client (not in schema): `total`, `page`, `limit`
-- `retryBlastDelivery` (response, schema `blastDeliveryResponseSchema`):
-  - missing on client: `id`, `blastId`, `subscriberId`, `channel`, `status`, `externalId`, `attempts`, `lastAttemptAt`, `nextRetryAt`, `deliveredAt`, `failedAt`, `error`, `createdAt`
-  - extra on client (not in schema): `ok`, `delivery`
-- `retryAllFailedDeliveries` (response, schema `okResponseSchema`):
-  - extra on client (not in schema): `retriedCount`
-- `listIvrAudio` (response, schema `ivrAudioPromptsResponseSchema`):
-  - missing on client: `prompts`
-  - extra on client (not in schema): `recordings`
-- `deleteIvrAudio` (response, schema `successResponseSchema`):
-  - missing on client: `success`
-  - extra on client (not in schema): `ok`
-- `updateHub` (response, schema `hubResponseSchema`):
-  - missing on client: `id`, `name`, `slug`, `description`, `phoneNumber`, `timezone`, `status`, `createdBy`, `createdAt`, `updatedAt`
-  - extra on client (not in schema): `hub`
-- `getWebRtcToken` (response, schema `webrtcTokenResponseSchema`):
-  - missing on client: `roomName`
-- `notifyContacts` (response, schema `notifyContactsResponseSchema`):
-  - missing on client: `recordId`, `notified`, `skipped`
-- `sendConversationMessage` (body, schema `sendMessageBodySchema`):
-  - missing on client: `body`, `externalId`
-- `updateConversation` (body, schema `updateConversationBodySchema`):
-  - missing on client: `metadata`
-- `deleteContactRelationship` (response, schema `okResponseSchema`):
-  - missing on client: `ok`
-  - extra on client (not in schema): `deleted`
-- `deleteAffinityGroup` (response, schema `okResponseSchema`):
-  - missing on client: `ok`
-  - extra on client (not in schema): `deleted`
-- `listAuditLog` (response, schema `auditListResponseSchema`):
-  - extra on client (not in schema): `total`
-- `listPlatformAuditLog` (response, schema `auditListResponseSchema`):
-  - extra on client (not in schema): `total`
-- `getMe` (response, schema `meResponseSchema`):
-  - missing on client: `hubEventKeys`
-  - extra on client (not in schema): `serverEventKeyHex`, `serverEventKeyPrevHex`, `eventKeyEpoch`, `eventKeyEpochDuration`
-- `applyTemplate` (response, schema `templateApplyResponseSchema`):
-  - missing on client: `entityTypeId`, `relationshipTypes`, `reportTypes`, `suggestedRoles`
-- `applyEntityTemplate` (response, schema `templateApplyResponseSchema`):
-  - missing on client: `entityTypes`, `relationshipTypes`, `reportTypes`, `suggestedRoles`
-- `createRole` (body, schema `createRoleSchema`):
-  - missing on client: `encryptedName`, `encryptedDescription`
-- `createRole` (response, schema `roleResponseSchema`):
-  - missing on client: `id`, `name`, `slug`, `permissions`, `isDefault`, `isSystem`, `description`, `encryptedName`, `encryptedDescription`, `envelopes`, `assignedUserCount`, `createdAt`, `updatedAt`
-  - extra on client (not in schema): `role`
-- `updateRole` (response, schema `roleResponseSchema`):
-  - missing on client: `id`, `name`, `slug`, `permissions`, `isDefault`, `isSystem`, `description`, `encryptedName`, `encryptedDescription`, `envelopes`, `assignedUserCount`, `createdAt`, `updatedAt`
-  - extra on client (not in schema): `role`
-- `getCallHistory` (response, schema `callHistoryResponseSchema`):
-  - extra on client (not in schema): `total`
-- `reportCallSpam` (response, schema `okResponseSchema`):
-  - missing on client: `ok`
-  - extra on client (not in schema): `callId`, `callerNumber`, `reportedBy`
-- `createFirehoseConnection` (body, schema `createFirehoseConnectionSchema`):
-  - missing on client: `id`, `encryptedDisplayName`
-- `updateFirehoseConnection` (body, schema `updateFirehoseConnectionSchema`):
-  - missing on client: `encryptedDisplayName`
-- `updateUser` (body, schema `adminUpdateUserBodySchema`):
-  - missing on client: `spokenLanguages`, `uiLanguage`, `profileCompleted`, `transcriptionEnabled`, `onBreak`, `callPreference`, `specializations`, `maxCaseAssignments`, `teamId`, `supervisorPubkey`
-- `updateMyProfile` (body, schema `profileUpdateBodySchema`):
-  - missing on client: `specializations`
+_none resolvable_

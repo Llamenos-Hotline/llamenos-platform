@@ -25,7 +25,7 @@ final class ReportsViewModel {
     // MARK: - Public State
 
     /// Reports from the server.
-    var reports: [SharedConversation] = []
+    var reports: [ReportConversation] = []
 
     /// Available report categories from the server.
     var categories: [String] = []
@@ -64,7 +64,7 @@ final class ReportsViewModel {
     var totalCount: Int = 0
 
     /// Reports filtered by the selected status filter and optional type filter.
-    var filteredReports: [SharedConversation] {
+    var filteredReports: [ReportConversation] {
         var result = reports
         if selectedFilter != .all {
             result = result.filter { $0.status?.rawValue == selectedFilter.rawValue }

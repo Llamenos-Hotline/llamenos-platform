@@ -26,6 +26,8 @@ export function WhatsAppChannelSection({
   onToggle,
   statusSummary,
 }: ChannelConfigProps) {
+  // The server always answers with the channels list; only a PATCH body may omit it.
+  const currentChannels = config.enabledChannels ?? []
   const { t } = useTranslation()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
@@ -36,7 +38,7 @@ export function WhatsAppChannelSection({
     afterHoursResponse: '',
   }
 
-  const isEnabled = config.enabledChannels.includes('whatsapp')
+  const isEnabled = currentChannels.includes('whatsapp')
 
   function updateWhatsApp(updates: Record<string, unknown>) {
     onConfigChange({ ...config, whatsapp: { ...whatsapp, ...updates } })
@@ -46,8 +48,8 @@ export function WhatsAppChannelSection({
     setSaving(true)
     try {
       const enabledChannels = isEnabled
-        ? config.enabledChannels
-        : [...config.enabledChannels, 'whatsapp' as const]
+        ? currentChannels
+        : [...currentChannels, 'whatsapp' as const]
 
       await updateMessagingConfig({
         ...config,
@@ -66,14 +68,14 @@ export function WhatsAppChannelSection({
     if (enabled) {
       onConfigChange({
         ...config,
-          enabledChannels: config.enabledChannels.includes('whatsapp')
-            ? config.enabledChannels
-            : [...config.enabledChannels, 'whatsapp' as const],
+          enabledChannels: currentChannels.includes('whatsapp')
+            ? currentChannels
+            : [...currentChannels, 'whatsapp' as const],
       })
     } else {
       onConfigChange({
         ...config,
-        enabledChannels: config.enabledChannels.filter(c => c !== 'whatsapp'),
+        enabledChannels: currentChannels.filter(c => c !== 'whatsapp'),
       })
     }
   }

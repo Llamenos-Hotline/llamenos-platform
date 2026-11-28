@@ -52,8 +52,8 @@ extension SharedContactTimelineListResponseContact: Hashable {
 }
 
 // MARK: - Timeline Event
-// Client-only: generated `ContactTimelineDetailResponse` uses `[[String: JSONAny]]`
-// for unstructured event data. This client model has typed fields.
+// Client-only: the timeline screen's event row, folded from the note and
+// conversation rows of `GET /api/contacts/:hash` (see `ContactTimelineResponse`).
 
 struct ContactTimelineEvent: Identifiable, Codable, Sendable {
     let id: String
@@ -74,25 +74,12 @@ struct ContactTimelineResponse: Decodable, Sendable {
     let events: [ContactTimelineEvent]
     var total: Int { events.count }
 
-    private enum CodingKeys: String, CodingKey { case notes, conversations }
-
-    private struct NoteRow: Decodable {
-        let id: String
-        let createdAt: String
-    }
-
-    private struct ConversationRow: Decodable {
-        let id: String
-        let channelType: String
-        let status: String
-        let createdAt: String
-        let lastMessageAt: String?
-    }
-
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let notes = try container.decode([NoteRow].self, forKey: .notes)
-        let conversations = try container.decode([ConversationRow].self, forKey: .conversations)
+        // The wire shape is the generated `ContactTimelineDetailResponse`: typed note and
+        // conversation rows (`contactTimelineDetailResponseSchema`).
+        let wire = try ContactTimelineDetailResponse(from: decoder)
+        let notes = wire.notes
+        let conversations = wire.conversations
 
         let noteEvents = notes.map {
             ContactTimelineEvent(
@@ -104,7 +91,7 @@ struct ContactTimelineResponse: Decodable, Sendable {
             ContactTimelineEvent(
                 id: $0.id, type: ContactEventType.conversation.rawValue,
                 timestamp: $0.lastMessageAt ?? $0.createdAt,
-                summary: $0.channelType, status: $0.status, duration: nil
+                summary: $0.channelType, status: $0.status?.rawValue, duration: nil
             )
         }
         // ISO-8601 UTC timestamps from the same serializer sort correctly as strings.

@@ -30,13 +30,6 @@ private struct TestConnectionRequest: Encodable {
     let hubId: String?
 }
 
-// MARK: - SignalVerifyRequest
-
-private struct SignalVerifyRequest: Encodable {
-    let registrationId: String
-    let code: String
-}
-
 // MARK: - SignalStatusQuery
 
 private struct A2PBrandRequest: Encodable {
@@ -158,7 +151,8 @@ final class ProviderSetupService {
     }
 
     func verifySignalCode(registrationId: String, code: String) async throws -> SignalRegistrationState {
-        let body = SignalVerifyRequest(registrationId: registrationId, code: code)
+        // Generated from `signalVerifyRequestSchema`; the hub comes from the registration row.
+        let body = SignalVerifyRequest(code: code, hubID: nil, registrationID: registrationId)
         return try await api.request(method: "POST", path: "/api/provider-setup/signal/verify", body: body)
     }
 

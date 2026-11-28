@@ -12,7 +12,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Phone } from 'lucide-react'
-import { updateMessagingConfig, getA2pStatus, getActiveHub, type A2pRegistration } from '@/lib/api'
+import { updateMessagingConfig, getA2pStatus, getActiveHub } from '@/lib/api'
+import type { A2pRegistrationState } from '@protocol/schemas'
 import { ChannelStatusBanner } from './channel-status-banner'
 import { ConnectionTestButton } from './connection-test-button'
 import { AutoResponseFields } from './auto-response-fields'
@@ -26,10 +27,12 @@ export function SMSChannelSection({
   onToggle,
   statusSummary,
 }: ChannelConfigProps) {
+  // The server always answers with the channels list; only a PATCH body may omit it.
+  const currentChannels = config.enabledChannels ?? []
   const { t } = useTranslation()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
-  const [a2pRegistration, setA2pRegistration] = useState<A2pRegistration | null>(null)
+  const [a2pRegistration, setA2pRegistration] = useState<A2pRegistrationState | null>(null)
 
   const sms = config.sms || { enabled: false }
   const smsContentMode = config.smsContentMode || 'notification-only'
@@ -49,8 +52,8 @@ export function SMSChannelSection({
     setSaving(true)
     try {
       const enabledChannels = sms.enabled
-        ? (config.enabledChannels.includes('sms') ? config.enabledChannels : [...config.enabledChannels, 'sms' as const])
-        : config.enabledChannels.filter(c => c !== 'sms')
+        ? (currentChannels.includes('sms') ? currentChannels : [...currentChannels, 'sms' as const])
+        : currentChannels.filter(c => c !== 'sms')
 
       await updateMessagingConfig({
         ...config,

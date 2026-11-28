@@ -7,6 +7,7 @@ import { okResponseSchema } from '@protocol/schemas/common'
 import {
   createPlatformBanBodySchema,
   bulkPlatformBanBodySchema,
+  platformBulkBanResponseSchema,
   platformBanListResponseSchema,
   searchBansResponseSchema,
   promoteBanBodySchema,
@@ -185,7 +186,7 @@ platformBans.post(
         description: 'Bans imported',
         content: {
           'application/json': {
-            schema: resolver(okResponseSchema),
+            schema: resolver(platformBulkBanResponseSchema),
           },
         },
       },

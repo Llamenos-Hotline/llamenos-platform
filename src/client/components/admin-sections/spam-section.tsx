@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { getSpamSettings, type SpamSettings } from '@/lib/api'
+import { getSpamSettings } from '@/lib/api'
+import type { SpamSettingsResponse } from '@protocol/schemas'
 import { useActiveHubId } from '@/lib/hub-owned'
 import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import { SpamSection as SpamSectionInner } from '@/components/admin-settings/spam-section'
@@ -12,7 +13,7 @@ export function SpamSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const hubId = useActiveHubId()
-  const [settings, setSettings] = useState<SpamSettings | null>(null)
+  const [settings, setSettings] = useState<SpamSettingsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const { pending, requestToggle, confirm, cancel, title, description } = useSpamConfirmToggle(hubId, setSettings)
 

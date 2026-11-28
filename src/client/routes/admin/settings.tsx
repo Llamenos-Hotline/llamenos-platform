@@ -11,15 +11,13 @@ import {
   listIvrAudio,
   getCustomFields,
   getTelephonyProvider,
-  type SpamSettings,
-  type CallSettings,
   type IvrAudioRecording,
-  type IvrLanguageSettings,
   type CustomFieldDefinition,
   type TelephonyProviderConfig,
   getMessagingConfig,
 } from '@/lib/api'
-import type { MessagingConfig } from '@shared/types'
+import type { MessagingConfig } from '@protocol/schemas'
+import type { CallSettingsResponse, IvrLanguageSettings, SpamSettingsResponse } from '@protocol/schemas'
 import { getWebAuthnSettings, type WebAuthnSettings } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { Settings2 } from 'lucide-react'
@@ -58,8 +56,8 @@ function AdminSettingsPage() {
   // only for the active hub, and reload when it changes — never the platform
   // default standing in for it.
   const hubId = useActiveHubId()
-  const [spam, setSpam] = useState<SpamSettings | null>(null)
-  const [callSet, setCallSet] = useState<CallSettings | null>(null)
+  const [spam, setSpam] = useState<SpamSettingsResponse | null>(null)
+  const [callSet, setCallSet] = useState<CallSettingsResponse | null>(null)
   const [globalTranscription, setGlobalTranscription] = useState(false)
   const [allowUserOptOut, setAllowUserOptOut] = useState(false)
   const [ivrSettings, setIvrSettings] = useState<IvrLanguageSettings>({ enabledLanguages: [...IVR_LANGUAGES], uncoveredLanguageCount: 0 })

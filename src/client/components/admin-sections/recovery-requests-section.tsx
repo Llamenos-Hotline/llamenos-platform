@@ -5,15 +5,15 @@ import {
   getRecoverySessions,
   getMyShareEnvelope,
   getActiveHub,
-  type RecoverySessionInfo,
 } from '@/lib/api'
+import type { RecoverySessionStatusResponse } from '@protocol/schemas'
 import { RecoveryRequestsSection } from '@/components/admin-settings/recovery-requests-section'
 
 export function RecoveryRequestsAdminSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const hubId = getActiveHub()
-  const [sessions, setSessions] = useState<RecoverySessionInfo[]>([])
+  const [sessions, setSessions] = useState<RecoverySessionStatusResponse[]>([])
   const [myShareEnvelope, setMyShareEnvelope] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 

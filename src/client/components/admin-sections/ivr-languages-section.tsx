@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { getIvrLanguages, getActiveHub, type IvrLanguageSettings } from '@/lib/api'
+import { getIvrLanguages, getActiveHub } from '@/lib/api'
+import type { IvrLanguageSettings } from '@protocol/schemas'
 import { IvrLanguagesSection as IvrLanguagesSectionInner } from '@/components/admin-settings/ivr-languages-section'
 import { IVR_LANGUAGES } from '@shared/languages'
 

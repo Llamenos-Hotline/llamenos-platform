@@ -52,7 +52,7 @@ export function RetentionSection({
     return platformFloors.find(f => f.category === category)?.minRetentionDays ?? 30
   }
 
-  async function handleSave(category: string) {
+  async function handleSave(category: (typeof CATEGORIES)[number]) {
     const days = localValues[category]
     if (!days || days < getFloor(category)) {
       toast(t('retention.belowFloor', { min: getFloor(category) }), 'error')
@@ -60,10 +60,9 @@ export function RetentionSection({
     }
     setSaving(category)
     try {
-      const { setting } = await updateRetentionSettings({ category, retentionDays: days })
-      const updated = settings.map(s => s.category === category ? setting : s)
-      if (!updated.find(s => s.category === category)) updated.push(setting)
-      onSettingsChange(updated)
+      const { settings: saved } = await updateRetentionSettings({ settings: [{ category, retentionDays: days }] })
+      // The route answers with the hub's full settings after the write.
+      onSettingsChange(saved)
       toast(t('common.saved'), 'success')
     } catch {
       toast(t('common.error'), 'error')

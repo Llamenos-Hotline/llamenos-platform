@@ -20,6 +20,8 @@ export function RCSChannelSection({
   onToggle,
   statusSummary,
 }: ChannelConfigProps) {
+  // The server always answers with the channels list; only a PATCH body may omit it.
+  const currentChannels = config.enabledChannels ?? []
   const { t } = useTranslation()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
@@ -44,9 +46,9 @@ export function RCSChannelSection({
     try {
       await updateMessagingConfig({
         ...config,
-        enabledChannels: config.enabledChannels.includes('rcs')
-          ? config.enabledChannels
-          : [...config.enabledChannels, 'rcs' as const],
+        enabledChannels: currentChannels.includes('rcs')
+          ? currentChannels
+          : [...currentChannels, 'rcs' as const],
         rcs: { ...rcs },
       })
       toast(t('common.success'), 'success')

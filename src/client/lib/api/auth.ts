@@ -1,4 +1,4 @@
-import type { MeResponse } from '@protocol/schemas'
+import type { MeResponse, LoginResponse, OkResponse } from '@protocol/schemas'
 import { request, ApiError, NetworkError, REQUEST_TIMEOUT_MS } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
@@ -12,7 +12,7 @@ import { netFetch } from '../net'
  * the signature only because the field is absent from the nonce-less shape.
  */
 export async function login(pubkey: string, timestamp: number, token: string, nonce?: string) {
-  return request<{ ok: true; roles: string[] }>('/auth/login', {
+  return request<LoginResponse>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ pubkey, timestamp, token, ...(nonce ? { nonce } : {}) }),
   })
@@ -43,7 +43,7 @@ export async function bootstrapAdmin(pubkey: string, timestamp: number, token: s
 }
 
 export async function logout() {
-  return request<{ ok: true }>('/auth/me/logout', { method: 'POST' }).catch(() => {})
+  return request<OkResponse>('/auth/me/logout', { method: 'POST' }).catch(() => {})
 }
 
 export async function getMe() {

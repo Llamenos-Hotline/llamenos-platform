@@ -1879,7 +1879,8 @@
     "noActivity": "Активності не зафіксовано",
     "noChannels": "Без повідомлень",
     "noShifts": "Не призначено жодної зміни",
-    "selectChannels": "Оберіть канали"
+    "selectChannels": "Оберіть канали",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Активний",
@@ -1971,7 +1972,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Відхилено",
+        "suspended": "Призупинено"
       },
       "ein": "EIN / Tax ID",
       "phone": "Телефон",
@@ -4800,5 +4803,8 @@
     "push": "На вашій гарячій лінії є активність, на яку варто поглянути.",
     "signalAlert": "Сповіщення гарячої лінії — {{category}}: {{state}}. Подробиці в застосунку.",
     "title": "Активні інциденти"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

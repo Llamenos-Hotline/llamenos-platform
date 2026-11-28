@@ -69,6 +69,7 @@ export const clockStatusResponseSchema = z.object({
 export const shiftListResponseSchema = z.object({
   shifts: z.array(shiftResponseSchema),
 })
+export type ShiftListResponse = z.infer<typeof shiftListResponseSchema>
 
 // --- Input schemas ---
 
@@ -92,6 +93,7 @@ export const updateShiftBodySchema = z.object({
   ringGroupId: z.string().nullable().optional(),
   userPubkeys: z.array(pubkeySchema).optional(),
 })
+export type UpdateShiftBody = z.input<typeof updateShiftBodySchema>
 
 export const fallbackGroupSchema = z.object({
   userPubkeys: z.array(pubkeySchema),

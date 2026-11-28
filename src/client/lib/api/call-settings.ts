@@ -1,11 +1,9 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, hp, hubPath } from './client'
 import type { CustomFieldDefinition } from '@shared/types'
+import type { CallSettings, CallSettingsResponse, CustomFieldsListResponse, IvrLanguageSettings, IvrLanguages, OkResponse, ProfileUpdateBody, SpamSettingsPatch, SpamSettingsResponse, TranscriptionSettings, TranscriptionSettingsResponse } from '@protocol/schemas'
 
 export type { CustomFieldDefinition } from '@shared/types'
-
-// SpamSettings response has all fields required (schema uses optional for input)
-export type SpamSettings = Required<import('@protocol/schemas').SpamSettings>
 
 // --- Spam Mitigation ---
 //
@@ -17,11 +15,11 @@ export type SpamSettings = Required<import('@protocol/schemas').SpamSettings>
 // silently rewrite the default for every hub.
 
 export async function getSpamSettings(hubId: string) {
-  return request<SpamSettings>(hubPath(hubId, '/settings/spam'))
+  return request<SpamSettingsResponse>(hubPath(hubId, '/settings/spam'))
 }
 
-export async function updateSpamSettings(hubId: string, data: Partial<SpamSettings>) {
-  return request<SpamSettings>(hubPath(hubId, '/settings/spam'), {
+export async function updateSpamSettings(hubId: string, data: SpamSettingsPatch) {
+  return request<SpamSettingsResponse>(hubPath(hubId, '/settings/spam'), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
@@ -29,15 +27,12 @@ export async function updateSpamSettings(hubId: string, data: Partial<SpamSettin
 
 // --- Call Settings ---
 
-// CallSettings response has all fields required (schema uses optional for input)
-export type CallSettings = Required<import('@protocol/schemas').CallSettings>
-
 export async function getCallSettings(hubId: string) {
-  return request<CallSettings>(hubPath(hubId, '/settings/call'))
+  return request<CallSettingsResponse>(hubPath(hubId, '/settings/call'))
 }
 
-export async function updateCallSettings(hubId: string, data: Partial<CallSettings>) {
-  return request<CallSettings>(hubPath(hubId, '/settings/call'), {
+export async function updateCallSettings(hubId: string, data: CallSettings) {
+  return request<CallSettingsResponse>(hubPath(hubId, '/settings/call'), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
@@ -45,14 +40,13 @@ export async function updateCallSettings(hubId: string, data: Partial<CallSettin
 
 // --- IVR Language Settings ---
 
-export type IvrLanguageSettings = import('@protocol/schemas').IvrLanguageSettings
 
 export async function getIvrLanguages(hubId?: string) {
   const qs = hubId ? `?hubId=${encodeURIComponent(hubId)}` : ''
   return request<IvrLanguageSettings>(`/settings/ivr-languages${qs}`)
 }
 
-export async function updateIvrLanguages(data: { enabledLanguages: string[] }, hubId?: string) {
+export async function updateIvrLanguages(data: IvrLanguages, hubId?: string) {
   const qs = hubId ? `?hubId=${encodeURIComponent(hubId)}` : ''
   return request<IvrLanguageSettings>(`/settings/ivr-languages${qs}`, {
     method: 'PATCH',
@@ -63,32 +57,32 @@ export async function updateIvrLanguages(data: { enabledLanguages: string[] }, h
 // --- Transcription Settings ---
 
 export async function getTranscriptionSettings() {
-  return request<{ globalEnabled: boolean; allowUserOptOut: boolean }>('/settings/transcription')
+  return request<TranscriptionSettingsResponse>('/settings/transcription')
 }
 
-export async function updateTranscriptionSettings(data: { globalEnabled?: boolean; allowUserOptOut?: boolean }) {
-  return request<{ globalEnabled: boolean; allowUserOptOut: boolean }>('/settings/transcription', {
+export async function updateTranscriptionSettings(data: TranscriptionSettings) {
+  return request<TranscriptionSettingsResponse>('/settings/transcription', {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
 }
 
 export async function updateMyTranscriptionPreference(enabled: boolean) {
-  return request<{ ok: true }>('/auth/me/transcription', {
+  return request<OkResponse>('/auth/me/transcription', {
     method: 'PATCH',
     body: JSON.stringify({ enabled }),
   })
 }
 
-export async function updateMyProfile(data: { name?: string; phone?: string; spokenLanguages?: string[]; uiLanguage?: string; profileCompleted?: boolean; callPreference?: 'phone' | 'browser' | 'both' }) {
-  return request<{ ok: true }>('/auth/me/profile', {
+export async function updateMyProfile(data: ProfileUpdateBody) {
+  return request<OkResponse>('/auth/me/profile', {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
 }
 
 export async function updateMyAvailability(onBreak: boolean) {
-  return request<{ ok: true }>('/auth/me/availability', {
+  return request<OkResponse>('/auth/me/availability', {
     method: 'PATCH',
     body: JSON.stringify({ onBreak }),
   })
@@ -104,7 +98,7 @@ export async function updateMyAvailability(onBreak: boolean) {
  * path with a 403. Writes stay unscoped — they are admin-only deployment settings.
  */
 export async function getCustomFields() {
-  return request<{ fields: CustomFieldDefinition[] }>(hp('/settings/custom-fields'))
+  return request<CustomFieldsListResponse>(hp('/settings/custom-fields'))
 }
 
 /**
@@ -124,7 +118,7 @@ export async function deleteCustomField(
 }
 
 export async function updateCustomFields(fields: CustomFieldDefinition[]) {
-  return request<{ fields: CustomFieldDefinition[] }>('/settings/custom-fields', {
+  return request<CustomFieldsListResponse>('/settings/custom-fields', {
     method: 'PUT',
     body: JSON.stringify({ fields }),
   })

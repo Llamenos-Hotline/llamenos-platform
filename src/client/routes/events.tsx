@@ -14,7 +14,13 @@ function EventsPage() {
       entityCategory="event"
       headerIcon={<Calendar className="h-6 w-6 text-primary" />}
       title={t('events.title', { defaultValue: 'Events' })}
-      i18nPrefix="events"
+      labels={{
+        loadError: t('events.loadError', { defaultValue: 'Failed to load events' }),
+        cmsDisabled: t('events.cmsDisabled', { defaultValue: 'Case management is not enabled.' }),
+        newRecord: t('events.newEvent', { defaultValue: 'New Event' }),
+        noRecords: t('events.noEvents', { defaultValue: 'No events yet' }),
+        selectRecord: t('events.selectEvent', { defaultValue: 'Select an event to view details' }),
+      }}
       showCalendarToggle
     />
   )

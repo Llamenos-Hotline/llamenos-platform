@@ -59,20 +59,20 @@ enum ReportStatusFilter: String, CaseIterable, Sendable {
 
 // MARK: - Report conversation UI extensions
 // Report lists decode to generated `ReportListResponse` whose elements are
-// generated `SharedConversation` — the reports list IS the report-type
-// conversation list (packages/protocol/schemas/reports.ts +
-// conversations.ts). Only the display helpers below are client-side.
+// generated `ReportConversation` — a conversation whose metadata is stamped
+// `type: 'report'` (`reportConversationSchema`, packages/protocol/schemas/reports.ts),
+// so `metadata` is always present. Only the display helpers below are client-side.
 
-extension SharedConversation: Identifiable {}
+extension ReportConversation: Identifiable {}
 
-extension SharedConversation {
+extension ReportConversation {
     var reportTitle: String {
-        metadata?.reportTitle ?? NSLocalizedString("report_untitled", comment: "Untitled Report")
+        metadata.reportTitle ?? NSLocalizedString("report_untitled", comment: "Untitled Report")
     }
 
-    var reportCategory: String? { metadata?.reportCategory }
+    var reportCategory: String? { metadata.reportCategory }
 
-    var reportTypeId: String? { metadata?.reportTypeID }
+    var reportTypeId: String? { metadata.reportTypeID }
 
     var statusEnum: ReportStatus {
         status.flatMap { ReportStatus(rawValue: $0.rawValue) } ?? .waiting

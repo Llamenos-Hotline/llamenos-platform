@@ -1262,7 +1262,9 @@
         "failed": "Failed",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejected",
+        "suspended": "Suspended"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4467,7 +4469,8 @@
     "noActivity": "No activity recorded",
     "noChannels": "No messaging",
     "noShifts": "Not assigned to any shifts",
-    "selectChannels": "Select channels"
+    "selectChannels": "Select channels",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Active",

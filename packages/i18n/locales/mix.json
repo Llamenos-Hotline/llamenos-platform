@@ -1879,7 +1879,8 @@
     "noActivity": "Ñá íyo actividad registrada",
     "noChannels": "Ñá íyo mensaje",
     "noShifts": "Ñá íyo turno asignado",
-    "selectChannels": "Kaji canal"
+    "selectChannels": "Kaji canal",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Activo",
@@ -2387,7 +2388,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rechazado",
+        "suspended": "Suspendido"
       },
       "brandFormTitle": "Brand Registration",
       "addSampleMessage": "Add sample message",
@@ -4807,6 +4810,7 @@
     "erasure.envelopeRevocationComplete",
     "erasure.envelopeRevocationFailed",
     "erasure.envelopeRevocationProcessed",
-    "erasure.envelopeRevocationProgress"
+    "erasure.envelopeRevocationProgress",
+    "userProfile.channelTelegram"
   ]
 }

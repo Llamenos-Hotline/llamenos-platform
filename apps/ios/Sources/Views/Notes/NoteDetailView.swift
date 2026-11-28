@@ -6,7 +6,7 @@ import SwiftUI
 /// custom field values, and metadata. Supports copy-to-clipboard.
 struct NoteDetailView: View {
     let note: DecryptedNote
-    let customFields: [CustomFieldsListResponseField]
+    let customFields: [ProtocolCustomFieldDefinition]
 
     @State private var showCopyConfirmation: Bool = false
 
@@ -253,16 +253,16 @@ struct NoteDetailView: View {
                 updatedAt: nil
             ),
             customFields: [
-                CustomFieldsListResponseField(
+                ProtocolCustomFieldDefinition(
                     name: "severity", label: "Severity", type: .number,
                     required: true, order: 0
                 ),
-                CustomFieldsListResponseField(
+                ProtocolCustomFieldDefinition(
                     name: "category", label: "Category", type: .select,
                     required: false, options: ["Legal", "Medical", "Housing"],
                     order: 1
                 ),
-                CustomFieldsListResponseField(
+                ProtocolCustomFieldDefinition(
                     name: "followUp", label: "Follow-up Needed", type: .checkbox,
                     required: false, order: 2
                 ),

@@ -1,7 +1,7 @@
 import { request, hp } from './client'
-import type { DirectoryContactType, IdentifierType, ContactIdentifier, ContactCaseLink } from '@protocol/schemas'
-import type { Contact as RawContactBase, CreateContactBody as CreateRawContactBody } from '@protocol/schemas/contacts-v2'
-import type { ContactRelationshipResponse, ContactGroupResponse, CreateRelationshipBody, AffinityGroup, CreateAffinityGroupBody, UpdateAffinityGroupBody, GroupMember } from '@protocol/schemas/contact-relationships'
+import type { DirectoryContactType, IdentifierType, ContactIdentifier, ContactCaseLink, AffinityGroupListResponse, Contact, ContactCaseListResponse, ContactListResponse, ContactRelationshipListResponse, CreateContactBody, OkResponse, UpdateContactBody } from '@protocol/schemas'
+import type { Contact as RawContactBase } from '@protocol/schemas/contacts-v2'
+import type { ContactRelationship, CreateRelationshipBody, AffinityGroup, CreateAffinityGroupBody, UpdateAffinityGroupBody, GroupMember } from '@protocol/schemas/contact-relationships'
 import type { MergeContactsBody, MergeContactsResponse } from '@protocol/schemas/contact-merge'
 import type { BulkContactAction, BulkContactActionResponse, BulkCreateContactBody, BulkCreateContactResponse } from '@protocol/schemas/contact-bulk'
 
@@ -17,10 +17,9 @@ export type DirectoryContact = import('@protocol/schemas').DirectoryContact & {
   _raw?: RawContact
 }
 
-export type ContactRelationship = ContactRelationshipResponse
-export type ContactGroup = ContactGroupResponse
+export type { ContactRelationship }
 
-export type { CreateRawContactBody }
+export type { CreateContactBody }
 
 // --- Contact Directory (Epic 331) ---
 
@@ -36,17 +35,17 @@ export async function listRawContacts(params?: {
   qs.set('limit', String(params?.limit ?? 50))
   if (params?.contactTypeHash) qs.set('contactTypeHash', params.contactTypeHash)
   if (params?.statusHash) qs.set('statusHash', params.statusHash)
-  return request<{ contacts: RawContact[]; total: number; page: number; limit: number; hasMore: boolean }>(hp(`/directory?${qs}`))
+  return request<ContactListResponse>(hp(`/directory?${qs}`))
 }
 
 /** Get a single raw contact by ID */
 export async function getRawContact(id: string) {
-  return request<RawContact>(hp(`/directory/${id}`))
+  return request<Contact>(hp(`/directory/${id}`))
 }
 
 /** Create an encrypted contact record */
-export async function createRawContact(body: CreateRawContactBody) {
-  return request<RawContact>(hp('/directory'), {
+export async function createRawContact(body: CreateContactBody) {
+  return request<Contact>(hp('/directory'), {
     method: 'POST',
     body: JSON.stringify(body),
   })
@@ -69,23 +68,23 @@ export async function getDirectoryContact(id: string) {
   return getRawContact(id)
 }
 
-export async function updateDirectoryContact(id: string, body: Partial<CreateRawContactBody>) {
-  return request<RawContact>(hp(`/directory/${id}`), {
+export async function updateDirectoryContact(id: string, body: UpdateContactBody) {
+  return request<Contact>(hp(`/directory/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(body),
   })
 }
 
 export async function deleteDirectoryContact(id: string) {
-  return request<{ ok: boolean }>(hp(`/directory/${id}`), { method: 'DELETE' })
+  return request<OkResponse>(hp(`/directory/${id}`), { method: 'DELETE' })
 }
 
 export async function listDirectoryContactRelationships(id: string) {
-  return request<{ relationships: ContactRelationship[] }>(hp(`/directory/${id}/relationships`))
+  return request<ContactRelationshipListResponse>(hp(`/directory/${id}/relationships`))
 }
 
 export async function listDirectoryContactGroups(id: string) {
-  return request<{ groups: ContactGroup[] }>(hp(`/directory/${id}/groups`))
+  return request<AffinityGroupListResponse>(hp(`/directory/${id}/groups`))
 }
 
 // --- Relationship write functions (EP06-A2) ---
@@ -101,7 +100,7 @@ export async function createContactRelationship(
 }
 
 export async function deleteContactRelationship(contactId: string, relId: string) {
-  return request<{ deleted: boolean }>(hp(`/directory/${contactId}/relationships/${relId}`), {
+  return request<OkResponse>(hp(`/directory/${contactId}/relationships/${relId}`), {
     method: 'DELETE',
   })
 }
@@ -111,7 +110,7 @@ export async function deleteContactRelationship(contactId: string, relId: string
 export type { AffinityGroup, CreateAffinityGroupBody, UpdateAffinityGroupBody }
 
 export async function listAffinityGroups() {
-  return request<{ groups: AffinityGroup[] }>(hp('/directory/groups'))
+  return request<AffinityGroupListResponse>(hp('/directory/groups'))
 }
 
 export async function createAffinityGroup(body: CreateAffinityGroupBody) {
@@ -123,7 +122,7 @@ export async function updateAffinityGroup(groupId: string, body: UpdateAffinityG
 }
 
 export async function deleteAffinityGroup(groupId: string) {
-  return request<{ deleted: boolean }>(hp(`/directory/groups/${groupId}`), { method: 'DELETE' })
+  return request<OkResponse>(hp(`/directory/groups/${groupId}`), { method: 'DELETE' })
 }
 
 export async function addGroupMember(groupId: string, contactId: string, role?: string) {
@@ -134,13 +133,13 @@ export async function addGroupMember(groupId: string, contactId: string, role?: 
 }
 
 export async function removeGroupMember(groupId: string, contactId: string) {
-  return request<{ ok: boolean }>(hp(`/directory/groups/${groupId}/members/${contactId}`), {
+  return request<OkResponse>(hp(`/directory/groups/${groupId}/members/${contactId}`), {
     method: 'DELETE',
   })
 }
 
 export async function listDirectoryContactCases(id: string) {
-  return request<{ cases: ContactCaseLink[] }>(hp(`/directory/${id}/cases`))
+  return request<ContactCaseListResponse>(hp(`/directory/${id}/cases`))
 }
 
 // --- Contact Merge API ---

@@ -85,16 +85,28 @@ function unscopedServerPath(route: ResolvedServerRoute): string {
   return canonicalPath(noApi)
 }
 
-function buildServerIndex(routes: ResolvedServerRoute[]): Map<string, ResolvedServerRoute> {
-  const index = new Map<string, ResolvedServerRoute>()
+/**
+ * Server routes keyed by `METHOD /unscoped/path`. A route file mounted both bare and under
+ * `/hubs/:hubId` produces two entries per route; most are schema-identical, but a file may
+ * register DIFFERENT handlers per mount (`/settings/roles` validates `createRoleSchema` bare
+ * and `createHubRoleSchema` under a hub). `hubScoped` keeps the hub-mounted variant apart so a
+ * client path that names a hub is checked against the schema that mount actually validates.
+ */
+interface ServerIndex {
+  any: Map<string, ResolvedServerRoute>
+  hubScoped: Map<string, ResolvedServerRoute>
+}
+
+function buildServerIndex(routes: ResolvedServerRoute[]): ServerIndex {
+  const any = new Map<string, ResolvedServerRoute>()
+  const hubScoped = new Map<string, ResolvedServerRoute>()
   for (const route of routes) {
     const key = `${route.method.toUpperCase()} ${unscopedServerPath(route)}`
-    // Hub-scoped and non-hub-scoped mounts of the same route file produce two structurally
-    // identical entries; keep the first (they are schema-identical by construction — both are
-    // the same `.get/.post(...)` call site in the same route file, just mounted twice).
-    if (!index.has(key)) index.set(key, route)
+    // Keep the first of the structurally identical twins.
+    if (!any.has(key)) any.set(key, route)
+    if (route.viaHubScopeWrapper && !hubScoped.has(key)) hubScoped.set(key, route)
   }
-  return index
+  return { any, hubScoped }
 }
 
 function classifyType(
@@ -186,8 +198,9 @@ export function buildBindingReport(): { rows: BindingRow[]; unresolvedServerMoun
     const candidateKeys = [`${call.method} ${literalPath}`]
     if (hubStripped) candidateKeys.push(`${call.method} ${hubStripped[1] || '/'}`)
 
-    const key = candidateKeys.find(k => serverIndex.has(k)) ?? candidateKeys[0]
-    const serverRoute = serverIndex.get(key)
+    const key = candidateKeys.find(k => serverIndex.any.has(k)) ?? candidateKeys[0]
+    // A client call that is hub-scoped (names a hub, or goes through hp()/activeHubPath()/hubPath()) is served by the hub-mounted variant when there is one.
+    const serverRoute = ((hubStripped || call.hubScoped) && serverIndex.hubScoped.get(key)) || serverIndex.any.get(key)
     if (!serverRoute) {
       return {
         functionName: call.functionName, file: call.file, line: call.line,
@@ -310,22 +323,44 @@ export function renderMarkdown(rows: BindingRow[], unresolvedServerMounts: strin
   return lines.join('\n')
 }
 
-function main() {
-  const args = process.argv.slice(2)
+/**
+ * What `--check` enforces: the committed report matches the source it was generated from,
+ * and no client function in `src/client/lib/api/**` hand-writes (UNBOUND) or mis-binds
+ * (MISMATCHED) a request/response shape. Every other verdict — BOUND, N/A, UNRESOLVED,
+ * NO_SERVER_ROUTE — is informational: NO_SERVER_ROUTE is a client path with no mounted
+ * route, tracked by its own issue rather than by this ratchet.
+ */
+export function evaluateCheck(): { stale: boolean; unbound: number; mismatched: number } {
   const { rows, unresolvedServerMounts } = buildBindingReport()
   const json = JSON.stringify({ rows, unresolvedServerMounts }, null, 2) + '\n'
   const md = renderMarkdown(rows, unresolvedServerMounts)
+  const counts = verdictCounts(rows)
+  return {
+    stale: existsOrEmpty(REPORT_JSON) !== json || existsOrEmpty(REPORT_MD) !== md,
+    unbound: counts.UNBOUND ?? 0,
+    mismatched: counts.MISMATCHED ?? 0,
+  }
+}
+
+function main() {
+  const args = process.argv.slice(2)
 
   if (args.includes('--check')) {
-    const currentJson = existsOrEmpty(REPORT_JSON)
-    const currentMd = existsOrEmpty(REPORT_MD)
-    if (currentJson !== json || currentMd !== md) {
+    const { stale, unbound, mismatched } = evaluateCheck()
+    if (stale) {
       console.error('api-schema-binding report is stale. Run `bun scripts/api-schema-binding/bind-report.ts` and commit the result.')
-      process.exit(1)
     }
-    console.log('api-schema-binding report is up to date.')
+    if (unbound > 0 || mismatched > 0) {
+      console.error(`api-schema-binding: ${unbound} UNBOUND and ${mismatched} MISMATCHED client shape(s) in src/client/lib/api/** — bind them to @protocol/schemas (see report.md).`)
+    }
+    if (stale || unbound > 0 || mismatched > 0) process.exit(1)
+    console.log('api-schema-binding report is up to date: 0 UNBOUND, 0 MISMATCHED.')
     return
   }
+
+  const { rows, unresolvedServerMounts } = buildBindingReport()
+  const json = JSON.stringify({ rows, unresolvedServerMounts }, null, 2) + '\n'
+  const md = renderMarkdown(rows, unresolvedServerMounts)
 
   if (!args.includes('--summary')) {
     writeFileSync(REPORT_JSON, json)

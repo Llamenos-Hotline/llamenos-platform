@@ -1879,7 +1879,8 @@
     "noActivity": "Kayıtlı etkinlik yok",
     "noChannels": "Mesajlaşma yok",
     "noShifts": "Herhangi bir vardiyaya atanmamış",
-    "selectChannels": "Kanal seçin"
+    "selectChannels": "Kanal seçin",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Aktif",
@@ -2462,7 +2463,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Reddedildi",
+        "suspended": "Askıya alındı"
       },
       "email": "E-posta",
       "ein": "EIN / Tax ID",
@@ -4800,5 +4803,8 @@
     "push": "Hattınızda göz atılması gereken bir etkinlik var.",
     "signalAlert": "Hat uyarısı — {{category}}: {{state}}. Ayrıntılar için uygulamayı açın.",
     "title": "Etkin olaylar"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

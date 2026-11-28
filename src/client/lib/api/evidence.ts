@@ -1,6 +1,6 @@
 import { request, activeHubPath, hubPath } from './client'
-import type { EvidenceClassification, CustodyAction, EvidenceMetadata, CustodyEntry } from '@protocol/schemas'
-import type { RecipientEnvelope } from '@shared/types'
+import type { EvidenceClassification, CustodyAction, EvidenceMetadata, CustodyEntry, CustodyChainResponse, LogCustodyEventBody, UploadEvidenceBody, VerifyIntegrityResponse } from '@protocol/schemas'
+import type {  } from '@shared/types'
 
 export type { EvidenceClassification, CustodyAction, EvidenceMetadata, CustodyEntry }
 
@@ -28,19 +28,7 @@ export async function listEvidence(recordId: string, params?: {
  * `hubId` is the record's own hub (`record.hubId`). Required: the evidence is
  * sealed to that hub's admins, so it must also be filed in it.
  */
-export async function uploadEvidence(recordId: string, hubId: string, body: {
-  fileId: string
-  filename: string
-  mimeType: string
-  sizeBytes: number
-  classification: EvidenceClassification
-  integrityHash: string
-  source?: string
-  sourceDescription?: string
-  encryptedDescription?: string
-  descriptionEnvelopes?: RecipientEnvelope[]
-  interactionTypeHash?: string
-}) {
+export async function uploadEvidence(recordId: string, hubId: string, body: UploadEvidenceBody) {
   return request<EvidenceMetadata>(hubPath(hubId, `/records/${recordId}/evidence`), {
     method: 'POST',
     body: JSON.stringify(body),
@@ -52,17 +40,10 @@ export async function getEvidenceMetadata(evidenceId: string) {
 }
 
 export async function getEvidenceCustody(evidenceId: string) {
-  return request<{
-    custodyChain: CustodyEntry[]
-    total: number
-  }>(activeHubPath(`/evidence/${evidenceId}/custody`))
+  return request<CustodyChainResponse>(activeHubPath(`/evidence/${evidenceId}/custody`))
 }
 
-export async function logEvidenceAccess(evidenceId: string, body: {
-  action: CustodyAction
-  integrityHash: string
-  notes?: string
-}) {
+export async function logEvidenceAccess(evidenceId: string, body: LogCustodyEventBody) {
   return request<CustodyEntry>(activeHubPath(`/evidence/${evidenceId}/access`), {
     method: 'POST',
     body: JSON.stringify(body),
@@ -70,11 +51,7 @@ export async function logEvidenceAccess(evidenceId: string, body: {
 }
 
 export async function verifyEvidenceIntegrity(evidenceId: string, currentHash: string) {
-  return request<{
-    valid: boolean
-    originalHash: string
-    currentHash: string
-  }>(activeHubPath(`/evidence/${evidenceId}/verify`), {
+  return request<VerifyIntegrityResponse>(activeHubPath(`/evidence/${evidenceId}/verify`), {
     method: 'POST',
     body: JSON.stringify({ currentHash }),
   })

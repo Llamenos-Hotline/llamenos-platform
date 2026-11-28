@@ -19,6 +19,19 @@ import { Plus, Loader2 } from 'lucide-react'
 import { useHubOwned } from '@/lib/hub-owned'
 import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 
+export interface EntityTypeFilteredRecordListLabels {
+  /** Toast when the records fail to load */
+  loadError: string
+  /** Body of the case-management-disabled card */
+  cmsDisabled: string
+  /** The create button, in the header and in the empty state */
+  newRecord: string
+  /** Empty-state message */
+  noRecords: string
+  /** Detail-pane placeholder when no record is selected */
+  selectRecord: string
+}
+
 interface EntityTypeFilteredRecordListProps {
   /** Filter records to entity types with this category */
   entityCategory: 'case' | 'event' | 'incident_report' | 'custom'
@@ -26,8 +39,13 @@ interface EntityTypeFilteredRecordListProps {
   headerIcon: React.ReactNode
   /** Page heading */
   title: string
-  /** i18n key prefix for empty state messages */
-  i18nPrefix: string
+  /**
+   * The list's translated strings. The caller resolves each with a literal key
+   * (`t('events.noEvents')`), so the i18n validators see every key; a key built
+   * from a prefix here is invisible to them — `events.newRecord`, `noRecords` and
+   * `selectRecord` never existed, and the page always fell back to English.
+   */
+  labels: EntityTypeFilteredRecordListLabels
   // Whether to show the calendar display toggle for date-bearing entities
   showCalendarToggle?: boolean
 }
@@ -44,7 +62,7 @@ export function EntityTypeFilteredRecordList({
   entityCategory,
   headerIcon,
   title,
-  i18nPrefix,
+  labels,
 }: EntityTypeFilteredRecordListProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -82,7 +100,7 @@ export function EntityTypeFilteredRecordList({
   }, [filteredEntityTypes])
   const { data: recordsPage, setData: setRecordsPage, noHub, loading, reload: fetchRecords } = useHubOwned(loadRecords, {
     empty: EMPTY_RECORDS_PAGE,
-    onError: () => toast(t(`${i18nPrefix}.loadError`, { defaultValue: 'Failed to load records' }), 'error'),
+    onError: () => toast(labels.loadError, 'error'),
   })
   const { records, total } = recordsPage
   const setRecords = useCallback(
@@ -123,7 +141,7 @@ export function EntityTypeFilteredRecordList({
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             {headerIcon}
             <p className="mt-3 text-muted-foreground">
-              {t(`${i18nPrefix}.cmsDisabled`, { defaultValue: 'Case management is not enabled.' })}
+              {labels.cmsDisabled}
             </p>
           </CardContent>
         </Card>
@@ -158,7 +176,7 @@ export function EntityTypeFilteredRecordList({
         </div>
         <Button size="sm" data-testid="case-new-btn" onClick={() => setShowCreateDialog(true)}>
           <Plus className="h-3.5 w-3.5" />
-          {t(`${i18nPrefix}.newRecord`, { defaultValue: 'New' })}
+          {labels.newRecord}
         </Button>
       </div>
 
@@ -173,12 +191,12 @@ export function EntityTypeFilteredRecordList({
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             {headerIcon}
             <p className="mt-3 text-muted-foreground">
-              {t(`${i18nPrefix}.noRecords`, { defaultValue: 'Nothing here yet.' })}
+              {labels.noRecords}
             </p>
             <Button size="sm" className="mt-4" data-testid="case-empty-create-btn"
               onClick={() => setShowCreateDialog(true)}>
               <Plus className="h-3.5 w-3.5" />
-              {t(`${i18nPrefix}.newRecord`, { defaultValue: 'New' })}
+              {labels.newRecord}
             </Button>
           </CardContent>
         </Card>
@@ -209,7 +227,7 @@ export function EntityTypeFilteredRecordList({
               <div className="flex flex-1 flex-col items-center justify-center text-muted-foreground">
                 {headerIcon}
                 <p className="mt-3">
-                  {t(`${i18nPrefix}.selectRecord`, { defaultValue: 'Select a record to view details' })}
+                  {labels.selectRecord}
                 </p>
               </div>
             )}

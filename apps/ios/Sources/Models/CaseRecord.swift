@@ -88,7 +88,7 @@ extension SharedEntityTypeDefinitionField {
                   indexType: SharedIndexType(rawValue: indexType ?? "none") ?? .none,
                   label: label, locationOptions: nil, lookupID: lookupId, name: name,
                   options: options, order: order, placeholder: placeholder,
-                  sharedEntityTypeDefinitionFielRequired: required ?? false,
+                  fieldRequired: required ?? false,
                   section: section, showWhen: nil, templateID: templateId,
                   type: SharedType(rawValue: type) ?? .text, validation: validation,
                   visibleToUsers: visibleToUsers)

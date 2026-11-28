@@ -1,16 +1,13 @@
 package org.llamenos.hotline.ui.contacts
 
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import org.llamenos.hotline.model.ContactDetail
 import org.llamenos.hotline.model.ContactTimelineEvent
 import org.llamenos.protocol.ContactTimelineDetailResponse
 
 /**
  * `GET /contacts/:hash` is the contact's timeline: the contact's notes and conversations
- * (PROTOCOL §4.29, `contactTimelineDetailResponseSchema`), as raw rows. There is no
+ * (PROTOCOL §4.29, `contactTimelineDetailResponseSchema`): note and conversation rows, the
+ * same shapes as `GET /notes` and `GET /conversations` list. There is no
  * `/contacts/:hash/timeline` and no `{ contact }` wrapper — the screens used to call the
  * former and decode the latter, so neither ever showed anything (#1730, #2002).
  *
@@ -19,22 +16,16 @@ import org.llamenos.protocol.ContactTimelineDetailResponse
  * and status — and no body.
  */
 internal fun ContactTimelineDetailResponse.toTimelineEvents(): List<ContactTimelineEvent> {
-    val notes = notes.mapNotNull { row ->
-        val fields = row.asRow() ?: return@mapNotNull null
-        val id = fields.string("id") ?: return@mapNotNull null
-        val at = fields.string("createdAt") ?: return@mapNotNull null
-        ContactTimelineEvent(id = id, type = "note", timestamp = at)
+    val notes = notes.map { note ->
+        ContactTimelineEvent(id = note.id, type = "note", timestamp = note.createdAt)
     }
-    val conversations = conversations.mapNotNull { row ->
-        val fields = row.asRow() ?: return@mapNotNull null
-        val id = fields.string("id") ?: return@mapNotNull null
-        val at = fields.string("createdAt") ?: return@mapNotNull null
+    val conversations = conversations.map { conversation ->
         ContactTimelineEvent(
-            id = id,
+            id = conversation.id,
             type = "conversation",
-            timestamp = at,
-            summary = fields.string("channelType"),
-            status = fields.string("status"),
+            timestamp = conversation.createdAt,
+            summary = conversation.channelType,
+            status = conversation.status?.value,
         )
     }
     // ISO-8601 instants from one source sort lexicographically; newest first.
@@ -57,8 +48,3 @@ internal fun ContactTimelineDetailResponse.toContactDetail(contactHash: String):
         noteCount = events.count { it.type == "note" },
     )
 }
-
-private fun JsonElement.asRow(): JsonObject? = this as? JsonObject
-
-private fun JsonObject.string(key: String): String? =
-    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull

@@ -1274,7 +1274,9 @@
         "failed": "Failed",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Bị từ chối",
+        "suspended": "Bị tạm ngưng"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4624,7 +4626,8 @@
     "noActivity": "Chưa có hoạt động nào",
     "noChannels": "No messaging",
     "noShifts": "Chưa được phân công ca trực nào",
-    "selectChannels": "Select channels"
+    "selectChannels": "Select channels",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Hoạt động",
@@ -4802,5 +4805,8 @@
     "push": "Có hoạt động trên đường dây nóng của bạn cần được xem xét.",
     "signalAlert": "Cảnh báo đường dây nóng — {{category}}: {{state}}. Mở ứng dụng để xem chi tiết.",
     "title": "Sự cố đang diễn ra"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

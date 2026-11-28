@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import type {
   DirectoryContact,
   ContactRelationship,
-  ContactGroup,
+  AffinityGroup,
   ContactCaseLink,
 } from '@/lib/api'
 import {
@@ -12,7 +12,7 @@ import {
   listDirectoryContactCases,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { RelationshipWritePanel } from './relationship-write-panel'
+import { RelationshipWritePanel, relationshipCounterpartId } from './relationship-write-panel'
 import { useToast } from '@/lib/toast'
 import { CONTACT_TYPE_CONFIG } from './contact-card'
 import { ContactMergeDialog } from '@/components/contact-merge-dialog'
@@ -386,22 +386,19 @@ function RelationshipsTab({ contactId }: { contactId: string }) {
   return (
     <div data-testid="contact-relationships-list" className="space-y-2">
       {relationships.map(rel => {
-        const targetConfig = CONTACT_TYPE_CONFIG[rel.targetContactType] ?? CONTACT_TYPE_CONFIG.individual
-        const TargetIcon = targetConfig.icon
+        // The wire row names the two contacts and seals its notes; the counterpart's display
+        // name is inside that contact's own envelope and is not resolved here, so identify it
+        // by id (the same convention as the groups sidebar).
+        const isA = rel.contactIdA === contactId
+        const pointsAtThisContact = (rel.direction === 'a_to_b' && !isA) || (rel.direction === 'b_to_a' && isA)
         return (
           <Card key={rel.id}>
             <CardContent className="flex items-center gap-3 py-3">
               <div className="flex items-center gap-1.5">
-                <ArrowRight className={`h-3.5 w-3.5 text-muted-foreground ${rel.direction === 'incoming' ? 'rotate-180' : ''}`} />
+                <ArrowRight className={`h-3.5 w-3.5 text-muted-foreground ${pointsAtThisContact ? 'rotate-180' : ''}`} />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium">{rel.targetDisplayName}</p>
-                  <Badge variant="outline" className="text-[10px] gap-1">
-                    <TargetIcon className="h-2.5 w-2.5" />
-                    {t(targetConfig.label, { defaultValue: rel.targetContactType })}
-                  </Badge>
-                </div>
+                <p className="text-sm font-medium">{relationshipCounterpartId(rel, contactId).slice(0, 8)}</p>
                 <p className="text-xs text-muted-foreground capitalize">{rel.relationshipType}</p>
               </div>
             </CardContent>
@@ -415,7 +412,7 @@ function RelationshipsTab({ contactId }: { contactId: string }) {
 function GroupsTab({ contactId }: { contactId: string }) {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const [groups, setGroups] = useState<ContactGroup[]>([])
+  const [groups, setGroups] = useState<AffinityGroup[]>([])
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
@@ -452,15 +449,9 @@ function GroupsTab({ contactId }: { contactId: string }) {
           <CardContent className="flex items-center gap-3 py-3">
             <Users className="h-4 w-4 text-muted-foreground shrink-0" />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium">{group.name}</p>
-              {group.description && (
-                <p className="text-xs text-muted-foreground">{group.description}</p>
-              )}
+              <p className="text-sm font-medium">{group.id.slice(0, 8)}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {group.role && (
-                <Badge variant="secondary" className="text-[10px]">{group.role}</Badge>
-              )}
               <span data-testid="contact-group-member-count" className="text-xs text-muted-foreground">
                 {t('contactDirectory.memberCount', { count: group.memberCount, defaultValue: '{{count}} members' })}
               </span>

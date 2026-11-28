@@ -23,6 +23,7 @@ export type EncryptedNote = z.infer<typeof noteResponseSchema>
 export const noteStoredResponseSchema = z.object({
   note: noteResponseSchema,
 })
+export type NoteStoredResponse = z.infer<typeof noteStoredResponseSchema>
 
 /**
  * A note reply as the server serialises it: a `note_replies` row. NOT a note —
@@ -37,11 +38,13 @@ export const noteReplyResponseSchema = z.object({
   readerEnvelopes: z.array(recipientEnvelopeSchema),
   createdAt: z.string(),
 })
+export type NoteReply = z.infer<typeof noteReplyResponseSchema>
 
 /** What `POST /notes/:id/replies` (201) answers: the stored reply, wrapped under `reply` — never bare. */
 export const noteReplyStoredResponseSchema = z.object({
   reply: noteReplyResponseSchema,
 })
+export type NoteReplyStoredResponse = z.infer<typeof noteReplyStoredResponseSchema>
 
 // --- List/wrapper response schemas ---
 
@@ -49,11 +52,13 @@ export const noteListResponseSchema = z.object({
   notes: z.array(noteResponseSchema),
   ...paginatedMeta,
 })
+export type NoteListResponse = z.infer<typeof noteListResponseSchema>
 
 /** What `GET /notes/:id/replies` answers: `note_replies` rows, never notes (#2300). */
 export const noteRepliesResponseSchema = z.object({
   replies: z.array(noteReplyResponseSchema),
 })
+export type NoteRepliesResponse = z.infer<typeof noteRepliesResponseSchema>
 
 // --- Input schemas ---
 
@@ -78,14 +83,17 @@ export const createNoteBodySchema = z.object({
   data => data.callId || data.conversationId,
   { message: 'callId or conversationId is required' }
 )
+export type CreateNoteBody = z.input<typeof createNoteBodySchema>
 
 export const updateNoteBodySchema = z.object({
   encryptedContent: z.string().min(1).max(65536).optional(),
   authorEnvelope: keyEnvelopeSchema.optional(),
   adminEnvelopes: z.array(recipientEnvelopeSchema).optional(),
 })
+export type UpdateNoteBody = z.input<typeof updateNoteBodySchema>
 
 export const createReplyBodySchema = z.object({
   encryptedContent: z.string().min(1, 'encryptedContent is required').max(65536),
   readerEnvelopes: z.array(recipientEnvelopeSchema).min(1, 'At least one reader envelope required'),
 })
+export type CreateReplyBody = z.input<typeof createReplyBodySchema>

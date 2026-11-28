@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { getCallSettings, type CallSettings } from '@/lib/api'
+import { getCallSettings } from '@/lib/api'
+import type { CallSettingsResponse } from '@protocol/schemas'
 import { useActiveHubId } from '@/lib/hub-owned'
 import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import { CallSettingsSection as CallSettingsSectionInner } from '@/components/admin-settings/call-settings-section'
@@ -10,7 +11,7 @@ export function CallSettingsSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const hubId = useActiveHubId()
-  const [settings, setSettings] = useState<CallSettings | null>(null)
+  const [settings, setSettings] = useState<CallSettingsResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {

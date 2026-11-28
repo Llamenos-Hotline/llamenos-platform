@@ -5,8 +5,8 @@ import {
   initiateRecovery,
   verifyRecoveryCode,
   getRecoverySession,
-  type RecoverySessionInfo,
 } from '@/lib/api'
+import type { RecoverySessionStatusResponse } from '@protocol/schemas'
 import {
   deviceGenerateAndLoad,
   getDevicePubkeys,
@@ -56,7 +56,7 @@ export function AccountRecoveryFlow({ onBack }: Props) {
   const [hubId, setHubId] = useState('')
   const [sessionId, setSessionId] = useState('')
   const [verificationCode, setVerificationCode] = useState('')
-  const [session, setSession] = useState<RecoverySessionInfo | null>(null)
+  const [session, setSession] = useState<RecoverySessionStatusResponse | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [newPin1, setNewPin1] = useState('')
@@ -102,11 +102,13 @@ export function AccountRecoveryFlow({ onBack }: Props) {
         // The private key is reconstructed inside Rust and NEVER enters JavaScript.
         // Each contribution opens under the AAD it was sealed with: this
         // session and the holder that contributed it.
-        const envelopes: EncryptedShareEnvelope[] = session.contributions.map(
-          (contribution) => ({
+        // A share the server has not released yet (delay still running) is `null`
+        // and cannot be opened, so it is not offered.
+        const envelopes: EncryptedShareEnvelope[] = session.contributions.flatMap(
+          (contribution) => contribution.encryptedShare === null ? [] : [{
             envelope: JSON.parse(contribution.encryptedShare) as KeyEnvelope,
             contributorPubkey: contribution.contributorPubkey,
-          }),
+          }],
         )
 
         await recoveryGroupReconstructFromShares(envelopes, session.sessionId)

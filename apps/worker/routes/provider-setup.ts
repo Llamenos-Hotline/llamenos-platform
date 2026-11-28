@@ -18,7 +18,10 @@ import {
   numberProvisionRequestSchema,
   oauthFlowStateSchema,
   ownedNumberSchema,
-  availableNumberSchema,
+  ownedNumberListSchema,
+  availableNumberListSchema,
+  signalRegisterRequestSchema,
+  signalVerifyRequestSchema,
   signalRegistrationStateSchema,
   a2pRegistrationStateSchema,
   webhookUrlsResponseSchema,
@@ -135,9 +138,6 @@ const TestConnectionRequestSchema = z.object({
   provider: z.string(),
   hubId: z.string().optional(),
 })
-
-const ownedNumberListSchema = z.object({ numbers: z.array(ownedNumberSchema) })
-const availableNumberListSchema = z.object({ numbers: z.array(availableNumberSchema) })
 
 const providerSetup = new Hono<AppEnv>()
 
@@ -871,19 +871,6 @@ providerSetup.post('/create-sip-trunk',
 
 // ── Signal Registration ────────────────────────────────────────────────────
 
-const SignalRegisterRequestSchema = z.object({
-  bridgeUrl: z.string(),
-  phoneNumber: z.string(),
-  method: z.enum(['sms', 'voice']).optional().default('sms'),
-  hubId: z.string().optional(),
-})
-
-const SignalVerifyRequestSchema = z.object({
-  registrationId: z.string(),
-  code: z.string().regex(/^\d{3,8}$/),
-  hubId: z.string().optional(),
-})
-
 function handleSignalError(err: unknown, c: Context<AppEnv>): Response {
   if (err instanceof SignalRegistrationError) {
     return c.json({ error: err.message }, err.statusCode as 400 | 404 | 409 | 410 | 502)
@@ -905,7 +892,7 @@ providerSetup.post('/signal/register',
       ...authErrors,
     },
   }),
-  validator('json', SignalRegisterRequestSchema),
+  validator('json', signalRegisterRequestSchema),
   async (c) => {
     const body = c.req.valid('json')
     const services = c.get('services')
@@ -997,7 +984,7 @@ providerSetup.post('/signal/verify',
       ...authErrors,
     },
   }),
-  validator('json', SignalVerifyRequestSchema),
+  validator('json', signalVerifyRequestSchema),
   async (c) => {
     const body = c.req.valid('json')
     const services = c.get('services')

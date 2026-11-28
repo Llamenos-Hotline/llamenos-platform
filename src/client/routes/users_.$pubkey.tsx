@@ -2,6 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useMemo, useCallback } from 'react'
+import { messagingChannelTypeSchema } from '@protocol/schemas'
 import {
   listUsers,
   listAuditLog,
@@ -38,7 +39,9 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 
-const MESSAGING_CHANNELS = ['sms', 'whatsapp', 'signal', 'rcs', 'web'] as const
+/** The channels `adminUpdateUserBodySchema` accepts — the server refuses any other (a 'web' option could never be saved). */
+const MESSAGING_CHANNELS = messagingChannelTypeSchema.options
+type MessagingChannel = (typeof MESSAGING_CHANNELS)[number]
 
 export const Route = createFileRoute('/users_/$pubkey')({
   component: UserProfilePage,
@@ -335,24 +338,24 @@ function MessagingChannelsCard({
 }: {
   user: User
   saving: boolean
-  onSave: (channels: string[], enabled: boolean) => Promise<void>
+  onSave: (channels: MessagingChannel[], enabled: boolean) => Promise<void>
 }) {
   const { t } = useTranslation()
   const [enabled, setEnabled] = useState(user.messagingEnabled !== false)
-  const [channels, setChannels] = useState<string[]>(
+  const [channels, setChannels] = useState<MessagingChannel[]>(
     user.supportedMessagingChannels || []
   )
   const [dirty, setDirty] = useState(false)
 
-  const channelLabels: Record<string, string> = {
+  const channelLabels: Record<MessagingChannel, string> = {
     sms: t('userProfile.channelSms'),
     whatsapp: t('userProfile.channelWhatsapp'),
     signal: t('userProfile.channelSignal'),
     rcs: t('userProfile.channelRcs'),
-    web: t('userProfile.channelWeb'),
+    telegram: t('userProfile.channelTelegram'),
   }
 
-  function toggleChannel(ch: string) {
+  function toggleChannel(ch: MessagingChannel) {
     setChannels(prev => {
       const next = prev.includes(ch)
         ? prev.filter(c => c !== ch)

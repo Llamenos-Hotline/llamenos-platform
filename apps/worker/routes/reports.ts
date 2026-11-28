@@ -3,9 +3,9 @@ import { describeRoute, resolver } from 'hono-openapi'
 import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
-import { listReportsQuerySchema, createReportBodySchema, reportMessageBodySchema, assignReportBodySchema, updateReportBodySchema, reportListResponseSchema, reportCategoriesResponseSchema, reportFilesResponseSchema, reportLinkedCasesResponseSchema } from '@protocol/schemas/reports'
+import { listReportsQuerySchema, createReportBodySchema, reportMessageBodySchema, assignReportBodySchema, updateReportBodySchema, reportListResponseSchema, reportConversationSchema, reportCategoriesResponseSchema, reportFilesResponseSchema, reportLinkedCasesResponseSchema } from '@protocol/schemas/reports'
 import { paginationSchema } from '@protocol/schemas/common'
-import { conversationResponseSchema, messageResponseSchema } from '@protocol/schemas/conversations'
+import { messageListResponseSchema, messageResponseSchema } from '@protocol/schemas/conversations'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { reportTypeListResponseSchema } from '@protocol/schemas/settings'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -135,7 +135,7 @@ reports.post('/',
         description: 'Report created',
         content: {
           'application/json': {
-            schema: resolver(conversationResponseSchema),
+            schema: resolver(reportConversationSchema),
           },
         },
       },
@@ -271,7 +271,7 @@ reports.get('/:id',
         description: 'Report details',
         content: {
           'application/json': {
-            schema: resolver(conversationResponseSchema),
+            schema: resolver(reportConversationSchema),
           },
         },
       },
@@ -309,7 +309,7 @@ reports.get('/:id/messages',
         description: 'Paginated report messages',
         content: {
           'application/json': {
-            schema: resolver(messageResponseSchema),
+            schema: resolver(messageListResponseSchema),
           },
         },
       },
@@ -429,7 +429,7 @@ reports.post('/:id/assign',
         description: 'Report assigned',
         content: {
           'application/json': {
-            schema: resolver(conversationResponseSchema),
+            schema: resolver(reportConversationSchema),
           },
         },
       },
@@ -473,7 +473,7 @@ reports.patch('/:id',
         description: 'Report updated',
         content: {
           'application/json': {
-            schema: resolver(conversationResponseSchema),
+            schema: resolver(reportConversationSchema),
           },
         },
       },

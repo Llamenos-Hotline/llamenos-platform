@@ -1274,7 +1274,9 @@
         "failed": "Failed",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Rejte",
+        "suspended": "Sispann"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4624,7 +4626,8 @@
     "noActivity": "Pa gen aktivite anrejistre",
     "noChannels": "No messaging",
     "noShifts": "Pa gen shift ki asiyen",
-    "selectChannels": "Select channels"
+    "selectChannels": "Select channels",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Aktif",
@@ -4802,5 +4805,8 @@
     "push": "Gen aktivite sou liy dirèk ou a ki bezwen yon koutje.",
     "signalAlert": "Alèt liy dirèk — {{category}}: {{state}}. Louvri aplikasyon an pou detay yo.",
     "title": "Ensidan ki aktif"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

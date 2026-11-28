@@ -1274,7 +1274,9 @@
         "failed": "Failed",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "Tinanggihan",
+        "suspended": "Sinuspinde"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4624,7 +4626,8 @@
     "noActivity": "Walang naitatalang aktibidad",
     "noChannels": "No messaging",
     "noShifts": "Walang nakatalagang shift",
-    "selectChannels": "Select channels"
+    "selectChannels": "Select channels",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Aktibo",
@@ -4802,5 +4805,8 @@
     "push": "May aktibidad sa iyong hotline na kailangang tingnan.",
     "signalAlert": "Alerto sa hotline — {{category}}: {{state}}. Buksan ang app para sa mga detalye.",
     "title": "Mga aktibong insidente"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

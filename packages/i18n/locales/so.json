@@ -1879,7 +1879,8 @@
     "noActivity": "Dhaqdhaqaaq lama diiwaangelin",
     "noChannels": "Fariimo la'aan",
     "noShifts": "Wareeg lama qoondeyn",
-    "selectChannels": "Dooro kanaalada"
+    "selectChannels": "Dooro kanaalada",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "Firfircoon",
@@ -2358,7 +2359,9 @@
         "approved": "Approved",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "La diiday",
+        "suspended": "La hakiyay"
       },
       "brandFormTitle": "Brand Registration",
       "address": "Cinwaan",
@@ -4800,5 +4803,8 @@
     "push": "Khadkaaga waxaa ka jira dhaqdhaqaaq u baahan in la eego.",
     "signalAlert": "Digniinta khadka — {{category}}: {{state}}. Fur app-ka si aad u aragto faahfaahinta.",
     "title": "Dhacdooyinka socda"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

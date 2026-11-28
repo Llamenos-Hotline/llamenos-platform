@@ -68,6 +68,7 @@ export const blastStatsSchema = z.object({
   failed: z.number(),
   optedOut: z.number(),
 })
+export type BlastStats = z.infer<typeof blastStatsSchema>
 
 export const blastResponseSchema = z.object({
   id: z.string(),
@@ -120,14 +121,25 @@ export const subscriberStatsResponseSchema = z.object({
   byChannel: z.record(z.string(), z.number()),
   byStatus: z.record(z.string(), z.number()),
 })
+export type SubscriberStatsResponse = z.infer<typeof subscriberStatsResponseSchema>
 
+/**
+ * What GET/PATCH /blasts/settings answer. BlastsService layers the stored row over
+ * DEFAULT_BLAST_SETTINGS, so every field is always present; only the PATCH body
+ * (`updateBlastSettingsBodySchema`) may omit them.
+ */
 export const blastSettingsResponseSchema = z.object({
-  subscribeKeyword: z.string().optional(),
-  unsubscribeKeyword: z.string().optional(),
-  confirmationMessage: z.string().optional(),
-  unsubscribeMessage: z.string().optional(),
-  doubleOptIn: z.boolean().optional(),
-  maxBlastsPerDay: z.number().optional(),
+  subscribeKeyword: z.string(),
+  unsubscribeKeyword: z.string(),
+  confirmationMessage: z.string(),
+  unsubscribeMessage: z.string(),
+  doubleOptIn: z.boolean(),
+  /** Appended to every blast message. */
+  optOutFooter: z.string(),
+  maxBlastsPerDay: z.number(),
+  /** Global fallback sending rate; `rateLimits` overrides it per channel. */
+  rateLimitPerSecond: z.number(),
+  rateLimits: z.record(z.string(), z.number()),
 })
 
 export type BlastSettings = z.infer<typeof blastSettingsResponseSchema>
@@ -138,11 +150,13 @@ export const subscriberListResponseSchema = z.object({
   subscribers: z.array(subscriberResponseSchema),
   ...paginatedMeta,
 })
+export type SubscriberListResponse = z.infer<typeof subscriberListResponseSchema>
 
 export const blastListResponseSchema = z.object({
   blasts: z.array(blastResponseSchema),
   ...paginatedMeta,
 })
+export type BlastListResponse = z.infer<typeof blastListResponseSchema>
 
 export const blastDeliveryResponseSchema = z.object({
   id: z.string(),
@@ -166,12 +180,14 @@ export const blastDeliveryListResponseSchema = z.object({
   deliveries: z.array(blastDeliveryResponseSchema),
   ...paginatedMeta,
 })
+export type BlastDeliveryListResponse = z.infer<typeof blastDeliveryListResponseSchema>
 
 export const importSubscribersResponseSchema = z.object({
   imported: z.number(),
   skipped: z.number(),
   errors: z.array(z.object({ identifier: z.string(), error: z.string() })).optional(),
 })
+export type ImportSubscribersResponse = z.infer<typeof importSubscribersResponseSchema>
 
 // --- Input schemas ---
 
@@ -196,6 +212,7 @@ export const createBlastBodySchema = z.object({
   channels: z.array(z.enum(['sms', 'whatsapp', 'signal'])).min(1),
   scheduledAt: z.iso.datetime().optional(),
 })
+export type CreateBlastBody = z.input<typeof createBlastBodySchema>
 
 export const updateBlastBodySchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -204,6 +221,7 @@ export const updateBlastBodySchema = z.object({
   channels: z.array(z.enum(['sms', 'whatsapp', 'signal'])).min(1).optional(),
   scheduledAt: z.iso.datetime().optional().nullable(),
 })
+export type UpdateBlastBody = z.input<typeof updateBlastBodySchema>
 
 export const scheduleBlastBodySchema = z.object({
   scheduledAt: z.iso.datetime(),
@@ -217,6 +235,7 @@ export const importSubscribersBodySchema = z.object({
     language: z.string().max(10).optional(),
   })).min(1).max(10000),
 })
+export type ImportSubscribersBody = z.input<typeof importSubscribersBodySchema>
 
 export const updateBlastSettingsBodySchema = z.object({
   subscribeKeyword: z.string().max(50).optional(),
@@ -224,8 +243,12 @@ export const updateBlastSettingsBodySchema = z.object({
   confirmationMessage: z.string().max(500).optional(),
   unsubscribeMessage: z.string().max(500).optional(),
   doubleOptIn: z.boolean().optional(),
+  optOutFooter: z.string().max(500).optional(),
   maxBlastsPerDay: z.number().int().min(1).max(100).optional(),
+  rateLimitPerSecond: z.number().int().min(1).max(100).optional(),
+  rateLimits: z.record(z.string(), z.number().int().min(1).max(100)).optional(),
 })
+export type UpdateBlastSettingsBody = z.input<typeof updateBlastSettingsBodySchema>
 
 export const messagingPreferencesBodySchema = z.object({
   optedOut: z.boolean().optional(),
@@ -266,8 +289,10 @@ export const retryDeliveryResponseSchema = z.object({
   ok: z.boolean(),
   delivery: blastDeliveryResponseSchema,
 })
+export type RetryDeliveryResponse = z.infer<typeof retryDeliveryResponseSchema>
 
 export const retryFailedResponseSchema = z.object({
   ok: z.boolean(),
   retriedCount: z.number(),
 })
+export type RetryFailedResponse = z.infer<typeof retryFailedResponseSchema>

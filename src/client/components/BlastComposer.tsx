@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createBlast } from '@/lib/api'
 import type { Blast } from '@/lib/api'
+import type { CreateBlastBody } from '@protocol/schemas'
 import { useToast } from '@/lib/toast'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -36,7 +37,7 @@ export function BlastComposer({ onCreated, onCancel }: BlastComposerProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
   const [name, setName] = useState('')
-  const [channels, setChannels] = useState<string[]>(['sms'])
+  const [channels, setChannels] = useState<CreateBlastBody['channels']>(['sms'])
   const [scheduledAt, setScheduledAt] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -49,11 +50,11 @@ export function BlastComposer({ onCreated, onCancel }: BlastComposerProps) {
   })
   const [showLangPicker, setShowLangPicker] = useState(false)
 
-  const channelOptions = [
+  // Only the channels `createBlastBodySchema` accepts: the server refuses a blast that names any other.
+  const channelOptions: { value: CreateBlastBody['channels'][number]; label: string }[] = [
     { value: 'sms', label: 'SMS' },
     { value: 'whatsapp', label: 'WhatsApp' },
     { value: 'signal', label: 'Signal' },
-    { value: 'rcs', label: 'RCS' },
   ]
 
   const currentContent = langContent[activeLang] ?? { body: '', mediaUrl: '' }

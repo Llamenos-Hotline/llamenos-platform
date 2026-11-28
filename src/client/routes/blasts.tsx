@@ -19,21 +19,29 @@ import { useRelayState } from '@/lib/relay/context'
 import { useConfig } from '@/lib/config'
 import { KIND_BLAST_PROGRESS, KIND_BLAST_STATUS } from '@shared/event-kinds'
 import type { LlamenosEvent } from '@/lib/relay/types'
-import { isSingleBlastContent } from '@shared/types'
-import type { BlastContent, MultiBlastContent } from '@shared/types'
 import { LANGUAGES } from '@llamenos/i18n'
 
+const EMPTY_BLAST_STATS: BlastStats = { totalRecipients: 0, sent: 0, delivered: 0, failed: 0, optedOut: 0 }
+
+type BlastContentValue = Blast['content']
+type SingleContent = Extract<BlastContentValue, { body: string }>
+type MultiContent = Exclude<BlastContentValue, SingleContent>
+
+/** A single-language blast carries `body` directly; a multi-language one is keyed by language code. */
+function isSingleContent(content: BlastContentValue): content is SingleContent {
+  return typeof content.body === 'string'
+}
+
 /** Extract display text from blast content (single or multi-language) */
-function getBlastDisplayText(content: BlastContent | MultiBlastContent): string {
-  if (isSingleBlastContent(content)) return content.text
-  const entries = Object.entries(content)
-  if (entries.length === 0) return ''
-  return (entries[0][1] as BlastContent).text
+function getBlastDisplayText(content: BlastContentValue): string {
+  if (isSingleContent(content)) return content.body
+  const entries = Object.values(content)
+  return entries[0]?.body ?? ''
 }
 
 /** Get language entries from multi-language content */
-function getContentLanguages(content: BlastContent | MultiBlastContent): string[] {
-  if (isSingleBlastContent(content)) return []
+function getContentLanguages(content: BlastContentValue): string[] {
+  if (isSingleContent(content)) return []
   return Object.keys(content)
 }
 
@@ -194,8 +202,8 @@ function BlastsPage() {
                         {getBlastDisplayText(blast.content).slice(0, 60)}{getBlastDisplayText(blast.content).length > 60 ? '...' : ''}
                       </p>
                       <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>{blast.stats.totalRecipients} {t('blasts.recipients')}</span>
-                        {blast.stats.sent > 0 && <span>{blast.stats.sent} {t('blasts.sentCount')}</span>}
+                        <span>{blast.stats?.totalRecipients ?? 0} {t('blasts.recipients')}</span>
+                        {(blast.stats?.sent ?? 0) > 0 && <span>{blast.stats?.sent} {t('blasts.sentCount')}</span>}
                       </div>
                     </button>
                   ))}
@@ -243,21 +251,21 @@ function BlastsPage() {
 
 // --- Blast Content Display (single or multi-language) ---
 
-function BlastContentDisplay({ content, defaultLanguage }: { content: BlastContent | MultiBlastContent; defaultLanguage?: string }) {
+function BlastContentDisplay({ content, defaultLanguage }: { content: BlastContentValue; defaultLanguage?: string }) {
   const { t } = useTranslation()
   const [viewLang, setViewLang] = useState<string | null>(null)
 
-  if (isSingleBlastContent(content)) {
+  if (isSingleContent(content)) {
     return (
       <div className="rounded-lg border border-border p-4">
-        <p className="text-sm whitespace-pre-wrap">{content.text}</p>
+        <p className="text-sm whitespace-pre-wrap">{content.body}</p>
       </div>
     )
   }
 
   const langs = getContentLanguages(content)
   const activeLang = viewLang ?? defaultLanguage ?? langs[0] ?? 'en'
-  const activeContent = (content as MultiBlastContent)[activeLang]
+  const activeContent = (content as MultiContent)[activeLang]
 
   return (
     <div className="space-y-2">
@@ -285,7 +293,7 @@ function BlastContentDisplay({ content, defaultLanguage }: { content: BlastConte
       </div>
       <div className="rounded-lg border border-border p-4">
         {activeContent ? (
-          <p className="text-sm whitespace-pre-wrap">{activeContent.text}</p>
+          <p className="text-sm whitespace-pre-wrap">{activeContent.body}</p>
         ) : (
           <p className="text-sm text-muted-foreground">{t('blast.noContent')}</p>
         )}
@@ -393,7 +401,7 @@ function BlastDetailPanel({ blast, statusColors, onSend, onCancel, onDelete }: B
     loadDeliveries()
   }, [blast.id, showDeliveries, deliveryFilter, deliveryPage])
 
-  const stats = liveStats ?? blast.stats
+  const stats = liveStats ?? blast.stats ?? EMPTY_BLAST_STATS
 
   const deliveryStatusColors: Record<string, string> = {
     pending: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',

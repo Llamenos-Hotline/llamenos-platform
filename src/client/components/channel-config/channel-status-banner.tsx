@@ -4,8 +4,23 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Shield, ShieldAlert, ShieldOff, ShieldCheck } from 'lucide-react'
 import type { TransportSecurity } from '@shared/types'
+import type { A2pRegistrationState } from '@protocol/schemas'
 
-type A2pStatus = 'not_submitted' | 'pending' | 'approved' | 'failed' | 'skipped'
+type A2pStatus = A2pRegistrationState['brandStatus'] | A2pRegistrationState['campaignStatus']
+
+/** i18n key (under `channels.a2p.status`) for every registration status the server can report. */
+const A2P_STATUS_KEY: Record<A2pStatus, string> = {
+  not_submitted: 'notSubmitted',
+  pending: 'pending',
+  approved: 'approved',
+  failed: 'failed',
+  rejected: 'rejected',
+  suspended: 'suspended',
+  skipped: 'skipped',
+}
+
+/** Statuses the carrier or our submission turned down — shown in the failure colour. */
+const A2P_FAILED: ReadonlySet<A2pStatus> = new Set(['failed', 'rejected', 'suspended'])
 
 interface ChannelStatusBannerProps {
   channelName: string
@@ -69,11 +84,11 @@ export function ChannelStatusBanner({
             className={
               a2pBrandStatus === 'approved' ? 'text-green-600' :
               a2pBrandStatus === 'pending' ? 'text-yellow-600' :
-              a2pBrandStatus === 'failed' ? 'text-red-600' :
+              A2P_FAILED.has(a2pBrandStatus) ? 'text-red-600' :
               'text-muted-foreground'
             }
           >
-            {t('channels.a2p.brandStatus', { status: t(`channels.a2p.status.${a2pBrandStatus}`) })}
+            {t('channels.a2p.brandStatus', { status: t(`channels.a2p.status.${A2P_STATUS_KEY[a2pBrandStatus]}`) })}
           </Badge>
         )}
 
@@ -83,11 +98,11 @@ export function ChannelStatusBanner({
             className={
               a2pCampaignStatus === 'approved' ? 'text-green-600' :
               a2pCampaignStatus === 'pending' ? 'text-yellow-600' :
-              a2pCampaignStatus === 'failed' ? 'text-red-600' :
+              A2P_FAILED.has(a2pCampaignStatus) ? 'text-red-600' :
               'text-muted-foreground'
             }
           >
-            {t('channels.a2p.campaignStatus', { status: t(`channels.a2p.status.${a2pCampaignStatus}`) })}
+            {t('channels.a2p.campaignStatus', { status: t(`channels.a2p.status.${A2P_STATUS_KEY[a2pCampaignStatus]}`) })}
           </Badge>
         )}
       </div>

@@ -9,7 +9,7 @@
 import { createElement } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
-import type { CreateRawContactBody, DirectoryContact, RawContact } from '@/lib/api'
+import type { CreateContactBody, DirectoryContact, RawContact } from '@/lib/api'
 
 const PHONE = '+15551234567'
 const NAME = 'Maria Gonzalez Ruiz'
@@ -78,7 +78,7 @@ describe('contact dialogs send no reversible search index', () => {
     fireEvent.click(screen.getByTestId('create-contact-submit'))
 
     await waitFor(() => expect(sent.created).toHaveLength(1))
-    const body = sent.created[0] as CreateRawContactBody
+    const body = sent.created[0] as CreateContactBody
     expect(body.encryptedSummary).toMatch(/^ct:/)
     expect(body.summaryEnvelopes).toHaveLength(1)
     expectNoPiiDerivedIndex(body as unknown as Record<string, unknown>)

@@ -1,6 +1,6 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, activeHubPath, hubPath } from './client'
-import type { BanEntry, BanListResponse } from '@protocol/schemas'
+import type { BanEntry, BanListResponse, BanCallResponse, BulkBanBody, BulkBanResponse, CreateBanBody, CreateBanResponse, OkResponse } from '@protocol/schemas'
 
 export type { BanEntry }
 
@@ -14,15 +14,15 @@ export async function listBans() {
   return request<BanListResponse>(activeHubPath('/bans'))
 }
 
-export async function addBan(data: { phone: string; reason: string }) {
-  return request<{ ban: BanEntry }>(activeHubPath('/bans'), {
+export async function addBan(data: CreateBanBody) {
+  return request<CreateBanResponse>(activeHubPath('/bans'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
 export async function banAndHangup(callId: string, hubId: string, reason?: string) {
-  return request<{ banned: boolean; hungUp: boolean }>(
+  return request<BanCallResponse>(
     hubPath(hubId, `/calls/${callId}/ban`),
     { method: 'POST', body: JSON.stringify({ reason }) },
   )
@@ -31,11 +31,11 @@ export async function banAndHangup(callId: string, hubId: string, reason?: strin
 /** Lift a hub ban. Requires the admin's confirmation of exactly this ban (#2575). */
 export async function removeBan(phoneHash: string, confirmed: DeletionConfirmed) {
   DeletionConfirmed.require(confirmed, 'ban', phoneHash)
-  return request<{ ok: true }>(activeHubPath(`/bans/${encodeURIComponent(phoneHash)}`), { method: 'DELETE' })
+  return request<OkResponse>(activeHubPath(`/bans/${encodeURIComponent(phoneHash)}`), { method: 'DELETE' })
 }
 
-export async function bulkAddBans(data: { phones: string[]; reason: string }) {
-  return request<{ count: number }>(activeHubPath('/bans/bulk'), {
+export async function bulkAddBans(data: BulkBanBody) {
+  return request<BulkBanResponse>(activeHubPath('/bans/bulk'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -43,5 +43,5 @@ export async function bulkAddBans(data: { phones: string[]; reason: string }) {
 
 /** Dismiss a ban that had to be re-entered, once its number is banned again (#2829). */
 export async function dismissBanReentry(id: string) {
-  return request<{ ok: true }>(activeHubPath(`/bans/reentries/${encodeURIComponent(id)}`), { method: 'DELETE' })
+  return request<OkResponse>(activeHubPath(`/bans/reentries/${encodeURIComponent(id)}`), { method: 'DELETE' })
 }

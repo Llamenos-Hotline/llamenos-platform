@@ -179,6 +179,12 @@ export const contactCaseLinkSchema = z.object({
 })
 export type ContactCaseLink = z.infer<typeof contactCaseLinkSchema>
 
+/** Response of GET /contacts/:id/cases. */
+export const contactCaseListResponseSchema = z.object({
+  cases: z.array(contactCaseLinkSchema),
+})
+export type ContactCaseListResponse = z.infer<typeof contactCaseListResponseSchema>
+
 // --- Response schemas for OpenAPI ---
 
 export const contactListResponseSchema = z.object({
@@ -188,6 +194,7 @@ export const contactListResponseSchema = z.object({
   limit: z.number(),
   hasMore: z.boolean(),
 })
+export type ContactListResponse = z.infer<typeof contactListResponseSchema>
 
 export const contactLookupResponseSchema = z.object({
   contact: contactSchema.nullable(),

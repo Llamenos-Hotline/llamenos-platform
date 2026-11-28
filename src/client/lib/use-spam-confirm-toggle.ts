@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { updateSpamSettings, type SpamSettings } from '@/lib/api'
+import { updateSpamSettings } from '@/lib/api'
+import type { SpamSettingsResponse } from '@protocol/schemas'
 
 type SpamToggleKey = 'captcha' | 'rateLimit'
 
@@ -21,7 +22,7 @@ interface PendingSpamToggle {
  * used by both callers, is what stops the two surfaces from silently
  * diverging again (see issue #1130).
  */
-export function useSpamConfirmToggle(hubId: string | null, onUpdated: (settings: SpamSettings) => void) {
+export function useSpamConfirmToggle(hubId: string | null, onUpdated: (settings: SpamSettingsResponse) => void) {
   const { t } = useTranslation()
   const { toast } = useToast()
   const [pending, setPending] = useState<PendingSpamToggle | null>(null)

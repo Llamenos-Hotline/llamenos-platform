@@ -1,6 +1,7 @@
 import { request, activeHubPath, hubPath } from './client'
 import type { CaseInteraction } from '@protocol/schemas/interactions'
-import type { RecipientEnvelope } from '@shared/types'
+import type {  } from '@shared/types'
+import type { CreateInteractionBody } from '@protocol/schemas'
 
 export type InteractionType = CaseInteraction['interactionType']
 
@@ -39,15 +40,7 @@ export async function listInteractions(recordId: string, params?: {
  * `hubId` is the record's own hub (`record.hubId`). Required: a comment is
  * sealed to that hub's admins, so it must also be filed in it.
  */
-export async function createInteraction(recordId: string, hubId: string, body: {
-  interactionType: InteractionType
-  sourceId?: string
-  encryptedContent?: string
-  contentEnvelopes?: RecipientEnvelope[]
-  interactionTypeHash: string
-  previousStatusHash?: string
-  newStatusHash?: string
-}) {
+export async function createInteraction(recordId: string, hubId: string, body: CreateInteractionBody) {
   return request<CaseInteraction>(hubPath(hubId, `/records/${recordId}/interactions`), {
     method: 'POST',
     body: JSON.stringify(body),

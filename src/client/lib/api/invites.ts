@@ -1,14 +1,14 @@
 import { request, getActiveHub, ApiError, NetworkError, REQUEST_TIMEOUT_MS } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
-import type { CreateInviteBody, CreateInviteResponse, InviteCode } from '@protocol/schemas'
+import type { CreateInviteBody, CreateInviteResponse, InviteCode, InviteListResponse, OkResponse } from '@protocol/schemas'
 
 export type { InviteCode }
 
 // --- Invites ---
 
 export async function listInvites() {
-  return request<{ invites: InviteCode[] }>('/invites')
+  return request<InviteListResponse>('/invites')
 }
 
 /**
@@ -26,7 +26,7 @@ export async function createInvite(data: CreateInviteBody) {
 }
 
 export async function revokeInvite(code: string) {
-  return request<{ ok: true }>(`/invites/${code}`, { method: 'DELETE' })
+  return request<OkResponse>(`/invites/${code}`, { method: 'DELETE' })
 }
 
 /**

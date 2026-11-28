@@ -7,9 +7,10 @@ import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
 import {
-  spamSettingsSchema,
+  spamSettingsResponseSchema,
   spamSettingsPatchSchema,
   callSettingsSchema,
+  callSettingsResponseSchema,
   messagingConfigSchema,
   telephonyProviderSchema,
   createRoleSchema,
@@ -18,7 +19,9 @@ import {
   updateHubRoleSchema,
   addRoleEnvelopesSchema,
   webauthnSettingsSchema,
+  webauthnSettingsResponseSchema,
   transcriptionSettingsSchema,
+  transcriptionSettingsResponseSchema,
   ivrLanguagesSchema,
   ivrLanguageSettingsSchema,
   setupStateSchema,
@@ -145,7 +148,7 @@ deployment.get('/transcription',
         description: 'Transcription settings',
         content: {
           'application/json': {
-            schema: resolver(transcriptionSettingsSchema),
+            schema: resolver(transcriptionSettingsResponseSchema),
           },
         },
       },
@@ -169,7 +172,7 @@ deployment.patch('/transcription',
         description: 'Transcription settings updated',
         content: {
           'application/json': {
-            schema: resolver(transcriptionSettingsSchema),
+            schema: resolver(transcriptionSettingsResponseSchema),
           },
         },
       },
@@ -253,7 +256,7 @@ scoped.get('/spam',
         description: 'Spam settings',
         content: {
           'application/json': {
-            schema: resolver(spamSettingsSchema),
+            schema: resolver(spamSettingsResponseSchema),
           },
         },
       },
@@ -277,7 +280,7 @@ scoped.patch('/spam',
         description: 'Spam settings updated',
         content: {
           'application/json': {
-            schema: resolver(spamSettingsSchema),
+            schema: resolver(spamSettingsResponseSchema),
           },
         },
       },
@@ -306,7 +309,7 @@ scoped.get('/call',
         description: 'Call settings',
         content: {
           'application/json': {
-            schema: resolver(callSettingsSchema),
+            schema: resolver(callSettingsResponseSchema),
           },
         },
       },
@@ -330,7 +333,7 @@ scoped.patch('/call',
         description: 'Call settings updated',
         content: {
           'application/json': {
-            schema: resolver(callSettingsSchema),
+            schema: resolver(callSettingsResponseSchema),
           },
         },
       },
@@ -413,7 +416,7 @@ deployment.get('/webauthn',
         description: 'WebAuthn settings',
         content: {
           'application/json': {
-            schema: resolver(webauthnSettingsSchema),
+            schema: resolver(webauthnSettingsResponseSchema),
           },
         },
       },
@@ -437,7 +440,7 @@ deployment.patch('/webauthn',
         description: 'WebAuthn settings updated',
         content: {
           'application/json': {
-            schema: resolver(webauthnSettingsSchema),
+            schema: resolver(webauthnSettingsResponseSchema),
           },
         },
       },
@@ -757,7 +760,11 @@ deployment.patch('/messaging',
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const services = c.get('services')
-    const result = await services.messagingConfig.updateMessagingConfig(body)
+    // A write-only secret the body leaves out is carried over from the stored config by the
+    // service (`carryOverSecrets`), so the service's stored shape is complete even when the body's is not.
+    const result = await services.messagingConfig.updateMessagingConfig(
+      body as Parameters<typeof services.messagingConfig.updateMessagingConfig>[0],
+    )
     // The audit record names what changed, never the credentials it carried.
     await audit(
       services.audit,

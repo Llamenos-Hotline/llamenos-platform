@@ -178,16 +178,19 @@ export const recordListResponseSchema = z.object({
   limit: z.number(),
   hasMore: z.boolean(),
 })
+export type RecordListResponse = z.infer<typeof recordListResponseSchema>
 
 export const recordContactListResponseSchema = z.object({
   contacts: z.array(recordContactSchema),
 })
+export type RecordContactListResponse = z.infer<typeof recordContactListResponseSchema>
 
 export const envelopeRecipientsResponseSchema = z.object({
   summary: z.array(z.string()),
   fields: z.array(z.string()),
   pii: z.array(z.string()),
 })
+export type EnvelopeRecipientsResponse = z.infer<typeof envelopeRecipientsResponseSchema>
 
 export const assignmentSuggestionSchema = z.object({
   pubkey: z.string(),
@@ -207,6 +210,7 @@ export type AssignmentSuggestion = z.infer<typeof assignmentSuggestionSchema>
 export const suggestAssigneesResponseSchema = z.object({
   suggestions: z.array(assignmentSuggestionSchema),
 })
+export type SuggestAssigneesResponse = z.infer<typeof suggestAssigneesResponseSchema>
 
 export const recordsByContactResponseSchema = z.object({
   records: z.array(recordSchema),

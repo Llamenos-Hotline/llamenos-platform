@@ -167,7 +167,7 @@ struct TriageListView: View {
 
 /// A single triage report row showing title, status, report type, and date.
 struct TriageRowView: View {
-    let report: SharedConversation
+    let report: ReportConversation
     var reportTypeLabel: String?
 
     var body: some View {

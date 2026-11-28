@@ -159,7 +159,9 @@ export const eventListResponseSchema = z.object({
 export const caseEventListResponseSchema = z.object({
   links: z.array(caseEventSchema),
 })
+export type CaseEventListResponse = z.infer<typeof caseEventListResponseSchema>
 
 export const reportEventListResponseSchema = z.object({
   links: z.array(reportEventSchema),
 })
+export type ReportEventListResponse = z.infer<typeof reportEventListResponseSchema>

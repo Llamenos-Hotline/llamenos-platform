@@ -1274,7 +1274,9 @@
         "failed": "Failed",
         "notSubmitted": "Not submitted",
         "pending": "Pending review",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "rejected": "已拒绝",
+        "suspended": "已暂停"
       },
       "statusFailed": "Registration Failed",
       "statusNotSubmitted": "Not Registered",
@@ -4624,7 +4626,8 @@
     "noActivity": "无活动记录",
     "noChannels": "No messaging",
     "noShifts": "未分配任何班次",
-    "selectChannels": "Select channels"
+    "selectChannels": "Select channels",
+    "channelTelegram": "Telegram"
   },
   "users": {
     "active": "活跃",
@@ -4802,5 +4805,8 @@
     "push": "您的热线有需要查看的活动。",
     "signalAlert": "热线警报 — {{category}}：{{state}}。请打开应用查看详情。",
     "title": "进行中的事件"
-  }
+  },
+  "_same_as_en": [
+    "userProfile.channelTelegram"
+  ]
 }

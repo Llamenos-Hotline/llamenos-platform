@@ -213,3 +213,19 @@ export const recoveryEmergencyOverrideSchema = z.object({
   signature: z.string(),
 })
 export type RecoveryEmergencyOverride = z.infer<typeof recoveryEmergencyOverrideSchema>
+
+/** Response of GET /recovery-group/sessions. */
+export const recoveryListSessionsResponseSchema = z.array(z.object({
+  sessionId: z.string(),
+  hubId: z.string(),
+  userPubkey: z.string(),
+  newDevicePubkey: z.string(),
+  status: z.string(),
+  signalVerified: z.boolean(),
+  expiresAt: z.string(),
+  createdAt: z.string(),
+  completedAt: z.string().nullable(),
+  cancelledAt: z.string().nullable(),
+  cancelledBy: z.string().nullable(),
+}))
+export type RecoveryListSessionsResponse = z.infer<typeof recoveryListSessionsResponseSchema>
