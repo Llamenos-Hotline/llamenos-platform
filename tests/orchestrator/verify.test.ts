@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import {
   changedFilesFrom, addedLinesFromNumstat, testTargetsFor, isSafeTestPath, resolvesWithinRoot, verifyMechanical,
   judgeTargetRun, parseVitestJson, parseVitestFailures, workspaceAliases,
+  addedDependencies, addedManifestDependencies, missingPackageFrom, packageNameOfSpecifier,
 } from '../../orchestrator/src/verify.js'
 import { classifyImpact } from '../../orchestrator/src/impact.js'
 import { reviewLanesFor } from '../../orchestrator/src/route.js'
@@ -808,7 +809,7 @@ describe('parseVitestFailures', () => {
       message: "Error: Cannot find module '@llamenos/nope'",
     }])
     expect(parseVitestFailures(text, '/root')).toEqual([
-      { file: 'a.test.ts', message: "Error: Cannot find module '@llamenos/nope'" },
+      { file: 'a.test.ts', message: "Error: Cannot find module '@llamenos/nope'", missingPackage: '@llamenos/nope' },
     ])
   })
 
@@ -1508,5 +1509,143 @@ describe('verifyMechanical chooses the Node the runner runs on (#2889)', () => {
     const redReport = await verifyMechanical({ worktree: red, branch: 'main', lane: fleetLane })
     expect(redReport.passed).toBe(false)
     expect(redReport.testsRunnerCrashed).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #3078 — a PR that adds a dependency its own tests import
+//
+// The gate installs from the BASE lockfile by design, so a package the PR's own
+// manifest diff adds cannot resolve, and the suite dies at import. That is the
+// gate's design, not a broken import — and the verdict must say so. The check
+// discriminates on the manifest diff: the same error for an already-declared
+// package is a real defect and must stay an ordinary failure.
+// ---------------------------------------------------------------------------
+
+describe('packageNameOfSpecifier / missingPackageFrom (#3078)', () => {
+  it.each([
+    ['@noble/post-quantum/hybrid.js', '@noble/post-quantum'],
+    ['@noble/post-quantum', '@noble/post-quantum'],
+    ['zod', 'zod'],
+    ['zod/v4/core', 'zod'],
+  ])('reduces %s to its package name', (spec, name) => {
+    expect(packageNameOfSpecifier(spec)).toBe(name)
+  })
+  it.each(['./local', '../up', '/abs/path', 'node:fs', 'bun:ffi', 'https://x/y', '@scope', ''])(
+    'does not treat %j as a package',
+    (spec) => { expect(packageNameOfSpecifier(spec)).toBeUndefined() },
+  )
+  it.each([
+    ["Error: Cannot find package '@noble/post-quantum/hybrid.js' imported from /r/a.test.ts", '@noble/post-quantum'],
+    ['Error: Failed to resolve import "zod/v4" from "apps/x.ts". Does the file exist?', 'zod'],
+    ["Cannot find module 'left-pad'", 'left-pad'],
+  ])('reads the package out of %j', (msg, name) => {
+    expect(missingPackageFrom(msg)).toBe(name)
+  })
+  it('reads nothing from an assertion failure or a missing relative file', () => {
+    expect(missingPackageFrom('AssertionError: expected 1 to be 2')).toBeUndefined()
+    expect(missingPackageFrom("Cannot find module './gone.js'")).toBeUndefined()
+  })
+})
+
+describe('addedDependencies (#3078)', () => {
+  const manifest = (deps: Record<string, string>, dev: Record<string, string> = {}): string =>
+    JSON.stringify({ dependencies: deps, devDependencies: dev })
+  it('names a dependency the head gained, in any dependency field', () => {
+    expect([...addedDependencies(manifest({ a: '1' }), manifest({ a: '1', b: '2' }, { c: '3' }))].sort()).toEqual(['b', 'c'])
+  })
+  it('does not call a version bump an addition (the base lockfile already has the package)', () => {
+    expect(addedDependencies(manifest({ a: '1' }), manifest({ a: '2' })).size).toBe(0)
+  })
+  it('treats a brand-new manifest as adding everything it declares', () => {
+    expect([...addedDependencies(undefined, manifest({ a: '1' }))]).toEqual(['a'])
+  })
+  it('says nothing for an unparseable head manifest', () => {
+    expect(addedDependencies(manifest({ a: '1' }), '{ not json').size).toBe(0)
+  })
+})
+
+describe('addedManifestDependencies against real git objects (#3078)', () => {
+  const dirs: string[] = []
+  afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
+  const git = (cwd: string, ...args: string[]): void => {
+    execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { stdio: 'ignore' })
+  }
+  const repoWith = (baseDeps: Record<string, string>, headDeps: Record<string, string>): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'added-deps-'))
+    dirs.push(dir)
+    git(dir, 'init', '-q', '-b', 'main')
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: baseDeps }))
+    git(dir, 'add', '.')
+    git(dir, 'commit', '-q', '-m', 'base')
+    git(dir, 'checkout', '-q', '-b', 'feature')
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: headDeps }))
+    git(dir, 'commit', '-q', '-am', 'head')
+    return dir
+  }
+  it('finds the dependency the head adds, relative to the merge base', async () => {
+    const dir = repoWith({ a: '1' }, { a: '1', '@noble/post-quantum': '0.7.1' })
+    expect([...await addedManifestDependencies(dir, 'main', 'feature', ['package.json'])]).toEqual(['@noble/post-quantum'])
+  })
+  it('finds nothing when the manifest is not among the changed files', async () => {
+    const dir = repoWith({ a: '1' }, { a: '1', b: '2' })
+    expect((await addedManifestDependencies(dir, 'main', 'feature', ['src/x.ts'])).size).toBe(0)
+  })
+  it('finds nothing when the base cannot be resolved, rather than excusing a failure', async () => {
+    const dir = repoWith({ a: '1' }, { a: '1', b: '2' })
+    expect((await addedManifestDependencies(dir, 'no-such-ref', 'feature', ['package.json'])).size).toBe(0)
+  })
+})
+
+describe('judgeTargetRun names a dependency this PR adds (#3078)', () => {
+  const exited1: TestRunResult = { exitCode: 1, signal: undefined, output: '' }
+  const loadFailure = (message: string): string => JSON.stringify({
+    ...GREEN_COUNTS, success: false, numFailedTestSuites: 1, numPassedTests: 7110, numTotalTests: 7110,
+    testResults: [{ name: '/root/apps/worker/__tests__/unit/sigchain-mock-parity.test.ts', status: 'failed', message, assertionResults: [] }],
+  })
+  const missing = "Cannot find package '@noble/post-quantum/hybrid.js' imported from /root/apps/worker/__tests__/unit/sigchain-mock-parity.test.ts"
+  const reasonOf = (o: TargetOutcome): string => (o.passed ? 'PASSED' : o.reason)
+
+  it('says the package is added by this PR, that the gate installs from the base, and the remedy', () => {
+    const o = judgeTargetRun('worker-unit', exited1, loadFailure(missing), '/root', new Set(['@noble/post-quantum']))
+    expect(o.passed).toBe(false)
+    const r = reasonOf(o)
+    expect(r).toContain('"@noble/post-quantum" is added by THIS PR')
+    expect(r).toContain('BASE lockfile')
+    expect(r).toContain('Land the dependency in its own PR first')
+    expect(r).toContain('sigchain-mock-parity.test.ts (failed before any test ran)')
+  })
+  it('stays a REAL failure (not no-verdict) — the head did fail its tests', () => {
+    const o = judgeTargetRun('worker-unit', exited1, loadFailure(missing), '/root', new Set(['@noble/post-quantum']))
+    expect(o.passed === false && o.noVerdict).toBeFalsy()
+  })
+  // The Dependabot-shaped PR: a dependency is added, no suite fails, nothing to name.
+  it('leaves a green run with an added dependency untouched', () => {
+    expect(judgeTargetRun('t', { exitCode: 0, signal: undefined, output: '' }, vitestJson(), '/root', new Set(['left-pad'])).passed).toBe(true)
+  })
+  // The wrong-subpath PR: the package is already installed; the import is the defect.
+  it('does NOT excuse the same error for a package the PR did not add', () => {
+    const r = reasonOf(judgeTargetRun('worker-unit', exited1, loadFailure(missing), '/root', new Set(['some-other-pkg'])))
+    expect(r).not.toContain('added by THIS PR')
+    expect(r).toContain('Cannot find package')
+  })
+  it('does NOT excuse it when no manifest diff was supplied', () => {
+    expect(reasonOf(judgeTargetRun('worker-unit', exited1, loadFailure(missing), '/root'))).not.toContain('added by THIS PR')
+  })
+  it('does NOT excuse an unrelated failure just because a dependency was added', () => {
+    const text = JSON.stringify({
+      ...GREEN_COUNTS, success: false, numFailedTests: 1,
+      testResults: [{ name: '/root/a.test.ts', status: 'failed', assertionResults: [{ fullName: 'x', status: 'failed', failureMessages: ['AssertionError: boom'] }] }],
+    })
+    expect(reasonOf(judgeTargetRun('t', exited1, text, '/root', new Set(['@noble/post-quantum'])))).not.toContain('added by THIS PR')
+  })
+  it('puts the diagnosis ahead of the failure list so the cap cannot hide it', () => {
+    const files = Array.from({ length: 30 }, (_, i) => ({
+      name: `/root/f${i}.test.ts`, status: 'failed', message: i === 29 ? missing : 'AssertionError: x', assertionResults: [],
+    }))
+    const text = JSON.stringify({ ...GREEN_COUNTS, success: false, numFailedTestSuites: 30, testResults: files })
+    const r = reasonOf(judgeTargetRun('t', exited1, text, '/root', new Set(['@noble/post-quantum'])))
+    expect(r).toContain('added by THIS PR')
+    expect(r.indexOf('added by THIS PR')).toBeLessThan(r.indexOf('failing:'))
   })
 })

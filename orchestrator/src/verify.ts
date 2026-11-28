@@ -726,6 +726,105 @@ export interface VitestFailure {
   test?: string
   /** First line of the failure, scrubbed and truncated. */
   message?: string
+  /** The package a resolver said it could not find (`Cannot find package 'x'`,
+   *  `Failed to resolve import "x"`, `Cannot find module 'x'`), reduced to its
+   *  package name. Present only for that error shape (#3078). */
+  missingPackage?: string
+}
+
+/**
+ * The package NAME a bare import specifier belongs to: `@scope/name/sub.js`
+ * is `@scope/name`, `name/sub` is `name`. `undefined` for a relative or
+ * absolute path, a `node:`/`bun:` builtin, a URL, or anything else that is not
+ * a package import — those can never be "a dependency this PR added".
+ */
+export function packageNameOfSpecifier(spec: string): string | undefined {
+  if (spec.length === 0 || spec.startsWith('.') || spec.startsWith('/') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(spec)) {
+    return undefined
+  }
+  const parts = spec.split('/')
+  if (spec.startsWith('@')) return parts.length >= 2 && parts[0].length > 1 && parts[1].length > 0 ? `${parts[0]}/${parts[1]}` : undefined
+  return parts[0]
+}
+
+/** The three shapes a resolver uses to say "that package is not installed". */
+const MISSING_PACKAGE_PATTERNS: readonly RegExp[] = [
+  /Cannot find (?:package|module) ['"]([^'"\s]+)['"]/,
+  /Failed to resolve import ['"]([^'"\s]+)['"]/,
+  /Could not resolve ['"]([^'"\s]+)['"]/,
+]
+
+/** The package a failure message says is missing, or `undefined` when the
+ *  message is not a resolution failure for a package. */
+export function missingPackageFrom(message: string): string | undefined {
+  for (const pattern of MISSING_PACKAGE_PATTERNS) {
+    const m = pattern.exec(message)
+    if (m?.[1] !== undefined) return packageNameOfSpecifier(m[1])
+  }
+  return undefined
+}
+
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const
+
+/** Every dependency NAME a manifest declares, across all four dependency
+ *  fields. An unparseable or absent manifest declares none. */
+function declaredDependencies(manifestText: string | undefined): Set<string> {
+  const out = new Set<string>()
+  if (manifestText === undefined) return out
+  let doc: unknown
+  try {
+    doc = JSON.parse(manifestText)
+  } catch {
+    return out
+  }
+  if (typeof doc !== 'object' || doc === null) return out
+  for (const field of DEPENDENCY_FIELDS) {
+    const block = (doc as Record<string, unknown>)[field]
+    if (typeof block !== 'object' || block === null || Array.isArray(block)) continue
+    for (const name of Object.keys(block)) out.add(name)
+  }
+  return out
+}
+
+/**
+ * The dependency names a manifest gained: declared by `headText`, not by
+ * `baseText`. A version bump of a package the base already declares is NOT an
+ * addition (the base lockfile has the package, so the import resolves); a
+ * brand-new manifest (`baseText === undefined`) adds everything it declares.
+ */
+export function addedDependencies(baseText: string | undefined, headText: string | undefined): Set<string> {
+  const before = declaredDependencies(baseText)
+  return new Set([...declaredDependencies(headText)].filter((name) => !before.has(name)))
+}
+
+/**
+ * Every dependency this diff ADDS to any `package.json` it touches (#3078).
+ *
+ * The gate installs from the BASE lockfile by design, so such a package is
+ * absent from the install the HEAD's tests run against. Both sides are read
+ * from git objects (the merge base and the head), so no head code runs. A side
+ * that cannot be read yields NO additions — the failure is then reported as an
+ * ordinary test failure, never wrongly excused as this condition.
+ */
+export async function addedManifestDependencies(
+  worktree: string, base: string, head: string, changedFiles: readonly string[],
+): Promise<Set<string>> {
+  const added = new Set<string>()
+  const manifests = changedFiles.filter((f) => basename(f) === 'package.json')
+  if (manifests.length === 0) return added
+  const mergeBase = (await runGit(worktree, ['merge-base', base, head]))?.trim()
+  if (mergeBase === undefined || mergeBase.length === 0) return added
+  for (const file of manifests) {
+    const headText = await runGit(worktree, ['show', `${head}:${file}`])
+    if (headText === undefined) continue // deleted at the head: adds nothing
+    // A manifest absent at the merge base is a new workspace; `git show`
+    // failing is indistinguishable from a read error, so ask `cat-file -e`.
+    const existed = (await runGit(worktree, ['cat-file', '-e', `${mergeBase}:${file}`])) !== undefined
+    const baseText = existed ? await runGit(worktree, ['show', `${mergeBase}:${file}`]) : undefined
+    if (existed && baseText === undefined) continue // could not read the base side: say nothing
+    for (const name of addedDependencies(baseText, headText)) added.add(name)
+  }
+  return added
 }
 
 /**
@@ -816,12 +915,14 @@ export function parseVitestFailures(text: string, testRoot?: string): VitestFail
       named++
       const messages = Array.isArray(r.failureMessages) ? r.failureMessages.filter((m) => typeof m === 'string') : []
       const message = messages.length > 0 ? failureLine(messages[0] as string, testRoot) : undefined
+      const missingPackage = messages.length > 0 ? missingPackageFrom(messages[0] as string) : undefined
       out.push({
         file,
         test: typeof r.fullName === 'string' && r.fullName.length > 0
           ? r.fullName
           : (typeof r.title === 'string' ? r.title : '(unnamed test)'),
         ...(message !== undefined && message.length > 0 ? { message } : {}),
+        ...(missingPackage !== undefined ? { missingPackage } : {}),
       })
     }
 
@@ -831,7 +932,12 @@ export function parseVitestFailures(text: string, testRoot?: string): VitestFail
     // the case the counts render as a bare "N failed suite(s)".
     if (f.status === 'failed' && named === 0) {
       const message = typeof f.message === 'string' && f.message.length > 0 ? failureLine(f.message, testRoot) : undefined
-      out.push({ file, ...(message !== undefined ? { message } : {}) })
+      const missingPackage = typeof f.message === 'string' ? missingPackageFrom(f.message) : undefined
+      out.push({
+        file,
+        ...(message !== undefined ? { message } : {}),
+        ...(missingPackage !== undefined ? { missingPackage } : {}),
+      })
     }
   }
   return out
@@ -847,7 +953,9 @@ export function parseVitestFailures(text: string, testRoot?: string): VitestFail
  * it says SO and falls back to the runner's own output tail. "Could not name
  * them" and "there were none to name" must not look alike (#1495).
  */
-function namedFailures(resultText: string, run: TestRunResult, testRoot: string | undefined): string {
+function namedFailures(
+  resultText: string, run: TestRunResult, testRoot: string | undefined, added: ReadonlySet<string>,
+): string {
   const failures = parseVitestFailures(resultText, testRoot)
   if (failures.length === 0) {
     return `; the result file named no individual failure, so the counts above are all it carried${outputTail(run.output)}`
@@ -862,7 +970,32 @@ function namedFailures(resultText: string, run: TestRunResult, testRoot: string 
   }
   const block = lines.join('\n')
   const bounded = block.length > MAX_FAILURE_BLOCK ? `${block.slice(0, MAX_FAILURE_BLOCK)}\n    (truncated)` : block
-  return `; failing:\n${bounded}`
+  return `${addedDependencyDiagnosis(failures, added)}; failing:\n${bounded}`
+}
+
+/**
+ * Names the one failure shape that is the gate's design, not the PR's defect
+ * (#3078): the head's tests import a package the head's own manifest diff ADDS.
+ * The gate installs from the BASE lockfile and never runs the head's install
+ * (a head lockfile would execute head-chosen code), so that package is absent
+ * from the tree the suite loads against, and the suite dies at import before a
+ * single test runs.
+ *
+ * Discriminates on the manifest diff, never on the error text alone: the same
+ * "Cannot find package" for a package the base already declares is a real wrong
+ * import, and says nothing here. Computed over EVERY failure, not the shown
+ * dozen, so the cap can never hide the diagnosis.
+ */
+function addedDependencyDiagnosis(failures: readonly VitestFailure[], added: ReadonlySet<string>): string {
+  const names = [...new Set(
+    failures.flatMap((f) => (f.missingPackage !== undefined && added.has(f.missingPackage) ? [f.missingPackage] : [])),
+  )]
+  if (names.length === 0) return ''
+  const list = names.map((n) => `"${n}"`).join(', ')
+  return `; ${names.length === 1 ? 'the unresolvable package' : 'the unresolvable packages'} ${list} ` +
+    `${names.length === 1 ? 'is' : 'are'} added by THIS PR's own package.json diff, and the gate installs from the BASE lockfile ` +
+    `by design (it never runs code from the commit it judges), so the suite cannot load them: this is not a broken import. ` +
+    `Land the dependency in its own PR first (package.json + the lockfile, no new imports), then rebase this PR onto it`
 }
 
 function describeExit(run: TestRunResult): string {
@@ -894,6 +1027,7 @@ export type TargetOutcome =
  */
 export function judgeTargetRun(
   target: string, run: TestRunResult, resultText: string | undefined, testRoot?: string,
+  addedDeps: ReadonlySet<string> = new Set(),
 ): TargetOutcome {
   if (resultText === undefined) {
     if (run.exitCode !== 0) {
@@ -922,7 +1056,7 @@ export function judgeTargetRun(
   const summary = `${counts.numFailedTests} failed test(s), ${counts.numFailedTestSuites} failed suite(s), ` +
     `${counts.numPassedTests} passed, ${notRun} skipped/todo, of ${counts.numTotalTests} test(s)`
   if (counts.numFailedTests > 0 || counts.numFailedTestSuites > 0) {
-    return { passed: false, reason: `${target}: tests failed — ${summary}${namedFailures(resultText, run, testRoot)}` }
+    return { passed: false, reason: `${target}: tests failed — ${summary}${namedFailures(resultText, run, testRoot, addedDeps)}` }
   }
   if (executed <= 0) {
     return {
@@ -1179,6 +1313,9 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   const testResults: string[] = []
 
   if (routes.length > 0) {
+    // Read once, only when a suite is routed: what the head's manifests ADD
+    // names a "Cannot find package" failure as the gate's design (#3078).
+    const addedDeps = await addedManifestDependencies(worktree, baseRef, branch, changedFiles)
     const resultDir = await mkdtemp(join(tmpdir(), 'llamenos-fleet-verify-'))
     try {
       let allPassed = true
@@ -1205,7 +1342,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
         const outputFile = join(resultDir, `${route.suite.replaceAll('/', '_')}.json`)
         const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile, runEnv)
         const resultText = await readFile(outputFile, 'utf8').catch(() => undefined)
-        const outcome = judgeTargetRun(route.suite, run, resultText, testRoot)
+        const outcome = judgeTargetRun(route.suite, run, resultText, testRoot, addedDeps)
         if (outcome.passed) {
           testResults.push(outcome.evidence)
         } else {
