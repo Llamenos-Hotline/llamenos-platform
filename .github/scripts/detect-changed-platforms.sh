@@ -103,6 +103,11 @@ IOS_RE='^apps/ios/'
 # (crypto -> UniFFI XCFramework, protocol -> Swift types, i18n -> .strings),
 # and the CI wiring that decides any of this. Everything else runs the smoke
 # tier: still a real iOS gate, 2 runners instead of 4.
+#
+# `ci.yml` is named here (and in SHARED_DEPS_RE / IOS_COMPILE_RE) as the
+# fail-closed default only: a diff to it is narrowed by its parsed CONTENT
+# (`ci_yml_class` below, #3131) when the caller supplies both sides, and earns
+# exactly what this regex says when it does not.
 IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 # `ios_compile` is the NARROW iOS question: "can this diff change what
 # `ios-compile-check` compiles?" It exists because `ios` is a blast-radius flag
