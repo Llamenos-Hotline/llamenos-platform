@@ -42,6 +42,9 @@ enum KeychainKey {
     /// `user:seq:hash` of the last user-sigchain head this device verified (#2496).
     /// A served chain that does not extend it is refused, never re-initialised.
     static let sigchainHead = "sigchain-head"
+    /// `{hubId: {seq, hash}}`: the hub-chain head this device last verified per hub
+    /// (#2963). A served chain that does not contain it is a fork; sealing stops.
+    static let hubChainAnchors = "hub-chain-anchors"
 }
 
 // MARK: - KeychainService

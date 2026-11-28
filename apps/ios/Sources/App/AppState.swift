@@ -37,6 +37,8 @@ final class AppState {
     let wakeKeyService: WakeKeyService
     /// This device's sigchain identity: genesis/PUK if missing, then verification that the chain names its X-Wing key (#2496).
     let deviceIdentityService: DeviceIdentityService
+    /// Hub authority chain: verify on load, anchors, alerts, the sealing gate (#2963).
+    let hubChainService: HubChainService
     let transcriptionService: TranscriptionService
     let crashReportingService: CrashReportingService
     let offlineQueue: OfflineQueue
@@ -126,6 +128,8 @@ final class AppState {
         self.webSocketService = ws
         self.wakeKeyService = wake
         self.deviceIdentityService = DeviceIdentityService(apiService: api, cryptoService: crypto, keychainService: keychain)
+        self.hubChainService = HubChainService(apiService: api, cryptoService: crypto, keychainService: keychain)
+        api.hubChain = self.hubChainService
         self.transcriptionService = transcription
         self.crashReportingService = crashReporting
         self.offlineQueue = offline

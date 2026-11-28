@@ -38,6 +38,10 @@ const EXCLUDED_SCHEMAS = new Set([
   'unsignedHubLinkSchema',
   'hubChainResponseSchema',
   'appendHubChainLinkBodySchema',
+  // ...and the two bodies that carry the founder's genesis link (#2963):
+  // mobile sends them as JSON built around the crate's raw link text.
+  'createHubBodySchema',
+  'setupCompleteBodySchema',
   // Query schemas — URL parameter validation, not wire types
   'listRecordsQuerySchema',
   'listAuditQuerySchema',

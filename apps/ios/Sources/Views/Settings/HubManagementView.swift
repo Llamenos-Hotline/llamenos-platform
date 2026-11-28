@@ -14,7 +14,8 @@ struct HubManagementView: View {
         let vm = HubManagementViewModel(
             apiService: appState.apiService,
             cryptoService: appState.cryptoService,
-            hubContext: appState.hubContext
+            hubContext: appState.hubContext,
+            hubChain: appState.hubChainService
         )
         viewModelBox.value = vm
         return vm

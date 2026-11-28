@@ -210,8 +210,14 @@ final class DeviceIdentityService {
 
     /// The server's links in the crate's `SigchainLink` JSON shape.
     private func cryptoLinksJson(_ links: [SigchainResponseLink]) throws -> String {
+        String(decoding: try JSONSerialization.data(withJSONObject: try Self.cryptoLinkObjects(links)), as: UTF8.self)
+    }
+
+    /// The server's links as the crate's `SigchainLink` objects, for embedding in a
+    /// larger crate request (the hub chain's `userChains`, #2963).
+    static func cryptoLinkObjects(_ links: [SigchainResponseLink]) throws -> [[String: Any]] {
         let encoder = JSONEncoder()
-        let array: [[String: Any]] = try links.map { l in
+        return try links.map { l in
             let payload = String(decoding: try encoder.encode(l.payload), as: UTF8.self)
             return [
                 "id": l.id,
@@ -225,7 +231,6 @@ final class DeviceIdentityService {
                 "payloadJson": payload,
             ]
         }
-        return String(decoding: try JSONSerialization.data(withJSONObject: array), as: UTF8.self)
     }
 
     private func json(_ object: [String: Any]) throws -> String {

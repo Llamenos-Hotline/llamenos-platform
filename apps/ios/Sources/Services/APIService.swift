@@ -230,6 +230,8 @@ final class APIService: @unchecked Sendable {
     private(set) var baseURL: URL?
     private let cryptoService: CryptoService
     private let hubContext: HubContext
+    /// The hub-chain gate every hub-content seal passes (#2963), set by AppState.
+    weak var hubChain: HubChainService?
     /// Every request a screen awaits goes through this session. It fails fast (#1915).
     private let session: URLSession
     /// Background bootstrap only — `fetchAppConfig`, whose callers retry or degrade
@@ -495,6 +497,14 @@ final class APIService: @unchecked Sendable {
     /// list; but when the session could not fetch its hub list, nil does not mean the
     /// user belongs to no hub — it means the hub could not be asked, and that failure is
     /// what the screen must report, not an empty schedule (#2478).
+    /// The hub being browsed, or the error that says why there is none.
+    func activeHubIdOrThrow() throws -> String {
+        guard let hubId = hubContext.activeHubId else {
+            throw hubContext.membershipFailure ?? APIError.noActiveHub
+        }
+        return hubId
+    }
+
     func activeHubPath(_ path: String) throws -> String {
         guard let hubId = hubContext.activeHubId else {
             throw hubContext.membershipFailure ?? APIError.noActiveHub

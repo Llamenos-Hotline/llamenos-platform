@@ -16,6 +16,8 @@ final class HubManagementViewModel {
     private let apiService: any HubAPIServiceProtocol
     private let cryptoService: any HubCryptoServiceProtocol
     private let hubContext: HubContext
+    /// Hub authority chain (#2963): founding a hub, and verifying the chain on switch.
+    private let hubChain: HubChainService?
     private let feedbackGenerator = UINotificationFeedbackGenerator()
 
     // MARK: - State
@@ -38,11 +40,13 @@ final class HubManagementViewModel {
     init(
         apiService: any HubAPIServiceProtocol,
         cryptoService: any HubCryptoServiceProtocol,
-        hubContext: HubContext
+        hubContext: HubContext,
+        hubChain: HubChainService? = nil
     ) {
         self.apiService = apiService
         self.cryptoService = cryptoService
         self.hubContext = hubContext
+        self.hubChain = hubChain
         feedbackGenerator.prepare()
     }
 
@@ -145,6 +149,9 @@ final class HubManagementViewModel {
         feedbackGenerator.notificationOccurred(.success)
 
         await eagerLoadHubKeys(for: [hub])
+        // Verify the hub's authority chain in Rust on every switch (#2963). The
+        // verdict gates sealing in that hub; a fetch failure keeps the last one.
+        if let hubChain { _ = try? await hubChain.load(hubId: hub.id) }
     }
 
     /// Whether this hub's encrypted content can be decrypted on this device.
@@ -174,19 +181,27 @@ final class HubManagementViewModel {
         defer { isSaving = false }
         error = nil
 
-        let body = CreateHubBody(
-            description: description?.trimmingCharacters(in: .whitespacesAndNewlines),
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            phoneNumber: phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
-            phoneNumbers: nil,
-            slug: slug?.trimmingCharacters(in: .whitespacesAndNewlines),
-            timezone: Self.deviceTimezone()
-        )
+        var fields: [String: Any] = [
+            "name": name.trimmingCharacters(in: .whitespacesAndNewlines),
+            "timezone": Self.deviceTimezone(),
+        ]
+        if let description = description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
+            fields["description"] = description
+        }
+        if let phoneNumber = phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !phoneNumber.isEmpty {
+            fields["phoneNumber"] = phoneNumber
+        }
+        if let slug = slug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+            fields["slug"] = slug
+        }
 
         do {
-            let response: AppHubResponse = try await apiService.request(
-                method: "POST", path: "/api/hubs", body: body as (any Encodable)?
-            )
+            // This device signs the hub's genesis — its founding link (#2963) —
+            // and then commits the founder bundles' permissions.
+            // No chain service, no hub: a hub is never created without its genesis.
+            guard let hubChain else { throw HubChainService.ChainError.sealingStopped(hubId: "new") }
+            let created = try await hubChain.foundHub(fields: fields)
+            let response = try JSONDecoder().decode(AppHubResponse.self, from: Data(created.utf8))
             hubs.append(response.hub)
             successMessage = NSLocalizedString("hubs_created_success", comment: "Hub created successfully")
             feedbackGenerator.notificationOccurred(.success)

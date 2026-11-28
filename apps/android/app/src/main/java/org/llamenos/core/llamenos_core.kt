@@ -737,6 +737,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_has_wake_key(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_hub_chain(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign_link(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_is_unlocked(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_is_valid_pin(
@@ -764,6 +768,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_puk_unwrap_seed(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_recovery_approval_sign(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof(
     ): Short
@@ -918,6 +924,10 @@ external fun uniffi_llamenos_core_fn_func_mobile_has_hub_key(`hubId`: RustBuffer
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_has_wake_key(uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
+external fun uniffi_llamenos_core_fn_func_mobile_hub_chain(`requestJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_hub_chain_sign_link(`unsignedJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_is_unlocked(uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_is_valid_pin(`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -945,6 +955,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_puk_rotate(`oldSeedHex`: RustBu
 external fun uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(`envelope`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_recovery_approval_sign(`approvalJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(`shareEnvelope`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,`challengeHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1256,6 +1268,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_has_wake_key() != 11945.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_hub_chain() != 6094.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_hub_chain_sign_link() != 10729.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_is_unlocked() != 56931.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1296,6 +1314,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_approval_sign() != 52329.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897.toShort()) {
@@ -2993,6 +3014,14 @@ sealed class CryptoException(message: String): kotlin.Exception(message) {
         class SigchainRejected(message: String) : CryptoException(message)
         
     /**
+     * A hub authority chain link or recovery approval refused by one of its
+     * closed rules (wire spec §5, §6.1): `chain_prev_hash`, `chain_fork`,
+     * `chain_unauthorised_signer`, `recovery_threshold`, …; see
+     * [`crate::hub_chain`].
+     */
+        class HubChainRejected(message: String) : CryptoException(message)
+        
+    /**
      * A device backup that does not carry the device's X-Wing seed — a v5 or
      * older file, or a payload holding only the signing and X25519 seeds. It
      * is never half-restored: the X-Wing key the user's chain names for the
@@ -3043,8 +3072,9 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
             21 -> CryptoException.InvalidIdentifier(FfiConverterString.read(buf))
             22 -> CryptoException.NoEventKey(FfiConverterString.read(buf))
             23 -> CryptoException.SigchainRejected(FfiConverterString.read(buf))
-            24 -> CryptoException.BackupMissingXwingSeed(FfiConverterString.read(buf))
-            25 -> CryptoException.NoAdminReader(FfiConverterString.read(buf))
+            24 -> CryptoException.HubChainRejected(FfiConverterString.read(buf))
+            25 -> CryptoException.BackupMissingXwingSeed(FfiConverterString.read(buf))
+            26 -> CryptoException.NoAdminReader(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -3148,12 +3178,16 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
                 buf.putInt(23)
                 Unit
             }
-            is CryptoException.BackupMissingXwingSeed -> {
+            is CryptoException.HubChainRejected -> {
                 buf.putInt(24)
                 Unit
             }
-            is CryptoException.NoAdminReader -> {
+            is CryptoException.BackupMissingXwingSeed -> {
                 buf.putInt(25)
+                Unit
+            }
+            is CryptoException.NoAdminReader -> {
+                buf.putInt(26)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -4328,6 +4362,39 @@ public object FfiConverterSequenceTypeSigchainVerifiedState: FfiConverterRustBuf
     
 
         /**
+         * One stateless hub-chain operation, JSON in and JSON out
+         * (`hub_chain::call`): `{"op": "verify" | "signingMessage" | "assemble" |
+         * "permsHash" | "verifySigchain" | "approvalMessage", …}`. The app verifies
+         * every hub chain it is served through this, and never canonicalises, hashes
+         * or checks a link itself. A refusal is a `CryptoError` whose message starts
+         * with its closed rejection code.
+         */
+    @Throws(CryptoException::class) fun `mobileHubChain`(`requestJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hub_chain(
+    
+        FfiConverterString.lower(`requestJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Sign an unsigned hub-chain link (JSON) with this device's key from mobile state.
+         */
+    @Throws(CryptoException::class) fun `mobileHubChainSignLink`(`unsignedJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hub_chain_sign_link(
+    
+        FfiConverterString.lower(`unsignedJson`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Check if the mobile crypto state is unlocked.
          */ fun `mobileIsUnlocked`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
@@ -4527,6 +4594,20 @@ public object FfiConverterSequenceTypeSigchainVerifiedState: FfiConverterRustBuf
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Sign a recovery approval (JSON) with this holder device's key (D14).
+         */
+    @Throws(CryptoException::class) fun `mobileRecoveryApprovalSign`(`approvalJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_recovery_approval_sign(
+    
+        FfiConverterString.lower(`approvalJson`),_status)
 }
     )
     }
