@@ -4801,5 +4801,17 @@
     "push": "Gen aktivite sou liy dirèk ou a ki bezwen yon koutje.",
     "signalAlert": "Alèt liy dirèk — {{category}}: {{state}}. Louvri aplikasyon an pou detay yo.",
     "title": "Ensidan ki aktif"
+  },
+  "softphone": {
+    "registered": "Apèl nan aplikasyon an aktif",
+    "registering": "N ap konekte apèl nan aplikasyon an…",
+    "unavailable": "Odyo nan aplikasyon an pa disponib: {{reason}}",
+    "failed": "Odyo nan aplikasyon an echwe: {{reason}}",
+    "credentialRevoked": "Yo retire aksè odyo nan aplikasyon an. Apèl yo pral sonnen sou telefòn ou.",
+    "answer": "Reponn nan aplikasyon an",
+    "decline": "Refize nan aplikasyon an",
+    "inputDevice": "Mikwofòn",
+    "outputDevice": "Opalè",
+    "mediaFailed": "Apèl la pa t ka pote odyo: {{reason}}"
   }
 }

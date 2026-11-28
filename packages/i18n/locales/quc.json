@@ -4807,5 +4807,17 @@
     "erasure.envelopeRevocationFailed",
     "erasure.envelopeRevocationProcessed",
     "erasure.envelopeRevocationProgress"
-  ]
+  ],
+  "softphone": {
+    "registered": "Ri taq oyonik pa ri aplicación e chakunik",
+    "registering": "Kakiriqitaj ri taq oyonik pa ri aplicación…",
+    "unavailable": "Man k'o ta ri ch'awem pa ri aplicación: {{reason}}",
+    "failed": "Xsach ri ch'awem pa ri aplicación: {{reason}}",
+    "credentialRevoked": "Xesax ri uchuq'ab' rech ri ch'awem pa ri aplicación. Ri taq oyonik kech'aw pa ri ateléfono.",
+    "answer": "Tak'ulu' pa ri aplicación",
+    "decline": "Matak'ulu' pa ri aplicación",
+    "inputDevice": "Micrófono",
+    "outputDevice": "Bocina",
+    "mediaFailed": "Ri oyonik man xkwin ta xuk'am ri ch'awem: {{reason}}"
+  }
 }

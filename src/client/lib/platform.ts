@@ -109,6 +109,14 @@ export type TauriIpcCommand =
   | 'net_ws_send'
   | 'net_ws_close'
   | 'take_pending_invite'
+  | 'voice_sync_registrations'
+  | 'voice_unregister_all'
+  | 'voice_answer'
+  | 'voice_decline'
+  | 'voice_hangup'
+  | 'voice_set_muted'
+  | 'voice_list_audio_devices'
+  | 'voice_select_audio_device'
 
 // Resolved once per webview and kept: every command this module sends goes to
 // the same IPC bridge. Loaded lazily so nothing pulls in @tauri-apps until the
@@ -1918,4 +1926,144 @@ export async function listenNetWs(
     return listen<NetWsPayload>(channel, event => handler(event.payload))
   }
   throw new Error('listenNetWs: not in Tauri context')
+}
+
+// ── In-app audio (#1770) ────────────────────────────────────────────────
+//
+// The SIP stack and the media live in the Rust shell (apps/desktop/src/voice.rs,
+// apps/desktop/voice/). Across this boundary go ONLY call ids, the desired
+// state, and device choices toward the shell, and registration state and call
+// snapshots back — never the SIP or TURN credential, the TLS anchor, audio, or
+// key material (spec §1.4). The payload shapes are the serde shapes of
+// `llamenos_voice::{RegistrationEvent, CallEvent}` (apps/desktop/voice/src/events.rs).
+
+export type VoiceRegistrationState =
+  | 'registering'
+  | 'registered'
+  | 'unregistered'
+  | 'failed'
+  | 'unavailable'
+  | 'credential-revoked'
+
+export interface VoiceRegistrationPayload {
+  state: VoiceRegistrationState
+  /** Never the credential (spec §1.4). */
+  reason?: string
+}
+
+export type VoiceCallState = 'incoming' | 'connecting' | 'active' | 'ended' | 'error'
+
+export interface VoiceCallPayload {
+  /** The shell's handle for the SIP dialog — what every voice_* call command takes. */
+  callId: string
+  /** The app's call id (relay `call:ring`), when the INVITE named it. */
+  appCallId?: string
+  state: VoiceCallState
+  muted: boolean
+  mediaPath?: 'host' | 'reflexive' | 'relay'
+  reason?: string
+}
+
+export interface VoiceErrorPayload {
+  message: string
+}
+
+export interface VoiceAudioDevice {
+  id: string
+  name: string
+  selected: boolean
+}
+
+export interface VoiceAudioDevices {
+  input: VoiceAudioDevice[]
+  output: VoiceAudioDevice[]
+}
+
+export type VoiceDeviceKind = 'input' | 'output'
+
+export type VoiceEventChannel = 'voice:registration' | 'voice:call' | 'voice:error'
+
+interface VoiceEventPayloads {
+  'voice:registration': VoiceRegistrationPayload
+  'voice:call': VoiceCallPayload
+  'voice:error': VoiceErrorPayload
+}
+
+/** Desired state changed (clock-in/out, shift status loaded); the shell owns the fetch. */
+export async function voiceSyncRegistrations(onShift: boolean): Promise<void> {
+  if (useTauri) return tauriInvoke<void>('voice_sync_registrations', { onShift })
+  throw new Error('voiceSyncRegistrations: not in Tauri context')
+}
+
+export async function voiceUnregisterAll(): Promise<void> {
+  if (useTauri) return tauriInvoke<void>('voice_unregister_all')
+  throw new Error('voiceUnregisterAll: not in Tauri context')
+}
+
+export async function voiceAnswer(callId: string): Promise<void> {
+  if (useTauri) return tauriInvoke<void>('voice_answer', { callId })
+  throw new Error('voiceAnswer: not in Tauri context')
+}
+
+export async function voiceDecline(callId: string): Promise<void> {
+  if (useTauri) return tauriInvoke<void>('voice_decline', { callId })
+  throw new Error('voiceDecline: not in Tauri context')
+}
+
+export async function voiceHangup(callId: string): Promise<void> {
+  if (useTauri) return tauriInvoke<void>('voice_hangup', { callId })
+  throw new Error('voiceHangup: not in Tauri context')
+}
+
+export async function voiceSetMuted(callId: string, muted: boolean): Promise<void> {
+  if (useTauri) return tauriInvoke<void>('voice_set_muted', { callId, muted })
+  throw new Error('voiceSetMuted: not in Tauri context')
+}
+
+export async function voiceListAudioDevices(): Promise<VoiceAudioDevices> {
+  if (useTauri) return tauriInvoke<VoiceAudioDevices>('voice_list_audio_devices')
+  throw new Error('voiceListAudioDevices: not in Tauri context')
+}
+
+export async function voiceSelectAudioDevice(kind: VoiceDeviceKind, id: string): Promise<void> {
+  if (useTauri) return tauriInvoke<void>('voice_select_audio_device', { kind, id })
+  throw new Error('voiceSelectAudioDevice: not in Tauri context')
+}
+
+/**
+ * Subscribe to one `voice:*` channel. Mirrors `listenNetWs`, including the
+ * Playwright branch: under the IPC mock, listeners register on
+ * `window.__VOICE_LISTENERS__` and `tests/mocks/tauri-core.ts` emits to them.
+ */
+async function listenVoice<C extends VoiceEventChannel>(
+  channel: C,
+  handler: (payload: VoiceEventPayloads[C]) => void,
+): Promise<() => void> {
+  if (import.meta.env.PLAYWRIGHT_TEST) {
+    const win = window as unknown as Record<string, unknown>
+    if (!win.__VOICE_LISTENERS__) win.__VOICE_LISTENERS__ = {}
+    const map = win.__VOICE_LISTENERS__ as Record<string, Array<(p: unknown) => void>>
+    const registered = handler as (p: unknown) => void
+    ;(map[channel] ??= []).push(registered)
+    return () => {
+      map[channel] = (map[channel] ?? []).filter(h => h !== registered)
+    }
+  }
+  if (useTauri) {
+    const { listen } = await import('@tauri-apps/api/event')
+    return listen<VoiceEventPayloads[C]>(channel, event => handler(event.payload))
+  }
+  throw new Error(`listen ${channel}: not in Tauri context`)
+}
+
+export function listenVoiceRegistration(handler: (p: VoiceRegistrationPayload) => void): Promise<() => void> {
+  return listenVoice('voice:registration', handler)
+}
+
+export function listenVoiceCall(handler: (p: VoiceCallPayload) => void): Promise<() => void> {
+  return listenVoice('voice:call', handler)
+}
+
+export function listenVoiceError(handler: (p: VoiceErrorPayload) => void): Promise<() => void> {
+  return listenVoice('voice:error', handler)
 }

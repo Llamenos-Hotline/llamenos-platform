@@ -10,19 +10,30 @@
 # Bump the pin only in a dedicated commit that re-hashes every target listed here.
 #
 # Targets are named for what the artifact actually contains, verified at pin time:
+#   linux-x86_64    linphone-sdk-linux-x86_64-5.5.39.tar.gz, built by US — see below.
 #   macos-arm64     linphone-sdk-macos-5.5.39.zip is Mach-O arm64 ONLY (not universal) —
 #                   Intel Macs have no upstream SDK in this release line.
 #   windows-x86_64  linphone-sdk-win64-5.5.39.zip, PE32+ x86-64.
 #
-# linux-x86_64 is DELIBERATELY ABSENT. Upstream publishes no Linux SDK
-# (download.linphone.org/releases/linux/ has only the app AppImage). The two
-# Linux binaries upstream does ship are not an SDK: the 5.5.39 Python wheel's
-# mediastreamer2 is built without ALSA or PulseAudio ("Alsa support not
-# available in this build") and needs an unbundled libmariadb.so.3; the app
-# AppImage bundles 5.5.36 libraries with no headers, and no 5.5.36 SDK exists to
-# take headers from. Which Linux source to pin is an operator decision on #1770;
-# the fetch script refuses linux-x86_64 until a line for it exists here.
+# linux-x86_64 is OUR build, not upstream's. Upstream publishes no Linux SDK
+# (download.linphone.org/releases/linux/ has only the app AppImage; the 5.5.39
+# Python wheel's mediastreamer2 has no ALSA or PulseAudio). Operator decision on
+# #1770 (2026-11-24, spike Decision 1, option (a)): build linphone-sdk 5.5.39 once,
+# locally, from the pinned Dockerfile committed next to this file —
+#   apps/desktop/linphone-sdk-linux-x86_64.Dockerfile
+#   scripts/build-linphone-sdk-linux.sh      (prints the tarball's sha256)
+# — and pin the tarball here like the other two. The build pins its base image by
+# digest, the Ubuntu archive by snapshot date and the source by tag + commit, and
+# refuses to finish unless mediastreamer2 links both libasound and libpulse.
+# Anyone can rebuild and compare digests.
+#
+# Its URL is our own release origin (the bucket that serves desktop releases and
+# the updater channel), never a third-party host. Publishing it there is an
+# operator step that needs the release-origin credentials (#719); until it is
+# live, `scripts/fetch-linphone-sdk.sh linux-x86_64 --local <tarball>` installs a
+# locally built tarball through the SAME digest gate.
 #
 # Format: <target>  <url>  <sha256>
+linux-x86_64  https://updates.llamenos-hotline.org/desktop/linphone-sdk/linphone-sdk-linux-x86_64-5.5.39.tar.gz  e13bb2b5029fea1c747be3d40eba547378c76a2372f602c4aa6bdbcb096c0b01
 macos-arm64  https://download.linphone.org/releases/macosx/sdk/linphone-sdk-macos-5.5.39.zip  2d2c44376824ff715f348c73127c3bd00caf07019d4b2fdbd387bd34aa2657ad
 windows-x86_64  https://download.linphone.org/releases/windows/sdk/linphone-sdk-win64-5.5.39.zip  77dcb9007a9b304b568d9cf57ab69c9dab7c45f577d08366a747afcbef214e29

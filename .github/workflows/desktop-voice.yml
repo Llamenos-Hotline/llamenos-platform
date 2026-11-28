@@ -9,11 +9,20 @@
 # a re-uploaded or replaced zip — fails here, not in a release build.
 #
 # Builds and gates only; it publishes nothing (CLAUDE.md "Publishing vs
-# deploying"). The bindgen crate's build + smoke steps join `artifacts` in plan
-# Task 2, and the Linux headless e2e job in Task 5.
+# deploying").
 #
-# linux-x86_64 has no pin yet: upstream publishes no Linux SDK, and the Linux
-# source is an open operator decision on #1770 (see the checksums file header).
+# linux-x86_64 IS pinned (our build from apps/desktop/linphone-sdk-linux-x86_64.Dockerfile,
+# operator decision on #1770) but is not yet fetched here: its URL is our own
+# release origin, and publishing the tarball there needs the release-origin
+# credentials (#719) — an operator step. Until it is live, a Linux leg of
+# `artifacts`, the llamenos-voice-sys smoke test (cargo test -p
+# llamenos-voice-sys) and the Tier 2 headless e2e
+# (deploy/docker/tests/telephony/run-desktop-sip-e2e.sh) cannot fetch it, so
+# they are not wired; each runs locally against
+# `scripts/fetch-linphone-sdk.sh linux-x86_64 --local <tarball>`.
+#
+# `voice-crate` runs what needs no SDK at all: the parameter/redaction/policy
+# tests of llamenos-voice built without its `linphone` feature.
 name: desktop-voice
 
 on:
@@ -21,12 +30,18 @@ on:
     branches: [main]
     paths:
       - "apps/desktop/linphone-sdk-checksums.txt"
+      - "apps/desktop/linphone-sdk-linux-x86_64.Dockerfile"
+      - "scripts/build-linphone-sdk-linux.sh"
+      - "apps/desktop/voice/**"
       - "scripts/fetch-linphone-sdk.sh"
       - "scripts/fetch-linphone-sdk.test.ts"
       - ".github/workflows/desktop-voice.yml"
   pull_request:
     paths:
       - "apps/desktop/linphone-sdk-checksums.txt"
+      - "apps/desktop/linphone-sdk-linux-x86_64.Dockerfile"
+      - "scripts/build-linphone-sdk-linux.sh"
+      - "apps/desktop/voice/**"
       - "scripts/fetch-linphone-sdk.sh"
       - "scripts/fetch-linphone-sdk.test.ts"
       - ".github/workflows/desktop-voice.yml"
@@ -59,6 +74,30 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Test the checksum gate by breaking it
         run: bun test scripts/fetch-linphone-sdk.test.ts
+
+  voice-crate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      # Same rail as desktop-rust: `cargo test` reports "0 passed" and exits 0
+      # for a crate whose test modules have been compiled out.
+      - name: llamenos-voice without liblinphone (params, redaction, relay policy)
+        run: |
+          set -o pipefail
+          cargo test --manifest-path apps/desktop/Cargo.toml -p llamenos-voice --no-default-features 2>&1 | tee voice-crate.log
+          passed=$(grep -oE 'test result: ok\. [0-9]+ passed' voice-crate.log | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          echo "voice-crate: $passed test(s) passed."
+          [ "$passed" -gt 0 ] || { echo "::error::llamenos-voice ran no tests"; exit 1; }
 
   artifacts:
     needs: gate

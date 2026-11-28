@@ -4801,5 +4801,17 @@
     "push": "Auf Ihrer Hotline gibt es Aktivität, die Sie sich ansehen sollten.",
     "signalAlert": "Hotline-Warnung — {{category}}: {{state}}. Details finden Sie in der App.",
     "title": "Aktive Vorfälle"
+  },
+  "softphone": {
+    "registered": "In-App-Anrufe aktiv",
+    "registering": "In-App-Anrufe werden verbunden…",
+    "unavailable": "In-App-Audio nicht verfügbar: {{reason}}",
+    "failed": "In-App-Audio fehlgeschlagen: {{reason}}",
+    "credentialRevoked": "Der Zugriff auf In-App-Audio wurde widerrufen. Anrufe klingeln auf Ihrem Telefon.",
+    "answer": "In der App annehmen",
+    "decline": "In der App ablehnen",
+    "inputDevice": "Mikrofon",
+    "outputDevice": "Lautsprecher",
+    "mediaFailed": "Der Anruf konnte kein Audio übertragen: {{reason}}"
   }
 }

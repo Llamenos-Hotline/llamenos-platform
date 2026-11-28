@@ -359,7 +359,12 @@ impl CryptoState {
 
     /// Nonce-bearing auth token (serialized JSON, the `Bearer` payload) signed by
     /// the device key in state.
-    fn auth_token_json(&self, timestamp: u64, method: &str, path: &str) -> Result<String, String> {
+    pub(crate) fn auth_token_json(
+        &self,
+        timestamp: u64,
+        method: &str,
+        path: &str,
+    ) -> Result<String, String> {
         self.with_secrets(|secrets| {
             let token =
                 auth::create_auth_token(secrets, timestamp, method, path).map_err(err_str)?;
@@ -536,10 +541,13 @@ pub fn unlock_with_pin(
     }
 }
 
-/// Lock the crypto state — zeroizes device secrets.
+/// Lock the crypto state — zeroizes device secrets. A locked desktop cannot
+/// answer meaningfully, so in-app audio unregisters and its core drops the SIP
+/// credential with it (#1770, spec §5.3); the phone leg still rings.
 #[tauri::command]
-pub fn lock_crypto(state: tauri::State<'_, CryptoState>) {
+pub fn lock_crypto(app: tauri::AppHandle, state: tauri::State<'_, CryptoState>) {
     state.lock();
+    crate::voice::unregister_and_zeroize(&app);
 }
 
 /// Check if the crypto state is unlocked.

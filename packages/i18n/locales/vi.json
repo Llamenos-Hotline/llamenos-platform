@@ -4801,5 +4801,17 @@
     "push": "Có hoạt động trên đường dây nóng của bạn cần được xem xét.",
     "signalAlert": "Cảnh báo đường dây nóng — {{category}}: {{state}}. Mở ứng dụng để xem chi tiết.",
     "title": "Sự cố đang diễn ra"
+  },
+  "softphone": {
+    "registered": "Cuộc gọi trong ứng dụng đang hoạt động",
+    "registering": "Đang kết nối cuộc gọi trong ứng dụng…",
+    "unavailable": "Âm thanh trong ứng dụng không khả dụng: {{reason}}",
+    "failed": "Âm thanh trong ứng dụng bị lỗi: {{reason}}",
+    "credentialRevoked": "Quyền truy cập âm thanh trong ứng dụng đã bị thu hồi. Cuộc gọi sẽ đổ chuông trên điện thoại của bạn.",
+    "answer": "Trả lời trong ứng dụng",
+    "decline": "Từ chối trong ứng dụng",
+    "inputDevice": "Micrô",
+    "outputDevice": "Loa",
+    "mediaFailed": "Cuộc gọi không thể truyền âm thanh: {{reason}}"
   }
 }

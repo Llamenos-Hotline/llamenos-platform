@@ -4799,5 +4799,17 @@
     "push": "There is activity on your hotline that needs a look.",
     "signalAlert": "Hotline alert — {{category}}: {{state}}. Open the app for details.",
     "title": "Active incidents"
+  },
+  "softphone": {
+    "registered": "In-app calls active",
+    "registering": "Connecting in-app calls…",
+    "unavailable": "In-app audio unavailable: {{reason}}",
+    "failed": "In-app audio failed: {{reason}}",
+    "credentialRevoked": "In-app audio access was revoked. Calls will ring your phone.",
+    "answer": "Answer in app",
+    "decline": "Decline in app",
+    "inputDevice": "Microphone",
+    "outputDevice": "Speaker",
+    "mediaFailed": "The call could not carry audio: {{reason}}"
   }
 }

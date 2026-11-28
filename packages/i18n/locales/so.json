@@ -4799,5 +4799,17 @@
     "push": "Khadkaaga waxaa ka jira dhaqdhaqaaq u baahan in la eego.",
     "signalAlert": "Digniinta khadka — {{category}}: {{state}}. Fur app-ka si aad u aragto faahfaahinta.",
     "title": "Dhacdooyinka socda"
+  },
+  "softphone": {
+    "registered": "Wicitaannada app-ka waa firfircoon yihiin",
+    "registering": "Waxaa la isku xirayaa wicitaannada app-ka…",
+    "unavailable": "Codka app-ka lama heli karo: {{reason}}",
+    "failed": "Codka app-ka wuu fashilmay: {{reason}}",
+    "credentialRevoked": "Oggolaanshaha codka app-ka waa la laalay. Wicitaannadu waxay ku dhici doonaan taleefankaaga.",
+    "answer": "Ka jawaab app-ka",
+    "decline": "Ku diid app-ka",
+    "inputDevice": "Makarafoon",
+    "outputDevice": "Sameecad",
+    "mediaFailed": "Wicitaanku ma qaadi karin cod: {{reason}}"
   }
 }

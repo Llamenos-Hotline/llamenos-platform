@@ -1,0 +1,15 @@
+[package]
+name = "llamenos-voice-sys"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "AGPL-3.0-or-later"
+description = "Raw bindgen bindings over the pinned liblinphone SDK (#1770). Unsafe lives here and only here."
+# `links` makes this the ONLY crate in the graph allowed to link liblinphone,
+# and hands the vendored SDK's paths to dependents' build scripts as
+# DEP_LINPHONE_SDK_ROOT / DEP_LINPHONE_LIB_DIR.
+links = "linphone"
+publish = false
+
+[build-dependencies]
+bindgen = "0.72"

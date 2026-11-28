@@ -4799,5 +4799,17 @@
     "push": "Li ser xeta we çalakiyek heye ku divê lê were nêrîn.",
     "signalAlert": "Hişyariya xetê — {{category}}: {{state}}. Ji bo hûrguliyan sepanê vekin.",
     "title": "Bûyerên çalak"
+  },
+  "softphone": {
+    "registered": "Bangên di sepanê de çalak in",
+    "registering": "Bangên di sepanê de tên girêdan…",
+    "unavailable": "Dengê di sepanê de tune ye: {{reason}}",
+    "failed": "Dengê di sepanê de bi ser neket: {{reason}}",
+    "credentialRevoked": "Destûra dengê di sepanê de hat betalkirin. Bang dê li ser telefona te lê bidin.",
+    "answer": "Di sepanê de bersiv bide",
+    "decline": "Di sepanê de red bike",
+    "inputDevice": "Mîkrofon",
+    "outputDevice": "Hoparlor",
+    "mediaFailed": "Bangê nikarîbû deng bigihîne: {{reason}}"
   }
 }

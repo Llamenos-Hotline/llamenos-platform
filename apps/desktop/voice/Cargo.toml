@@ -1,0 +1,32 @@
+[package]
+name = "llamenos-voice"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "AGPL-3.0-or-later"
+description = "Safe wrapper over liblinphone for desktop in-app audio (#1770): the pump thread, registration policy and call control."
+publish = false
+
+[dependencies]
+llamenos-voice-sys = { path = "sys", optional = true }
+serde = { version = "1", features = ["derive"] }
+# `std` for `impl Zeroize for CString` (the FFI copies of the password);
+# `serde` so `Zeroizing<String>` deserializes directly in the shell's wire type.
+zeroize = { version = "1", features = ["std", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+
+[features]
+default = ["linphone"]
+# The liblinphone core itself. Off, only the event and parameter types build
+# (no SDK needed) — what the desktop shell links when its `voice` feature is off.
+linphone = ["dep:llamenos-voice-sys"]
+# Test-harness-only surface (the Tier 2 headless e2e, examples/sip_e2e.rs):
+# file-backed audio and a statistics probe. Never enabled by the desktop shell.
+e2e = ["linphone"]
+
+[[example]]
+name = "sip_e2e"
+required-features = ["e2e"]
