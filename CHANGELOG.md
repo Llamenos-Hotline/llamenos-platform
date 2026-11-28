@@ -210,6 +210,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.26 (2026-11-28)
+
+### Features
+
+- one store for hub numbers (hub_numbers), E.164 at lookup, scoped authority (#3095)
+- device key binding — genesis names the X-Wing key, L_DEVICE_POP possession signature, keys bound to one user; v6 backup (#2496, #3053) (#3051)
+
+### Fixes
+
+- a ring never switches the active hub; answer/tap only, and join the INVITE to its push by pushRef (#1019) (#3060)
+- the M1 probe gate exercises notes, calls and conversations — and the app does them (#1705) (#3059)
+- the file holding the trust decision holds nothing else (#3075)
+- confirm custom-field delete; platform-ban removal runs the platform route (#3096)
+- contact create/edit need no hub key in Swift; UI tests read the stored tag and contact back (#2792) (#3110)
+- test-seed reports per-step outcomes and the Android client fails on a failed step (#3088) (#3097)
+- GET /notes/:id/replies declares the reply row; Android decodes and decrypts it as one (#3107)
+
 ## 0.21.25 (2026-11-26)
 
 ### Features
