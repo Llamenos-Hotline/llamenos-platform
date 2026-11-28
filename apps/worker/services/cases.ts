@@ -276,7 +276,6 @@ export class CasesService {
     if (existing.length === 0) {
       throw new ServiceError(404, 'Record not found')
     }
-    const record = existing[0]
     const now = new Date()
 
     const values: Record<string, unknown> = { updatedAt: now }

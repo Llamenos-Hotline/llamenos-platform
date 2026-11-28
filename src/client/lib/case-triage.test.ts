@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ openCase: vi.fn() }))
 
-vi.mock('./platform', () => ({ openCase: mocks.openCase }))
+vi.mock('./platform', async importOriginal => ({ ...(await importOriginal<typeof import('./platform')>()), openCase: mocks.openCase }))
 vi.mock('./key-manager', () => ({ isUnlocked: () => true }))
 
 import {

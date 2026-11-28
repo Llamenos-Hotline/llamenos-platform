@@ -318,7 +318,7 @@ final class CaseManagementViewModel {
         }
         // The status lives in the sealed summary, so a status filter is applied on this device.
         if let wanted = statusFilter {
-            await loadFilteredRecords(basePath: base, status: wanted, epoch: epoch)
+            await loadFilteredRecords(status: wanted, epoch: epoch)
             return
         }
         filterScanBounded = false
@@ -352,7 +352,14 @@ final class CaseManagementViewModel {
     /// Fetch the candidates the server can filter on (hub, entity type), open each summary and
     /// keep the records whose status is `wanted`, up to `CaseTriage.scanLimit` records. The
     /// matches are paged locally and `totalRecords` is the size of the local result.
-    private func loadFilteredRecords(basePath: String, status wanted: String, epoch: Int) async {
+    private func loadFilteredRecords(status wanted: String, epoch: Int) async {
+        // Resolved here, not passed in, so the API-contract guard can follow the path to a mounted route.
+        guard let base = try? apiService.activeHubPath("/api/records") else {
+            records = []
+            totalRecords = 0
+            recordsLoadError = nil
+            return
+        }
         var query = "limit=\(CaseTriage.batchSize)"
         if let etFilter = entityTypeFilter {
             query += "&entityTypeId=\(etFilter)"
@@ -369,7 +376,7 @@ final class CaseManagementViewModel {
         do {
             while true {
                 let response: RecordListResponse = try await apiService.request(
-                    method: "GET", path: basePath + "?page=\(page)&" + query
+                    method: "GET", path: base + "?page=\(page)&" + query
                 )
                 guard epoch == recordsLoadEpoch, !Task.isCancelled else { return }
 
