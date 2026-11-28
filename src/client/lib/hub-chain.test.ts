@@ -27,7 +27,8 @@ vi.mock('./api', () => ({
   createHub: vi.fn(),
   getHubFounding: vi.fn(),
 }))
-vi.mock('./platform', () => ({
+vi.mock('./platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('./platform')>()),
   getHubChainAnchor: vi.fn(async (hub: string) => mocks.anchors.get(hub) ?? null),
   setHubChainAnchor: vi.fn(async (hub: string, head: { seq: number; hash: string }) => { mocks.anchors.set(hub, head) }),
   hubChainCall: vi.fn(async (_op: string, req: unknown) => mocks.verify(req)),
@@ -108,6 +109,55 @@ describe('loadHubChain', () => {
     mocks.verify.mockReturnValue(verified(hub, 2))
     await loadHubChain(hub)
     expect(mocks.verify.mock.calls[0][0].links).toHaveLength(2)
+  })
+})
+
+describe('the anchor never moves backwards (#3133 review)', () => {
+  it('two interleaved verifications of one hub: the shorter finishing last does not roll the anchor back', async () => {
+    const hub = newHub()
+    mocks.anchors.set(hub, { seq: 1, hash: H(1) })
+    // The server answers the first request with the true chain (head 3) and the
+    // second with a shorter one (head 2), and holds the shorter answer back
+    // until the longer one has been verified and recorded.
+    mocks.pages = [
+      { links: [link(hub, 1), link(hub, 2), link(hub, 3)], head: null, hasMore: false },
+      { links: [link(hub, 1), link(hub, 2)], head: null, hasMore: false },
+    ]
+    let releaseShorter!: () => void
+    const shorterHeld = new Promise<void>(resolve => { releaseShorter = resolve })
+    mocks.verify.mockImplementation(async (req: { links: unknown[] }) => {
+      if (req.links.length === 2) {
+        await shorterHeld
+        return verified(hub, 2)
+      }
+      return verified(hub, 3)
+    })
+    const first = loadHubChain(hub)
+    const second = loadHubChain(hub)
+    expect((await first).kind).toBe('verified')
+    releaseShorter()
+    await second
+    expect(mocks.anchors.get(hub)).toEqual({ seq: 3, hash: H(3) })
+    // The second verification ran against the anchor the first one advanced.
+    expect(mocks.verify.mock.calls[1][0]).toMatchObject({ anchor: { seq: 3, hash: H(3) } })
+  })
+
+  it('refuses a verified head at the anchored seq with a different hash, as a fork, keeping the anchor', async () => {
+    const hub = newHub()
+    mocks.anchors.set(hub, { seq: 2, hash: H(2) })
+    mocks.pages = [{ links: [link(hub, 1), link(hub, 2)], head: null, hasMore: false }]
+    mocks.verify.mockReturnValue({ ...verified(hub, 2), head: { seq: 2, hash: H(77) } })
+    expect((await loadHubChain(hub)).kind).toBe('fork')
+    expect(mocks.anchors.get(hub)).toEqual({ seq: 2, hash: H(2) })
+  })
+
+  it('refuses a verified head below the anchor, as a fork', async () => {
+    const hub = newHub()
+    mocks.anchors.set(hub, { seq: 3, hash: H(3) })
+    mocks.pages = [{ links: [link(hub, 1), link(hub, 2)], head: null, hasMore: false }]
+    mocks.verify.mockReturnValue(verified(hub, 2))
+    expect((await loadHubChain(hub)).kind).toBe('fork')
+    expect(mocks.anchors.get(hub)).toEqual({ seq: 3, hash: H(3) })
   })
 })
 

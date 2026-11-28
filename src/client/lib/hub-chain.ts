@@ -96,11 +96,47 @@ async function userChainsFor(links: readonly HubChainLink[]): Promise<CrateSigch
 }
 
 /**
+ * One verification or append at a time per hub. The anchor is a
+ * read-modify-write — read it, verify against it, advance it — and two of them
+ * interleaving let a server time a SHORTER chain to finish last and roll the
+ * anchor back, so a fork above the regressed anchor would pass (#3133 review).
+ */
+const hubQueues = new Map<string, Promise<unknown>>()
+function serialisedForHub<T>(hubId: string, step: () => Promise<T>): Promise<T> {
+  const run = (hubQueues.get(hubId) ?? Promise.resolve()).then(step, step)
+  const tail = run.then(() => undefined, () => undefined)
+  hubQueues.set(hubId, tail)
+  void tail.then(() => { if (hubQueues.get(hubId) === tail) hubQueues.delete(hubId) })
+  return run
+}
+
+/**
+ * Advance `hubId`'s anchor to `head`, monotonically: a lower seq, or a
+ * different hash at the same seq, is refused as a fork — the anchor is the
+ * root fork detection stands on, so it never moves backwards or sideways.
+ */
+async function advanceHubAnchor(hubId: string, head: ChainHead): Promise<void> {
+  const known = await getHubChainAnchor(hubId)
+  if (known && head.seq < known.seq) {
+    throw new Error(`chain_fork: the verified head seq ${head.seq} is below the anchor this device holds at seq ${known.seq}`)
+  }
+  if (known && head.seq === known.seq) {
+    if (head.hash !== known.hash) throw new Error(`chain_fork: a different link at the anchored seq ${known.seq}`)
+    return
+  }
+  await setHubChainAnchor(hubId, head)
+}
+
+/**
  * Fetch and verify `hubId`'s chain in the crate against this device's anchor,
  * and advance the anchor to the verified head. Never throws for a refused
  * chain: the refusal is the answer, and it is recorded so sealing stops.
  */
-export async function loadHubChain(hubId: string): Promise<HubChainStatus> {
+export function loadHubChain(hubId: string): Promise<HubChainStatus> {
+  return serialisedForHub(hubId, () => loadHubChainNow(hubId))
+}
+
+async function loadHubChainNow(hubId: string): Promise<HubChainStatus> {
   const links = await fetchChain(hubId)
   const anchor = await getHubChainAnchor(hubId)
   if (links.length === 0) {
@@ -119,7 +155,7 @@ export async function loadHubChain(hubId: string): Promise<HubChainStatus> {
     if (verified.hub !== hubId) {
       return record(hubId, { kind: 'refused', code: 'chain_hub_mismatch', detail: `the served chain is hub ${verified.hub}'s, not ${hubId}'s` })
     }
-    await setHubChainAnchor(hubId, verified.head)
+    await advanceHubAnchor(hubId, verified.head)
     return record(hubId, { kind: 'verified', verified, alerts: verified.alerts, at: Date.now() })
   } catch (err) {
     const code = rejectionCode(err)
@@ -250,12 +286,15 @@ export async function signGenesis(hubId: string, founder: string): Promise<{ gen
  * Commit the founding bundle policies after the hub exists, and take this
  * device's own genesis as the hub's first trusted anchor.
  */
-export async function completeFounding(hubId: string, genesis: HubChainLink, policies: (prev: HubChainLink) => Promise<HubChainLink[]>): Promise<void> {
-  await setHubChainAnchor(hubId, { seq: genesis.seq, hash: genesis.entryHash })
-  for (const link of await policies(genesis)) {
-    const { head } = await appendHubChainLink(hubId, link)
-    await setHubChainAnchor(hubId, head)
-  }
+export function completeFounding(hubId: string, genesis: HubChainLink, policies: (prev: HubChainLink) => Promise<HubChainLink[]>): Promise<void> {
+  return serialisedForHub(hubId, async () => {
+    await advanceHubAnchor(hubId, { seq: genesis.seq, hash: genesis.entryHash })
+    for (const link of await policies(genesis)) {
+      await appendHubChainLink(hubId, link)
+      // The anchor is this device's own signed link, never the server's echo.
+      await advanceHubAnchor(hubId, { seq: link.seq, hash: link.entryHash })
+    }
+  })
 }
 
 /** Found a hub: this device signs its genesis; then its bundle policies (§5.6). */

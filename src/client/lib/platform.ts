@@ -882,10 +882,24 @@ export async function getHubChainAnchor(hubId: string): Promise<{ seq: number; h
   return anchors[hubId] ?? null
 }
 
-export async function setHubChainAnchor(hubId: string, head: { seq: number; hash: string }): Promise<void> {
-  const store = await getSecureStore()
-  const anchors = (await store.get<Record<string, { seq: number; hash: string }>>(HUB_CHAIN_ANCHORS_KEY)) ?? {}
-  await store.set(HUB_CHAIN_ANCHORS_KEY, { ...anchors, [hubId]: head })
+/** Anchor writes are one read-modify-write of one record, so they run one at a
+ *  time: two hubs' writes racing would otherwise drop one hub's anchor, and a
+ *  hub with no anchor verifies by trust-on-first-use again. */
+let anchorWrites: Promise<unknown> = Promise.resolve()
+
+/**
+ * Store `head` as `hubId`'s anchor. Raw storage: the monotonic rule (never a
+ * lower seq, never a different hash at the same seq) is the caller's —
+ * `advanceHubAnchor` in hub-chain.ts — because only it knows the verdict.
+ */
+export function setHubChainAnchor(hubId: string, head: { seq: number; hash: string }): Promise<void> {
+  const write = anchorWrites.then(async () => {
+    const store = await getSecureStore()
+    const anchors = (await store.get<Record<string, { seq: number; hash: string }>>(HUB_CHAIN_ANCHORS_KEY)) ?? {}
+    await store.set(HUB_CHAIN_ANCHORS_KEY, { ...anchors, [hubId]: head })
+  })
+  anchorWrites = write.catch(() => undefined)
+  return write
 }
 
 /** Check if encrypted device keys exist in store. */
