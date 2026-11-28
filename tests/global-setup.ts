@@ -1,4 +1,6 @@
-import type { FullConfig } from '@playwright/test'
+import { request as playwrightRequest, type FullConfig } from '@playwright/test'
+import { commitFounding, signFounding } from './hub-chain-helpers'
+import { apiGet } from './api-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
@@ -228,20 +230,33 @@ async function completeFirstRunSetup(baseUrl: string): Promise<void> {
   const config = await configRes.json() as { setupCompleted?: boolean }
   if (config.setupCompleted) return
 
-  const path = '/api/setup/complete'
-  const token = makeBootstrapToken(ADMIN_SEED, 'POST', path)
-  const res = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${JSON.stringify(token)}`,
-      ...devSurfaceHeaders(),
-    },
-    body: JSON.stringify({}),
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    console.warn(`[global-setup] First-run setup failed (non-fatal): ${res.status} ${text}`)
+  // The admin's device signs the default hub's genesis, as the setup wizard
+  // does (#2963): no hub is founded without one.
+  const ctx = await playwrightRequest.newContext({ baseURL: baseUrl })
+  try {
+    const founding = await signFounding(ctx, ADMIN_SEED)
+    const path = '/api/setup/complete'
+    const token = makeBootstrapToken(ADMIN_SEED, 'POST', path)
+    const res = await fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${JSON.stringify(token)}`,
+        ...devSurfaceHeaders(),
+      },
+      body: JSON.stringify({ hub: { id: founding.id, genesis: founding.genesis } }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      console.warn(`[global-setup] First-run setup failed (non-fatal): ${res.status} ${text}`)
+      return
+    }
+    // Setup founds a hub only when none exists; commit the bundle policies of
+    // the one it founded with this genesis, not of a hub it found already there.
+    const hubs = await apiGet<{ hubs: { id: string }[] }>(ctx, '/hubs', ADMIN_SEED)
+    if (hubs.data.hubs?.some(h => h.id === founding.id)) await commitFounding(ctx, founding)
+  } finally {
+    await ctx.dispose()
   }
 }
 

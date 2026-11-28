@@ -24,11 +24,13 @@
  * creates and destroys around it.
  */
 import { expect, type APIRequestContext } from '@playwright/test'
+import { signFounding } from '../../hub-chain-helpers'
 import type { JSONValue } from 'postgres'
 import { Given, When, Then, After, getState, setState } from './fixtures'
 import { TestDB } from '../../db-helpers'
 import { getSharedState, setLastResponse } from './shared-state'
 import {
+  ADMIN_SEED,
   apiGet,
   apiPatch,
   apiPost,
@@ -119,12 +121,16 @@ When('the admin saves wizard progress at step {string}', async ({ request, world
   setLastResponse(world, await apiPatch(request, '/setup/state', { step }))
 })
 
+// The admin's device signs the default hub's genesis, as the wizard does
+// (#2963); the server uses it only if setup founds a hub.
 When('the admin completes setup', async ({ request, world }) => {
-  setLastResponse(world, await apiPost(request, '/setup/complete', {}))
+  const founding = await signFounding(request, ADMIN_SEED)
+  setLastResponse(world, await apiPost(request, '/setup/complete', { hub: { id: founding.id, genesis: founding.genesis } }))
 })
 
 When('the admin completes setup with timezone {string}', async ({ request, world }, timezone: string) => {
-  setLastResponse(world, await apiPost(request, '/setup/complete', { timezone }))
+  const founding = await signFounding(request, ADMIN_SEED)
+  setLastResponse(world, await apiPost(request, '/setup/complete', { timezone, hub: { id: founding.id, genesis: founding.genesis } }))
 })
 
 When('the admin notes the founded default hubs', async ({ request, world }) => {

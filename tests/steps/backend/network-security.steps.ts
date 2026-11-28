@@ -6,6 +6,7 @@
  * security headers, SSRF protection, HMAC hashing, config exposure, and more.
  */
 import { expect } from '@playwright/test'
+import { signFounding } from '../../hub-chain-helpers'
 import { devSurfaceSecret } from '../../dev-surface-secret'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
@@ -551,7 +552,11 @@ When('a reset request is sent without the dev-surface secret', async ({ request,
 // ── Hub Slug Validation Steps ────────────────────────────────────
 
 When('creating a hub with slug {string}', async ({ request, world }, slug: string) => {
+  // A valid founding (#2963), so the only thing wrong with the body is the slug.
+  const founding = await signFounding(request, ADMIN_SEED)
   const res = await apiPost(request, '/hubs', {
+    id: founding.id,
+    genesis: founding.genesis,
     name: 'Test Hub',
     slug,
   })

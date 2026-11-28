@@ -29,14 +29,14 @@ import type {
   UnsignedHubLink,
 } from '@protocol/schemas/hub-chain'
 import { appendHubChainLink, createHub, getHubChainPage, getHubFounding, getSigchain } from './api'
-import { getHubChainAnchor, hubChainCall, hubChainSignLink, setHubChainAnchor } from './platform'
-import { ensureDeviceIdentity, toCryptoSigchainLink } from './user-identity'
+import { getDevicePubkeys, getHubChainAnchor, hubChainCall, hubChainSignLink, setHubChainAnchor } from './platform'
+import { initializeUserIdentity, toCryptoSigchainLink } from './user-identity'
 import type { Hub } from '@shared/types'
 
 /** What loading a hub's chain concluded. */
 export type HubChainStatus =
   | { kind: 'verified'; verified: HubChainVerified; alerts: HubChainAlert[] }
-  /** The hub has no chain: only hubs seeded outside every client create path. */
+  /** The server serves no chain. Sealing is refused: every client-founded hub has a genesis. */
   | { kind: 'none' }
   /** The served chain does not contain this device's trusted anchor. Sealing stops. */
   | { kind: 'fork'; detail: string }
@@ -131,7 +131,8 @@ export async function loadHubChain(hubId: string): Promise<HubChainStatus> {
 /** Thrown when sealing in a hub whose chain is forked or refused. */
 export class HubSealingStoppedError extends Error {
   constructor(readonly hubId: string, readonly status: HubChainStatus) {
-    super(`Sealing is stopped in hub ${hubId}: its authority chain ${status.kind === 'fork' ? 'is forked' : 'was refused'}`)
+    const why = status.kind === 'fork' ? 'is forked' : status.kind === 'refused' ? 'was refused' : 'is missing'
+    super(`Sealing is stopped in hub ${hubId}: its authority chain ${why}`)
     this.name = 'HubSealingStoppedError'
   }
 }
@@ -139,16 +140,16 @@ export class HubSealingStoppedError extends Error {
 const inFlight = new Map<string, Promise<HubChainStatus>>()
 
 /**
- * Refuse to seal in a hub unless this device has verified its chain (fail
- * closed): with no verdict yet, the chain is loaded and verified first; a
- * fork or a refused chain throws {@link HubSealingStoppedError}; a fetch
- * failure throws too, because "could not check" is not "checked". A hub with
- * no chain at all is sealable only while this device holds no anchor for it
- * (`loadHubChain` records a fork otherwise).
+ * Refuse to seal in a hub unless this device has VERIFIED its chain (fail
+ * closed). With no verdict yet — or only "no chain", which a server could
+ * claim for any hub — the chain is loaded and verified first. A fork or a
+ * refused chain throws {@link HubSealingStoppedError}; so does a hub with no
+ * chain (every client-founded hub has a genesis); a fetch failure throws too,
+ * because "could not check" is not "checked".
  */
 export async function assertHubSealable(hubId: string): Promise<void> {
   let status = statuses.get(hubId)
-  if (!status) {
+  if (!status || status.kind === 'none') {
     let pending = inFlight.get(hubId)
     if (!pending) {
       pending = loadHubChain(hubId).finally(() => inFlight.delete(hubId))
@@ -156,7 +157,7 @@ export async function assertHubSealable(hubId: string): Promise<void> {
     }
     status = await pending
   }
-  if (status.kind === 'fork' || status.kind === 'refused') throw new HubSealingStoppedError(hubId, status)
+  if (status.kind !== 'verified') throw new HubSealingStoppedError(hubId, status)
 }
 
 /**
@@ -174,11 +175,21 @@ export function chainPermissionsFor(state: HubChainState, user: string): { all: 
 // --- Founding a hub (new-hub genesis, §5.6) ---
 
 /**
- * This device's own user-chain head, verified in the crate (initialising the
- * identity first if it has none): the `signerUserHead` its hub links reference.
+ * This device's own user-chain head, verified in the crate: the
+ * `signerUserHead` its hub links reference. The hub verifier requires exactly
+ * this — the signing device active in the user's chain at that head — so that
+ * is what is checked here. A user with no chain yet initialises it first.
  */
 async function ownHead(userPubkey: string): Promise<ChainHead> {
-  const verified = await ensureDeviceIdentity(userPubkey)
+  const device = await getDevicePubkeys()
+  if (!device) throw new Error('device key locked')
+  const { links } = await getSigchain(userPubkey)
+  const verified = links.length === 0
+    ? await initializeUserIdentity(userPubkey)
+    : await hubChainCall('verifySigchain', { links: links.map(toCryptoSigchainLink) })
+  if (verified.userPubkey !== userPubkey || !verified.activeDevicePubkeys.includes(device.signingPubkeyHex)) {
+    throw new Error('This device is not active in its user chain, so it cannot sign for this user in a hub')
+  }
   return { seq: verified.headSeq, hash: verified.headHash }
 }
 

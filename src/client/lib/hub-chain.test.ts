@@ -32,8 +32,9 @@ vi.mock('./platform', () => ({
   setHubChainAnchor: vi.fn(async (hub: string, head: { seq: number; hash: string }) => { mocks.anchors.set(hub, head) }),
   hubChainCall: vi.fn(async (_op: string, req: unknown) => mocks.verify(req)),
   hubChainSignLink: vi.fn(),
+  getDevicePubkeys: vi.fn(),
 }))
-vi.mock('./user-identity', () => ({ ensureDeviceIdentity: vi.fn(), toCryptoSigchainLink: (l: unknown) => l }))
+vi.mock('./user-identity', () => ({ initializeUserIdentity: vi.fn(), toCryptoSigchainLink: (l: unknown) => l }))
 
 const { assertHubSealable, HubSealingStoppedError, loadHubChain } = await import('./hub-chain')
 
@@ -117,6 +118,12 @@ describe('assertHubSealable fails closed', () => {
     mocks.verify.mockReturnValue(verified(hub, 1))
     await expect(assertHubSealable(hub)).resolves.toBeUndefined()
     expect(mocks.verify).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to seal in a hub the server says has no chain', async () => {
+    const hub = newHub()
+    expect((await loadHubChain(hub)).kind).toBe('none')
+    await expect(assertHubSealable(hub)).rejects.toBeInstanceOf(HubSealingStoppedError)
   })
 
   it('refuses to seal when the chain cannot be fetched', async () => {

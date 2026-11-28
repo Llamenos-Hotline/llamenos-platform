@@ -5,6 +5,7 @@
  * and key rotation when members depart.
  */
 import { expect } from '@playwright/test'
+import { commitFounding, signFounding } from '../../hub-chain-helpers'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import {
   ADMIN_SEED,
@@ -111,12 +112,15 @@ async function putHubKeyEnvelopes(
 
 async function createHub(request: import('@playwright/test').APIRequestContext): Promise<string> {
   const slug = uniqueName('bdd-hub-key')
+  // The admin's device signs the hub's genesis (#2963).
+  const founding = await signFounding(request, ADMIN_SEED)
   const res = await apiPost<{ hub: { id: string } }>(
     request,
     '/hubs',
-    { name: `Hub Key Test ${slug}`, slug },
+    { id: founding.id, genesis: founding.genesis, name: `Hub Key Test ${slug}`, slug },
   )
   expect([200, 201]).toContain(res.status)
+  await commitFounding(request, founding)
   return res.data.hub.id
 }
 
