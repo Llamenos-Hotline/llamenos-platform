@@ -238,8 +238,11 @@ export const hubChainRejectedResponseSchema = z.object({
  * gives the founder — the catalog's founder role, chosen by permission — each
  * with the concrete permissions its `policy {kind: bundle}` link commits.
  */
+export const hubFoundingBundleSchema = z.object({ bundle: z.string(), permissions: z.array(z.string()) })
+export type HubFoundingBundle = z.infer<typeof hubFoundingBundleSchema>
+
 export const hubFoundingResponseSchema = z.object({
-  bundles: z.array(z.object({ bundle: z.string(), permissions: z.array(z.string()) })),
+  bundles: z.array(hubFoundingBundleSchema),
 })
 export type HubFoundingResponse = z.infer<typeof hubFoundingResponseSchema>
 

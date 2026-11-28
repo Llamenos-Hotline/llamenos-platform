@@ -174,6 +174,10 @@ const REFERENCED_BY_NAME = new Set([
   'HubChainGroup',
   'HubChainMember',
   'HubChainBundle',
+  // The founding catalog's items would otherwise be a bare `Bundle`, which
+  // shadows Foundation's `Bundle` across the iOS module: every `Bundle.main`
+  // stopped type-checking ("failed to produce diagnostic").
+  'HubFoundingBundle',
   'ChainHead',
   // #2999 — `serverEventKeys` items would otherwise be named `ServerEventKey`,
   // which is the crate's UniFFI record of the same shape: a Swift-module collision.
@@ -958,7 +962,35 @@ function stripSwiftConvenienceExtensions(lines: string[]): string {
   // Clean up consecutive blank lines
   output = output.replace(/\n{3,}/g, '\n\n')
 
+  assertNoSwiftShadowing(output)
   return output
+}
+
+/**
+ * Names a generated top-level Swift type must never take: each is a
+ * Foundation, SwiftUI or Swift standard-library type the iOS module uses. A
+ * shadow does not fail where it is declared — it fails every unrelated use
+ * (a generated `Bundle` broke `Bundle.main` in two untouched files with
+ * "failed to produce diagnostic", #3133), so codegen refuses it here.
+ */
+const SWIFT_RESERVED_TYPE_NAMES = new Set([
+  'Bundle', 'Data', 'Date', 'URL', 'UUID', 'Locale', 'Calendar', 'TimeZone', 'Notification', 'Timer',
+  'Error', 'Result', 'Task', 'Set', 'Array', 'Dictionary', 'String', 'Int', 'Double', 'Bool', 'Character',
+  'Alert', 'Group', 'Text', 'Image', 'Color', 'Font', 'Section', 'List', 'Form', 'Label', 'Button',
+  'Toggle', 'Picker', 'Link', 'Menu', 'Tab', 'State', 'Binding', 'Environment', 'Animation', 'Transaction',
+  'Event', 'Record', 'Value', 'Location', 'Range', 'Index', 'Element', 'Never', 'Void', 'Any', 'Type',
+])
+
+function assertNoSwiftShadowing(swift: string): void {
+  const shadows = [...swift.matchAll(/^(?:struct|enum|class|typealias) (\w+)/gm)]
+    .map(m => m[1])
+    .filter(name => SWIFT_RESERVED_TYPE_NAMES.has(name))
+  if (shadows.length > 0) {
+    throw new Error(
+      `Generated Swift types shadow built-in names: ${[...new Set(shadows)].join(', ')}. ` +
+      'Name the schema (export it and add it to REFERENCED_BY_NAME) or add a rename above.',
+    )
+  }
 }
 
 /**
