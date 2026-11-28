@@ -10,9 +10,6 @@ function makeCaseRow(overrides: Partial<{
   hubId: string
   entityTypeId: string
   caseNumber: string | null
-  statusHash: string
-  severityHash: string | null
-  categoryHash: string | null
   assignedTo: string[]
   blindIndexes: Record<string, string>
   encryptedSummary: string
@@ -38,9 +35,6 @@ function makeCaseRow(overrides: Partial<{
     hubId: 'hub-1',
     entityTypeId: 'et-incident',
     caseNumber: null,
-    statusHash: 'hash-open',
-    severityHash: null,
-    categoryHash: null,
     assignedTo: [],
     blindIndexes: {},
     encryptedSummary: 'enc-summary',
@@ -106,12 +100,10 @@ describe('CasesService — CRUD', () => {
         createdBy: 'pk-author',
         encryptedSummary: 'enc-summary',
         summaryEnvelopes: [{ pubkey: 'pk-admin', enc: 'b'.repeat(64), ct: '38ca9bd310b7ec9b4e9bf72030f9a857d2647e9e26bd3cdcc220178a8786493d518a3c9605f5d23f2598eff87dfd26a6' }],
-        statusHash: 'hash-open',
       })
 
       expect(result.id).toBe('case-new')
       expect(result.hubId).toBe('hub-1')
-      expect(result.statusHash).toBe('hash-open')
     })
 
     it('creates contact links atomically when provided', async () => {
@@ -143,7 +135,6 @@ describe('CasesService — CRUD', () => {
         createdBy: 'pk-author',
         encryptedSummary: 'enc',
         summaryEnvelopes: [{ pubkey: 'pk-admin', enc: 'b'.repeat(64), ct: '38ca9bd310b7ec9b4e9bf72030f9a857d2647e9e26bd3cdcc220178a8786493d518a3c9605f5d23f2598eff87dfd26a6' }],
-        statusHash: 'hash-open',
         contactLinks: [
           { contactId: 'contact-1', role: 'caller' },
           { contactId: 'contact-2', role: 'witness' },
@@ -186,15 +177,13 @@ describe('CasesService — CRUD', () => {
   })
 
   describe('update', () => {
-    it('auto-creates status_change interaction on status change', async () => {
+    it('creates a status_change interaction when the client marks the write as a status change', async () => {
       const existingRow = makeCaseRow({
         id: 'case-1',
-        statusHash: 'hash-open',
         interactionCount: 0,
       })
       const updatedRow = makeCaseRow({
         id: 'case-1',
-        statusHash: 'hash-closed',
         interactionCount: 1,
       })
 
@@ -220,8 +209,8 @@ describe('CasesService — CRUD', () => {
 
       const svc = new CasesService(db as never)
       await svc.update('case-1', {
-        statusHash: 'hash-closed',
         authorPubkey: 'pk-admin',
+        statusChangeTypeHash: 'status-change-token',
       })
 
       // A status_change interaction should have been created with correct fields
@@ -230,18 +219,17 @@ describe('CasesService — CRUD', () => {
       expect(insertedValues.interactionType).toBe('status_change')
       expect(insertedValues.caseId).toBe('case-1')
       expect(insertedValues.authorPubkey).toBe('pk-admin')
-      expect(insertedValues.previousStatusHash).toBe('hash-open')
-      expect(insertedValues.newStatusHash).toBe('hash-closed')
+      expect(insertedValues.interactionTypeHash).toBe('status-change-token')
+      // The server never learns a status, so the entry names none.
+      expect(Object.keys(insertedValues).filter(k => /status/i.test(k) && k !== 'interactionType')).toEqual([])
     })
 
-    it('does NOT create interaction when status is unchanged', async () => {
+    it('does NOT create an interaction when the write is not a status change', async () => {
       const existingRow = makeCaseRow({
         id: 'case-1',
-        statusHash: 'hash-open',
       })
       const updatedRow = makeCaseRow({
         id: 'case-1',
-        statusHash: 'hash-open',
       })
 
       const insertInteraction = vi.fn()
@@ -263,10 +251,9 @@ describe('CasesService — CRUD', () => {
 
       const svc = new CasesService(db as never)
       await svc.update('case-1', {
-        severityHash: 'hash-high',
       })
 
-      // No interaction should be created (status didn't change)
+      // No interaction should be created (the client did not mark a status change)
       expect(insertInteraction).not.toHaveBeenCalled()
     })
   })

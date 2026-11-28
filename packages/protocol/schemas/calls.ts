@@ -71,7 +71,6 @@ export const callerIdentifyResponseSchema = z.object({
   recentCases: z.array(z.object({
     id: z.string(),
     caseNumber: z.string().optional(),
-    status: z.string(),
   })),
 })
 

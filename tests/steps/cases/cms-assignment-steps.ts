@@ -54,7 +54,7 @@ Given('volunteers with different profiles exist', async ({ backendRequest: reque
 
 Given('an unassigned arrest case exists', async ({ backendRequest: request, casesWorld, workerHub }) => {
   const etId = await arrestCaseTypeId(request, workerHub)
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   casesWorld.lastRecordId = (record as { id: string }).id
 })
 
@@ -68,7 +68,6 @@ Given('a case assigned to a volunteer exists', async ({ backendRequest: request,
   // Create a new case and assign the admin to it so the Unassign button appears
   const adminPubkey = process.env.ADMIN_PUBKEY || '79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183'
   const record = await createRecordViaApi(request, etId, {
-    statusHash: 'reported',
     assignedTo: [adminPubkey],
     hubId: workerHub,
   })
@@ -207,7 +206,7 @@ Then('the auto-assignment indicator should be visible', async ({ page }) => {
 
 When('a new arrest case is created via API', async ({ backendRequest: request, casesWorld, workerHub }) => {
   const etId = await arrestCaseTypeId(request, workerHub)
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   casesWorld.lastRecordId = (record as { id: string }).id
 })
 

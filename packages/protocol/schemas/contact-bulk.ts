@@ -60,8 +60,7 @@ export const bulkCreateContactBodySchema = z.object({
     blindIndexes: z.object({
       identifierHashes: z.array(z.string()).optional().default([]),
       tagHashes: z.array(z.string()).optional().default([]),
-      contactTypeHash: z.string().optional(),
-    }),
+    }).strict(),
     trigramTokens: z.array(z.string()).optional().default([]),
     nameHash: z.string().optional(),
   })).min(1).max(100),

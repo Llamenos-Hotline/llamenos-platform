@@ -31,7 +31,6 @@ export const eventSchema = z.object({
 
   // --- Blind indexes (server-filterable) ---
   eventTypeHash: z.string(),
-  statusHash: z.string(),
   blindIndexes: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
 
   // --- E2EE encrypted details ---
@@ -61,11 +60,10 @@ export const createEventBodySchema = z.object({
   locationPrecision: locationPrecisionSchema.optional().default('neighborhood'),
   locationApproximate: z.string().optional(),
   eventTypeHash: z.string(),
-  statusHash: z.string(),
   blindIndexes: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional().default({}),
   encryptedDetails: z.string().min(1),
   detailEnvelopes: z.array(recipientEnvelopeSchema).min(1),
-})
+}).strict()
 
 export type CreateEventBody = z.infer<typeof createEventBodySchema>
 
@@ -79,11 +77,10 @@ export type UpdateEventBody = z.infer<typeof updateEventBodySchema>
 
 export const listEventsQuerySchema = paginationSchema.extend({
   eventTypeHash: z.string().optional(),
-  statusHash: z.string().optional(),
   parentEventId: z.string().optional(),
   startAfter: z.string().optional(),
   startBefore: z.string().optional(),
-})
+}).strict()
 
 export type ListEventsQuery = z.infer<typeof listEventsQuerySchema>
 

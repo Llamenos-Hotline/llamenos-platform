@@ -82,8 +82,10 @@ final class EventsViewModel {
         allEntityTypes.first { $0.id == id }
     }
 
+    /// The event's status, read from its sealed details: the server holds none (#2779).
     func statusDef(for event: EventListResponseEvent) -> SharedStatus? {
-        entityType(for: event.entityTypeID)?.statuses.first { $0.value == event.statusHash }
+        guard let status = decryptedDetails[event.id]?.status else { return nil }
+        return entityType(for: event.entityTypeID)?.statuses.first { $0.value == status }
     }
 
     func decryptedTitle(for eventId: String) -> String? {
@@ -294,7 +296,8 @@ final class EventsViewModel {
                     let details = DecryptedEventDetails(
                         title: json["title"] as? String ?? json["name"] as? String,
                         description: json["description"] as? String,
-                        location: json["location"] as? String
+                        location: json["location"] as? String,
+                        status: json["status"] as? String
                     )
                     decryptedDetails[event.id] = details
                 }
@@ -332,8 +335,9 @@ final class EventsViewModel {
             return false
         }
 
-        // Build plaintext details JSON
-        var detailsDict: [String: Any] = ["title": title]
+        // Build plaintext details JSON. The status is sealed here and nowhere else: the
+        // server never receives it (#2779).
+        var detailsDict: [String: Any] = ["title": title, "status": entityType.defaultStatus]
         if let desc = description, !desc.isEmpty {
             detailsDict["description"] = desc
         }
@@ -371,8 +375,8 @@ final class EventsViewModel {
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime]
 
-        // The server requires eventTypeHash/statusHash; both are the entity
-        // type's identifiers (createEventBodySchema).
+        // The server requires eventTypeHash (the entity type's id; registered as known
+        // debt, #2191). It receives no status.
         let body = CreateEventBody(
             blindIndexes: [:],
             detailEnvelopes: envelopes,
@@ -383,8 +387,7 @@ final class EventsViewModel {
             locationApproximate: location,
             locationPrecision: location != nil ? .neighborhood : .none,
             parentEventID: nil,
-            startDate: isoFormatter.string(from: startDate),
-            statusHash: entityType.defaultStatus
+            startDate: isoFormatter.string(from: startDate)
         )
 
         do {
@@ -443,4 +446,6 @@ struct DecryptedEventDetails {
     let title: String?
     let description: String?
     let location: String?
+    /// The status VALUE (the entity type's `statuses[].value`), sealed with the details.
+    let status: String?
 }

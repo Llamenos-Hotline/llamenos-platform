@@ -212,7 +212,7 @@ async function seedHub(hubId: string, owner: Actor): Promise<HubData> {
     hubId, encryptedDetails: 'group-ciphertext', createdBy: owner.pubkey,
   }).returning()
   const [event] = await db.insert(events).values({
-    hubId, eventTypeHash: 'event-type', statusHash: 'open', createdBy: owner.pubkey,
+    hubId, eventTypeHash: 'event-type', locationApproximate: `place-${hubId}`, createdBy: owner.pubkey,
   }).returning()
   const firehoseId = `fh-${hubId}`
   await db.insert(firehoseConnections).values({
@@ -310,7 +310,7 @@ const ATTEMPTS: Attempt[] = [
   { router: 'directory', name: 'list group members', method: 'GET', path: d => `/directory/groups/${d.groupId}/members` },
   // events
   { router: 'events', name: 'read', method: 'GET', path: d => `/events/${d.eventId}` },
-  { router: 'events', name: 'update', method: 'PATCH', path: d => `/events/${d.eventId}`, body: { statusHash: 'hijacked' } },
+  { router: 'events', name: 'update', method: 'PATCH', path: d => `/events/${d.eventId}`, body: { locationApproximate: 'hijacked' } },
   { router: 'events', name: 'delete', method: 'DELETE', path: d => `/events/${d.eventId}` },
   { router: 'events', name: 'list subevents', method: 'GET', path: d => `/events/${d.eventId}/subevents` },
   // firehose
@@ -363,7 +363,7 @@ describe('hub A admin, through hub A, cannot reach hub B resources', () => {
     expect(group.encryptedDetails).toBe('group-ciphertext')
 
     const [event] = await db.select().from(events).where(eq(events.id, data.B.eventId))
-    expect(event.statusHash).toBe('open')
+    expect(event.locationApproximate).toBe(`place-${HUB_B}`)
     const [fh] = await db.select().from(firehoseConnections).where(eq(firehoseConnections.id, data.B.firehoseId))
     expect(fh.status).toBe('pending')
     expect(fh.displayName).toBe(`firehose-${HUB_B}`)

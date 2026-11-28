@@ -45,8 +45,6 @@ export async function createInteraction(recordId: string, hubId: string, body: {
   encryptedContent?: string
   contentEnvelopes?: RecipientEnvelope[]
   interactionTypeHash: string
-  previousStatusHash?: string
-  newStatusHash?: string
 }) {
   return request<CaseInteraction>(hubPath(hubId, `/records/${recordId}/interactions`), {
     method: 'POST',

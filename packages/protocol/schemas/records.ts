@@ -10,10 +10,9 @@ export const recordSchema = z.object({
   entityTypeId: z.uuid(),
   caseNumber: z.string().optional(),
 
-  // --- Blind indexes (server-filterable) ---
-  statusHash: z.string(),
-  severityHash: z.string().optional(),
-  categoryHash: z.string().optional(),
+  // --- Server-filterable fields ---
+  // Status, severity and category are NOT here: they live only in the sealed
+  // summary and are filtered on the client (#2779, #3114).
   assignedTo: z.array(z.string()),
   blindIndexes: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
 
@@ -47,11 +46,10 @@ export type CaseRecord = z.infer<typeof recordSchema>
 
 // --- Create record body ---
 
+// `.strict()` refuses any key not named here — including the retired plaintext
+// index fields a stale client may still send — rather than silently dropping it.
 export const createRecordBodySchema = z.object({
   entityTypeId: z.uuid(),
-  statusHash: z.string(),
-  severityHash: z.string().optional(),
-  categoryHash: z.string().optional(),
   assignedTo: z.array(z.string()).optional().default([]),
   blindIndexes: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional().default({}),
   encryptedSummary: z.string().min(1),
@@ -65,14 +63,14 @@ export const createRecordBodySchema = z.object({
     contactId: z.uuid(),
     role: z.string(),
   })).optional(),
-})
+}).strict()
 
 export type CreateRecordBody = z.input<typeof createRecordBodySchema>
 
 // --- Update record body (partial, with optional status change interaction metadata) ---
 
 export const updateRecordBodySchema = forPatch(createRecordBodySchema).extend({
-  // Status change interaction metadata (Epic 323) — when statusHash changes,
+  // Status change interaction metadata (Epic 323) — when the sealed status changes,
   // these fields let the client provide encrypted content for the auto-created
   // status_change interaction in the case timeline.
   statusChangeTypeHash: z.string().optional(),
@@ -80,7 +78,7 @@ export const updateRecordBodySchema = forPatch(createRecordBodySchema).extend({
   statusChangeEnvelopes: z.array(recipientEnvelopeSchema).optional(),
   // Close a record (Epic 326 — screen pop uses closedAt to filter active vs closed)
   closedAt: z.string().optional(),
-})
+}).strict()
 
 export type UpdateRecordBody = z.input<typeof updateRecordBodySchema>
 
@@ -88,14 +86,12 @@ export type UpdateRecordBody = z.input<typeof updateRecordBodySchema>
 
 export const listRecordsQuerySchema = paginationSchema.extend({
   entityTypeId: z.string().optional(),
-  statusHash: z.string().optional(),
-  severityHash: z.string().optional(),
   assignedTo: z.string().optional(),
   parentRecordId: z.string().optional(),
   crossHub: z.string().optional(), // 'true' | 'false' — string because query params are strings
   blindIndexToken: z.string().optional(),
   blindIndexField: z.string().optional(),
-})
+}).strict()
 
 export type ListRecordsQuery = z.infer<typeof listRecordsQuerySchema>
 

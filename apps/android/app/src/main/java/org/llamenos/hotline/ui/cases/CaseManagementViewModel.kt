@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.llamenos.core.CasePurpose
@@ -44,6 +45,9 @@ import org.llamenos.protocol.SharedAdminEnvelope
 import org.llamenos.protocol.UnassignBody
 import org.llamenos.protocol.RecordContact
 import javax.inject.Inject
+
+/** Records per page of the case list, filtered or not. */
+private const val RECORDS_PAGE_SIZE = 20
 
 /**
  * Active detail tab on the case detail screen.
@@ -78,6 +82,15 @@ enum class TimelineSortOrder {
 data class DecryptedSummary(
     val title: String? = null,
     val description: String? = null,
+    /** The status VALUE (the entity type's `statuses[].value`), sealed with the summary. */
+    val status: String? = null,
+    /** The severity VALUE (the entity type's `severities[].value`), sealed with the summary. */
+    val severity: String? = null,
+    /**
+     * The summary exactly as opened. A status change re-seals the WHOLE summary, so keys this
+     * client does not read must survive it.
+     */
+    val raw: JsonObject = JsonObject(emptyMap()),
 )
 
 /**
@@ -100,7 +113,14 @@ data class CaseUiState(
 
     // Filters
     val selectedEntityTypeId: String? = null,
-    val selectedStatusHash: String? = null,
+    /** The status VALUE the list is filtered by, or null. Applied on this device: the server holds no status. */
+    val selectedStatus: String? = null,
+    /**
+     * A status filter is active and its scan stopped at [CaseTriage.SCAN_LIMIT] with candidates left,
+     * so the list is matches among the newest records only. The screen says so, and an empty list
+     * says it too: it must not read as "none".
+     */
+    val filterScanBounded: Boolean = false,
 
     // EP06-A4: display mode and cross-hub
     val displayType: CaseDisplayType = CaseDisplayType.TABLE,
@@ -148,8 +168,8 @@ data class CaseUiState(
     val actionError: String? = null,
     val actionSuccess: String? = null,
 
-    // Decrypted record titles for list display (record ID -> title)
-    val decryptedRecordTitles: Map<String, String> = emptyMap(),
+    // Opened summaries for list display (record ID -> title, status, severity)
+    val decryptedRecordSummaries: Map<String, DecryptedSummary> = emptyMap(),
 ) {
     /**
      * Active entity types that should be shown in the tab bar.
@@ -205,6 +225,11 @@ class CaseManagementViewModel @Inject constructor(
         encodeDefaults = true
     }
 
+    /** Reads and re-seals the sealed summary: status and severity live there, the server holds none. */
+    private val summaries = RecordSummaries(apiService, cryptoService, sessionState)
+
+    private suspend fun openSummary(record: Record): DecryptedSummary? = summaries.open(record)
+
     init {
         activeHubState.activeHubId
             .filterNotNull()
@@ -252,12 +277,13 @@ class CaseManagementViewModel @Inject constructor(
      * Load case records from GET /api/records with optional filters.
      *
      * @param entityTypeId Filter by entity type (null for all types)
-     * @param statusHash Filter by status blind index (null for all statuses)
+     * @param status Filter by status VALUE (null for all statuses). The status lives in the sealed
+     *   summary, so this is applied here, over a bounded scan (see [CaseTriage]).
      * @param page Page number for pagination
      */
     fun loadRecords(
         entityTypeId: String? = _uiState.value.selectedEntityTypeId,
-        statusHash: String? = _uiState.value.selectedStatusHash,
+        status: String? = _uiState.value.selectedStatus,
         page: Int = 1,
     ) {
         viewModelScope.launch {
@@ -269,14 +295,15 @@ class CaseManagementViewModel @Inject constructor(
                 )
             }
             try {
+                if (status != null) {
+                    loadFilteredRecords(entityTypeId, status, page)
+                    return@launch
+                }
                 val query = buildString {
                     append(apiService.activeHubPath("/api/records"))
-                    append("?limit=20&page=$page")
+                    append("?limit=$RECORDS_PAGE_SIZE&page=$page")
                     if (entityTypeId != null) {
                         append("&entityTypeId=$entityTypeId")
-                    }
-                    if (statusHash != null) {
-                        append("&statusHash=$statusHash")
                     }
                     if (_uiState.value.crossHubEnabled) {
                         append("&crossHub=true")
@@ -289,6 +316,7 @@ class CaseManagementViewModel @Inject constructor(
                         recordsTotal = response.total,
                         recordsPage = response.page,
                         hasMoreRecords = response.hasMore,
+                        filterScanBounded = false,
                         isLoadingRecords = false,
                         isRefreshingRecords = false,
                     )
@@ -311,21 +339,62 @@ class CaseManagementViewModel @Inject constructor(
     }
 
     /**
+     * Fetch the candidates the server can filter on (hub, entity type), open each summary and keep
+     * the records whose status is [wanted], up to [CaseTriage.SCAN_LIMIT] records. The matches are
+     * paged locally and `recordsTotal` is the size of the local result.
+     */
+    private suspend fun loadFilteredRecords(entityTypeId: String?, wanted: String, page: Int) {
+        val summaries = mutableMapOf<String, DecryptedSummary>()
+        val crossHub = _uiState.value.crossHubEnabled
+
+        val scan = scanRecords(
+            fetchPage = { pageNo, limit ->
+                val query = buildString {
+                    append(apiService.activeHubPath("/api/records"))
+                    append("?limit=$limit&page=$pageNo")
+                    if (entityTypeId != null) append("&entityTypeId=$entityTypeId")
+                    if (crossHub) append("&crossHub=true")
+                }
+                val response = apiService.request<RecordsListResponse>("GET", query)
+                CandidatePage(response.records, response.hasMore)
+            },
+            matches = { record ->
+                val summary = openSummary(record)
+                if (summary != null) summaries[record.id] = summary
+                summary?.status == wanted
+            },
+        )
+
+        _uiState.update {
+            it.copy(
+                records = CaseTriage.pageOf(scan.matches, page, RECORDS_PAGE_SIZE),
+                recordsTotal = scan.matches.size,
+                recordsPage = page,
+                hasMoreRecords = page * RECORDS_PAGE_SIZE < scan.matches.size,
+                filterScanBounded = scan.bounded,
+                decryptedRecordSummaries = it.decryptedRecordSummaries + summaries,
+                isLoadingRecords = false,
+                isRefreshingRecords = false,
+            )
+        }
+    }
+
+    /**
      * Select an entity type tab to filter records.
      *
      * @param entityTypeId The entity type ID, or null for "All"
      */
     fun setEntityTypeFilter(entityTypeId: String?) {
-        _uiState.update { it.copy(selectedEntityTypeId = entityTypeId, selectedStatusHash = null) }
-        loadRecords(entityTypeId = entityTypeId, statusHash = null)
+        _uiState.update { it.copy(selectedEntityTypeId = entityTypeId, selectedStatus = null) }
+        loadRecords(entityTypeId = entityTypeId, status = null)
     }
 
     /**
-     * Set the status filter for record listing.
+     * Set the status filter for record listing. [status] is a status VALUE.
      */
-    fun setStatusFilter(statusHash: String?) {
-        _uiState.update { it.copy(selectedStatusHash = statusHash) }
-        loadRecords(statusHash = statusHash)
+    fun setStatusFilter(status: String?) {
+        _uiState.update { it.copy(selectedStatus = status) }
+        loadRecords(status = status)
     }
 
     // ---- Record Detail ----
@@ -341,6 +410,8 @@ class CaseManagementViewModel @Inject constructor(
                     isLoadingDetail = true,
                     detailError = null,
                     selectedRecord = null,
+                    // Another record's status must never show against this one.
+                    decryptedSummary = null,
                     interactions = emptyList(),
                     contacts = emptyList(),
                     evidence = emptyList(),
@@ -378,24 +449,37 @@ class CaseManagementViewModel @Inject constructor(
     }
 
     /**
-     * Update the status of a record via PATCH /api/records/:id.
+     * Change a record's status: re-seal its summary with the new status VALUE and file the
+     * transition as a sealed status-change entry. Nothing about the status travels in the clear
+     * (#2779).
+     *
+     * A status change REPLACES the summary, so the title, description and severity it carries come
+     * from the current ciphertext. A summary this device cannot open is refused, never overwritten
+     * with a blank one; and so is a re-seal whose reader lookup failed, which would drop every
+     * assignee the record already had.
      *
      * @param recordId The record ID
-     * @param statusHash The new status blind index
+     * @param status The new status VALUE
      */
-    fun updateStatus(recordId: String, statusHash: String) {
+    fun updateStatus(recordId: String, status: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isUpdatingStatus = true, actionError = null) }
             try {
-                val request = UpdateRecordRequest(statusHash = statusHash)
-                val updated = apiService.request<CaseRecord>("PATCH", apiService.activeHubPath("/api/records/$recordId"), request)
+                val record = _uiState.value.selectedRecord?.takeIf { it.id == recordId }
+                    ?: _uiState.value.records.firstOrNull { it.id == recordId }
+                    ?: error("Record not loaded")
+                val updated = summaries.changeStatus(record, status)
                 _uiState.update {
                     it.copy(
                         selectedRecord = updated,
+                        // The cached summary is the old ciphertext's.
+                        decryptedSummary = null,
+                        decryptedRecordSummaries = it.decryptedRecordSummaries - recordId,
                         isUpdatingStatus = false,
                         actionSuccess = "Status updated",
                     )
                 }
+                decryptSummary(updated)
                 // Reload the interactions to show the status change entry
                 loadInteractions(recordId)
                 // Refresh the list to reflect the new status
@@ -671,30 +755,8 @@ class CaseManagementViewModel @Inject constructor(
 
         viewModelScope.launch {
             _uiState.update { it.copy(isDecryptingSummary = true) }
-            try {
-                val plaintext = cryptoService.openCase(
-                    CasePurpose.SUMMARY,
-                    record.encryptedSummary,
-                    record.summaryEnvelopes.map { it.toRecipientEnvelope() },
-                )
-                if (plaintext != null) {
-                    val jsonObj = json.decodeFromString<JsonObject>(plaintext)
-                    val summary = DecryptedSummary(
-                        title = jsonObj["title"]?.jsonPrimitive?.contentOrNull,
-                        description = jsonObj["description"]?.jsonPrimitive?.contentOrNull,
-                    )
-                    _uiState.update {
-                        it.copy(
-                            decryptedSummary = summary,
-                            isDecryptingSummary = false,
-                        )
-                    }
-                } else {
-                    _uiState.update { it.copy(isDecryptingSummary = false) }
-                }
-            } catch (_: Exception) {
-                _uiState.update { it.copy(isDecryptingSummary = false) }
-            }
+            val summary = openSummary(record)
+            _uiState.update { it.copy(decryptedSummary = summary, isDecryptingSummary = false) }
         }
     }
 
@@ -740,7 +802,12 @@ class CaseManagementViewModel @Inject constructor(
      * Decrypt an interaction's encrypted content.
      */
     fun decryptInteraction(interaction: Interaction) {
-        if (interaction.interactionType != InteractionType.Comment) return
+        // A status change seals its transition the way a comment seals its text.
+        if (interaction.interactionType != InteractionType.Comment &&
+            interaction.interactionType != InteractionType.StatusChange
+        ) {
+            return
+        }
         val encryptedContent = interaction.encryptedContent ?: return
         val envelopes = interaction.contentEnvelopes?.takeIf { it.isNotEmpty() } ?: return
 
@@ -771,35 +838,15 @@ class CaseManagementViewModel @Inject constructor(
     }
 
     /**
-     * Decrypt summaries for list records to show titles.
+     * Open the summaries of the listed records: the title, status and severity the list shows.
      */
-    fun decryptRecordTitles(records: List<Record>) {
+    fun decryptRecordSummaries(records: List<Record>) {
         viewModelScope.launch {
             for (record in records) {
-                // Skip if already decrypted
-                if (_uiState.value.decryptedRecordTitles.containsKey(record.id)) continue
-                if (record.summaryEnvelopes.isEmpty()) continue
-
-                try {
-                    val plaintext = cryptoService.openCase(
-                        CasePurpose.SUMMARY,
-                        record.encryptedSummary,
-                        record.summaryEnvelopes.map { it.toRecipientEnvelope() },
-                    )
-                    if (plaintext != null) {
-                        val jsonObj = json.decodeFromString<JsonObject>(plaintext)
-                        val title = jsonObj["title"]?.jsonPrimitive?.contentOrNull
-                        if (title != null) {
-                            _uiState.update {
-                                it.copy(
-                                    decryptedRecordTitles = it.decryptedRecordTitles + (record.id to title),
-                                )
-                            }
-                        }
-                    }
-                } catch (_: Exception) {
-                    // Skip — leave as encrypted
-                }
+                // Skip if already opened
+                if (_uiState.value.decryptedRecordSummaries.containsKey(record.id)) continue
+                val summary = openSummary(record) ?: continue
+                _uiState.update { it.copy(decryptedRecordSummaries = it.decryptedRecordSummaries + (record.id to summary)) }
             }
         }
     }
@@ -892,5 +939,5 @@ class CaseManagementViewModel @Inject constructor(
 }
 
 /** A record/interaction envelope as the reader-envelope shape CryptoService opens. */
-private fun SharedAdminEnvelope.toRecipientEnvelope() =
+internal fun SharedAdminEnvelope.toRecipientEnvelope() =
     RecipientEnvelope(pubkey = pubkey, enc = enc, ct = ct)

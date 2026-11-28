@@ -95,8 +95,8 @@ Given('two records exist in the case management system', async ({ world, request
   })
   const entityTypeId = String(et.id)
 
-  const r1 = await createRecordViaApi(request, entityTypeId, { hubId, statusHash: 'status_open_hash' })
-  const r2 = await createRecordViaApi(request, entityTypeId, { hubId, statusHash: 'status_open_hash' })
+  const r1 = await createRecordViaApi(request, entityTypeId, { hubId, status: 'status_open_hash' })
+  const r2 = await createRecordViaApi(request, entityTypeId, { hubId, status: 'status_open_hash' })
   setAdv(world, { recordIds: [String(r1.id), String(r2.id)] })
 })
 

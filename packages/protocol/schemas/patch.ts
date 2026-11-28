@@ -18,8 +18,8 @@ const defOf = (field: z.ZodType): WrapperDef => field._zod.def as unknown as Wra
  *
  * ```
  * const update = createRecordBodySchema.partial()
- * update.parse({ statusHash: 'x' })
- * // => { statusHash: 'x', assignedTo: [], blindIndexes: {} }
+ * update.parse({ encryptedSummary: 'x' })
+ * // => { encryptedSummary: 'x', assignedTo: [], blindIndexes: {} }
  * ```
  *
  * A handler that writes every defined key (`if (input.k !== undefined) ...`)

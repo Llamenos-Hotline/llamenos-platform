@@ -247,7 +247,7 @@ Given('arrest cases exist', async ({ backendRequest: request, workerHub }) => {
   const etId = (arrestType as { id: string }).id
   const records = await listRecordsViaApi(request, { entityTypeId: etId, hubId: workerHub })
   if (records.records.length === 0) {
-    await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+    await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   }
 })
 
@@ -256,8 +256,8 @@ Given('arrest cases with multiple statuses exist', async ({ backendRequest: requ
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
-  await createRecordViaApi(request, etId, { statusHash: 'in_progress', hubId: workerHub }).catch(() => {})
+  await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
+  await createRecordViaApi(request, etId, { status: 'in_progress', hubId: workerHub }).catch(() => {})
 })
 
 Given('an arrest case exists', async ({ backendRequest: request, casesWorld, workerHub }) => {
@@ -270,7 +270,6 @@ Given('an arrest case exists', async ({ backendRequest: request, casesWorld, wor
   // assigned to them so they can see it with cases:read-assigned permission.
   if (casesWorld.volunteerPubkey) {
     const record = await createRecordViaApi(request, etId, {
-      statusHash: 'reported',
       assignedTo: [casesWorld.volunteerPubkey],
       hubId: workerHub,
     })
@@ -281,7 +280,7 @@ Given('an arrest case exists', async ({ backendRequest: request, casesWorld, wor
   // For admin: reuse existing or create new
   const records = await listRecordsViaApi(request, { entityTypeId: etId, hubId: workerHub })
   if (records.records.length === 0) {
-    const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+    const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
     casesWorld.lastCreatedRecordId = (record as { id: string }).id
   } else {
     casesWorld.lastCreatedRecordId = (records.records[0] as { id: string }).id
@@ -293,7 +292,7 @@ Given('an arrest case with status {string} exists', async ({ backendRequest: req
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: status, hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: status, hubId: workerHub })
   casesWorld.lastCreatedRecordId = (record as { id: string }).id
 })
 
@@ -304,7 +303,7 @@ Given('an arrest case exists with multiple field sections', async ({ backendRequ
   const etId = (arrestType as { id: string }).id
   const records = await listRecordsViaApi(request, { entityTypeId: etId, hubId: workerHub })
   if (records.records.length === 0) {
-    const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+    const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
     casesWorld.lastCreatedRecordId = (record as { id: string }).id
   } else {
     casesWorld.lastCreatedRecordId = (records.records[0] as { id: string }).id
@@ -536,7 +535,7 @@ Given('an arrest case with interactions exists', async ({ backendRequest: reques
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   const recordId = (record as { id: string }).id
   casesWorld.lastCreatedRecordId = recordId
   await createInteractionViaApi(request, recordId, { interactionType: 'comment', hubId: workerHub })
@@ -547,7 +546,7 @@ Given('an arrest case with a comment interaction exists', async ({ backendReques
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   const recordId = (record as { id: string }).id
   casesWorld.lastCreatedRecordId = recordId
   await createInteractionViaApi(request, recordId, { interactionType: 'comment', hubId: workerHub })
@@ -558,7 +557,7 @@ Given('an arrest case with multiple interactions exists', async ({ backendReques
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   const recordId = (record as { id: string }).id
   casesWorld.lastCreatedRecordId = recordId
   await createInteractionViaApi(request, recordId, { interactionType: 'comment', hubId: workerHub })
@@ -570,7 +569,7 @@ Given('an arrest case with comment and status_change interactions exists', async
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   const recordId = (record as { id: string }).id
   casesWorld.lastCreatedRecordId = recordId
   await createInteractionViaApi(request, recordId, { interactionType: 'comment', hubId: workerHub })
@@ -584,7 +583,7 @@ Given('an arrest case is selected with the Timeline tab active', async ({ page, 
   const etId = (arrestType as { id: string }).id
   const records = await listRecordsViaApi(request, { entityTypeId: etId, hubId: workerHub })
   if (records.records.length === 0) {
-    await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+    await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   }
   await navigateAfterLogin(page, '/cases')
   const card = page.getByTestId('case-card').first()
@@ -690,7 +689,7 @@ Given('an arrest case with linked contacts exists', async ({ backendRequest: req
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   const recordId = (record as { id: string }).id
   casesWorld.lastCreatedRecordId = recordId
   const contact = await createContactByNameViaApi(request, `Test Contact ${Date.now()}`, { hubId: workerHub })
@@ -703,7 +702,7 @@ Given('an arrest case with no linked contacts exists', async ({ backendRequest: 
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   casesWorld.lastCreatedRecordId = (record as { id: string }).id
 })
 
@@ -728,7 +727,7 @@ Given('an arrest case with evidence exists', async ({ backendRequest: request, c
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   const recordId = (record as { id: string }).id
   casesWorld.lastCreatedRecordId = recordId
   await uploadEvidenceViaApi(request, recordId, { classification: 'photo', hubId: workerHub })
@@ -739,7 +738,7 @@ Given('an arrest case with photo and document evidence exists', async ({ backend
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   const recordId = (record as { id: string }).id
   casesWorld.lastCreatedRecordId = recordId
   await uploadEvidenceViaApi(request, recordId, { classification: 'photo', hubId: workerHub })
@@ -751,7 +750,7 @@ Given('an arrest case with no evidence exists', async ({ backendRequest: request
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   casesWorld.lastCreatedRecordId = (record as { id: string }).id
 })
 
@@ -816,7 +815,7 @@ Given('an arrest case exists that is not assigned to me', async ({ backendReques
   const arrestType = entityTypes.find(et => (et as { name?: string }).name === 'arrest_case')
   if (!arrestType) return
   const etId = (arrestType as { id: string }).id
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   casesWorld.lastCreatedRecordId = (record as { id: string }).id
 })
 
@@ -848,7 +847,7 @@ Given('more than 50 cases exist', async ({ backendRequest: request, workerHub })
     // Create enough records to exceed 50
     const needed = 51 - result.total
     for (let i = 0; i < Math.min(needed, 55); i++) {
-      await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub }).catch(() => {})
+      await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub }).catch(() => {})
     }
   }
 })
@@ -878,12 +877,11 @@ Given('a parent case with child records exists', async ({ backendRequest: reques
   const entityTypeId = (entityTypes[0] as { id: string }).id
 
   // Create parent record
-  const parent = await createRecordViaApi(request, entityTypeId, { statusHash: 'reported', hubId: workerHub })
+  const parent = await createRecordViaApi(request, entityTypeId, { status: 'reported', hubId: workerHub })
   casesWorld.lastCreatedRecordId = (parent as { id: string }).id
 
   // Create child record linked to parent
   await createRecordViaApi(request, entityTypeId, {
-    statusHash: 'reported',
     hubId: workerHub,
     parentRecordId: casesWorld.lastCreatedRecordId,
   })

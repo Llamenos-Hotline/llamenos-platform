@@ -14,7 +14,7 @@
  * for OR queries (e.g., createdMonth=abc123,def456 matches March OR April).
  *
  * @example
- * ?statusHash=abc123&severityHash=def456&createdMonth=ghi789,jkl012
+ * ?nameHash=abc123&tagHash=def456&createdMonth=ghi789,jkl012
  */
 export function parseBlindIndexFilters(
   searchParams: URLSearchParams,
@@ -28,7 +28,7 @@ export function parseBlindIndexFilters(
       key.endsWith('_day') ||
       key.endsWith('_week') ||
       key.endsWith('_month') ||
-      key === 'nameToken'
+      key === 'nameHash'
     ) {
       filters.set(
         key,

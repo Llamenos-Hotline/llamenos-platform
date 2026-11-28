@@ -74,7 +74,7 @@ const hubOwnedReads: Array<[string, () => Promise<unknown>, string]> = [
 
 /** Writes that used to land in hub '' when no hub was active (#2461). */
 const hubOwnedWrites: Array<[string, () => Promise<unknown>, string]> = [
-  ['createRecord', () => createRecord({ entityTypeId: 'et-1', statusHash: 's', encryptedSummary: 'c', summaryEnvelopes: [] }), '/records'],
+  ['createRecord', () => createRecord({ entityTypeId: 'et-1', encryptedSummary: 'c', summaryEnvelopes: [] }), '/records'],
   ['deleteRecord', () => deleteRecord('rec-1'), '/records/rec-1'],
   ['clockIn', () => clockIn(), '/shifts/clock-in'],
   ['createRingGroup', () => createRingGroup({ id: 'rg-1', encryptedName: 'n' }), '/ring-groups'],

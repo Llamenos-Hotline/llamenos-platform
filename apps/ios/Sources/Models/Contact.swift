@@ -143,7 +143,6 @@ struct ContactLinkedCase: Codable, Identifiable, Sendable {
     let id: String
     let caseNumber: String?
     let entityTypeId: String
-    let statusHash: String
     let role: String?
     let createdAt: String
 }

@@ -283,10 +283,6 @@ struct ContactDetailView: View {
                                             Capsule().fill(Color.brandPrimary.opacity(0.12))
                                         )
                                 }
-
-                                Text(linkedCase.statusHash)
-                                    .font(.brand(.caption))
-                                    .foregroundStyle(.secondary)
                             }
                         }
 

@@ -239,6 +239,8 @@ private fun CustodyEntryCard(
 fun EntityCalendarContent(
     records: List<Record>,
     onRecordClick: (String) -> Unit,
+    /** Record id → opened summary: the status lives there, the server holds none. */
+    summaries: Map<String, DecryptedSummary> = emptyMap(),
     modifier: Modifier = Modifier,
 ) {
     if (records.isEmpty()) {
@@ -286,6 +288,7 @@ fun EntityCalendarContent(
             items(recs, key = { it.id }) { record ->
                 CalendarRecordRow(
                     record = record,
+                    status = summaries[record.id]?.status,
                     onClick = { onRecordClick(record.id) },
                     modifier = Modifier.testTag("calendar-record-${record.id}"),
                 )
@@ -297,6 +300,7 @@ fun EntityCalendarContent(
 @Composable
 private fun CalendarRecordRow(
     record: Record,
+    status: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -321,7 +325,7 @@ private fun CalendarRecordRow(
                 )
             }
             Text(
-                text = record.statusHash?.take(6) ?: "",
+                text = status ?: "—",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -340,6 +344,8 @@ private fun CalendarRecordRow(
 fun EntityTimelineContent(
     records: List<Record>,
     onRecordClick: (String) -> Unit,
+    /** Record id → opened summary: the status lives there, the server holds none. */
+    summaries: Map<String, DecryptedSummary> = emptyMap(),
     modifier: Modifier = Modifier,
 ) {
     val sorted = remember(records) { records.sortedByDescending { it.createdAt } }
@@ -362,6 +368,7 @@ fun EntityTimelineContent(
         items(sorted, key = { it.id }) { record ->
             TimelineRecordRow(
                 record = record,
+                status = summaries[record.id]?.status,
                 onClick = { onRecordClick(record.id) },
                 modifier = Modifier.testTag("timeline-record-${record.id}"),
             )
@@ -372,6 +379,7 @@ fun EntityTimelineContent(
 @Composable
 private fun TimelineRecordRow(
     record: Record,
+    status: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -398,9 +406,9 @@ private fun TimelineRecordRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (record.statusHash != null) {
+            if (status != null) {
                 Text(
-                    text = record.statusHash.take(6),
+                    text = status,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

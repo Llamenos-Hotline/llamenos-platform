@@ -5,8 +5,8 @@ import { cn } from '@/lib/utils'
 import type { EnumOption } from '@/lib/api'
 
 interface StatusPillProps {
-  /** Current status value (the .value from EnumOption) */
-  currentStatus: string
+  /** Current status value (the .value from EnumOption); undefined while the summary is being opened or cannot be */
+  currentStatus: string | undefined
   /** All available statuses from the entity type definition */
   statuses: EnumOption[]
   /** Called when user selects a new status */
@@ -35,7 +35,7 @@ export function StatusPill({
 
   const current = statuses.find(s => s.value === currentStatus)
   const color = current?.color ?? '#6b7280'
-  const label = current?.label ?? currentStatus
+  const label = current?.label ?? currentStatus ?? '—'
 
   // Close on click outside
   useEffect(() => {

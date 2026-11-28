@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { formatRelativeTime } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Clock } from 'lucide-react'
+import { useTriage } from '@/lib/case-triage'
 import type { CaseRecord, EntityTypeDefinition } from '@/lib/api'
 
 interface CaseCardProps {
@@ -13,9 +14,11 @@ interface CaseCardProps {
 
 export function CaseCard({ record, entityType, isSelected, onSelect }: CaseCardProps) {
   const { t } = useTranslation()
-  const statusDef = entityType?.statuses.find(s => s.value === record.statusHash)
+  // The status lives in the sealed summary
+  const triage = useTriage(record)
+  const statusDef = entityType?.statuses.find(s => s.value === triage?.status)
   const statusColor = statusDef?.color ?? '#6b7280'
-  const statusLabel = statusDef?.label ?? record.statusHash
+  const statusLabel = statusDef?.label ?? triage?.status ?? '—'
   const relativeTime = formatRelativeTime(record.updatedAt, t)
 
   return (

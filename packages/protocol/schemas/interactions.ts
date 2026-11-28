@@ -34,10 +34,6 @@ export const caseInteractionSchema = z.object({
   authorPubkey: z.string(),
   interactionTypeHash: z.string(),       // Blind index for filtering by type
   createdAt: z.string(),
-
-  // --- Status change metadata ---
-  previousStatusHash: z.string().optional(),
-  newStatusHash: z.string().optional(),
 })
 
 export type CaseInteraction = z.infer<typeof caseInteractionSchema>
@@ -50,9 +46,7 @@ export const createInteractionBodySchema = z.object({
   encryptedContent: z.string().max(65536).optional(),
   contentEnvelopes: z.array(recipientEnvelopeSchema).optional(),
   interactionTypeHash: z.string(),
-  previousStatusHash: z.string().optional(),
-  newStatusHash: z.string().optional(),
-}).refine(
+}).strict().refine(
   (data) => {
     // Linked interactions must have sourceId; inline interactions must have content
     if (['note', 'call', 'message'].includes(data.interactionType)) {

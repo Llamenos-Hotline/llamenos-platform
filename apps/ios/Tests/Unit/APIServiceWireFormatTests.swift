@@ -233,14 +233,12 @@ final class APIServiceWireFormatTests: XCTestCase {
             // overrode to "hub_id".
             ("createContact", CreateContactBody(
                 blindIndexes: ["nameToken": .string("f00dcafe")],
-                contactTypeHash: nil,
                 encryptedPII: Self.ct,
                 encryptedSummary: Self.ct,
                 hubID: "22222222-2222-4222-8222-222222222222",
                 identifierHashes: ["deadbeef"],
                 nameHash: "cafed00d",
                 piiEnvelopes: [Self.admin],
-                statusHash: nil,
                 summaryEnvelopes: [Self.admin],
                 tagHashes: nil,
                 trigramTokens: ["abc"]
@@ -252,14 +250,12 @@ final class APIServiceWireFormatTests: XCTestCase {
             // `services.contacts.update(id, {})` wrote nothing, and iOS reported success.
             ("updateContact", UpdateContactBody(
                 blindIndexes: ["nameToken": .string("f00dcafe")],
-                contactTypeHash: nil,
                 encryptedPII: Self.ct,
                 encryptedSummary: Self.ct,
                 hubID: "22222222-2222-4222-8222-222222222222",
                 identifierHashes: ["deadbeef"],
                 nameHash: "cafed00d",
                 piiEnvelopes: [Self.admin],
-                statusHash: nil,
                 summaryEnvelopes: [Self.admin],
                 tagHashes: nil,
                 trigramTokens: ["abc"]
@@ -278,10 +274,15 @@ final class APIServiceWireFormatTests: XCTestCase {
             // POST /api/reports/:id/assign — assignReportBodySchema requires `assignedTo`.
             ("assignReport", ReportAssignRequest(assignedTo: Self.pubkey)),
 
-            // PATCH /api/records/:id — updateRecordBodySchema is `.partial()`, so a
-            // snake_cased body validated as `{}`: the case status change silently did
-            // not happen, and the route still wrote a `recordUpdated` audit entry.
-            ("updateRecord", UpdateRecordRequest(statusHash: "aa11", severityHash: "bb22")),
+            // PATCH /api/records/:id — updateRecordBodySchema is `.partial()` and strict.
+            // A status change re-seals the summary; the server is told only that one
+            // happened. Snake-cased, the body validated as `{}` and the change silently
+            // did not happen, while the route still wrote a `recordUpdated` audit entry.
+            ("updateRecord", UpdateRecordRequest(
+                encryptedSummary: Self.ct,
+                summaryEnvelopes: [Self.admin],
+                statusChangeTypeHash: "aa11"
+            )),
 
             // POST /api/devices/register — registerDeviceBodySchema. The body whose
             // breakage was observed end to end against a live server: the real client
@@ -433,9 +434,9 @@ final class APIServiceWireFormatTests: XCTestCase {
         // UpdateContactBody declares `case hubID = "hubId"`. A key strategy overrides
         // that; the absence of one is what makes the declared key authoritative.
         let data = try await wireBytes(method: "PATCH", body: UpdateContactBody(
-            blindIndexes: nil, contactTypeHash: nil, encryptedPII: Self.ct,
+            blindIndexes: nil, encryptedPII: Self.ct,
             encryptedSummary: Self.ct, hubID: "h1", identifierHashes: nil, nameHash: nil,
-            piiEnvelopes: [Self.admin], statusHash: nil, summaryEnvelopes: nil,
+            piiEnvelopes: [Self.admin], summaryEnvelopes: nil,
             tagHashes: nil, trigramTokens: nil
         ))
         let keys = try allKeys(data)
@@ -522,9 +523,9 @@ final class APIServiceWireFormatTests: XCTestCase {
         XCTAssertFalse(noteKeys.contains("adminEnvelopes"))
 
         let contact = try legacy.encode(UpdateContactBody(
-            blindIndexes: nil, contactTypeHash: nil, encryptedPII: Self.ct,
+            blindIndexes: nil, encryptedPII: Self.ct,
             encryptedSummary: Self.ct, hubID: "h1", identifierHashes: nil, nameHash: nil,
-            piiEnvelopes: [Self.admin], statusHash: nil, summaryEnvelopes: nil,
+            piiEnvelopes: [Self.admin], summaryEnvelopes: nil,
             tagHashes: nil, trigramTokens: nil
         ))
         let contactKeys = try allKeys(contact)

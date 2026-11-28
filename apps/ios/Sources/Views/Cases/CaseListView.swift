@@ -183,15 +183,21 @@ struct CaseListView: View {
                 statusFilterRow(vm: vm)
             }
 
+            // A status filter is applied on this device, over a bounded scan. Say so: an
+            // empty result must never read as "none".
+            if vm.statusFilter != nil, vm.filterScanBounded || vm.records.isEmpty {
+                filterNotice(vm: vm)
+            }
+
             // Records list — display type determines rendering
             switch vm.displayType {
             case .calendar:
-                EntityCalendarView(records: vm.records) { record in
+                EntityCalendarView(records: vm.records, statusByRecord: vm.statusLabelByRecord) { record in
                     Task { await vm.selectRecord(record) }
                 }
                 .accessibilityIdentifier("entity-calendar-view")
             case .timeline:
-                EntityTimelineView(records: vm.records) { record in
+                EntityTimelineView(records: vm.records, statusByRecord: vm.statusLabelByRecord) { record in
                     Task { await vm.selectRecord(record) }
                 }
                 .accessibilityIdentifier("entity-timeline-view")
@@ -202,6 +208,7 @@ struct CaseListView: View {
                             record: record,
                             entityType: vm.entityType(for: record.entityTypeID),
                             statusDef: vm.statusDef(for: record),
+                            severityDef: vm.severityDef(for: record),
                             decryptedTitle: vm.decryptedTitle(for: record.id)
                         )
                         .accessibilityIdentifier("case-list-row-\(record.id)")
@@ -304,6 +311,27 @@ struct CaseListView: View {
         .accessibilityIdentifier("case-type-tabs")
     }
 
+    // MARK: - Filter Notice
+
+    private func filterNotice(vm: CaseManagementViewModel) -> some View {
+        let text: String
+        switch (vm.filterScanBounded, vm.records.isEmpty) {
+        case (true, true):
+            text = L10n.format("cases_no_results_bounded", comment: "No matches among the newest cases", CaseTriage.scanLimit)
+        case (true, false):
+            text = L10n.format("cases_results_bounded", comment: "Showing matches among the newest cases", CaseTriage.scanLimit)
+        default:
+            text = NSLocalizedString("cases_no_results", comment: "No matching cases")
+        }
+        return Text(text)
+            .font(.brand(.caption))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .accessibilityIdentifier("case-filter-notice")
+    }
+
     // MARK: - Status Filter
 
     private func statusFilterRow(vm: CaseManagementViewModel) -> some View {
@@ -392,6 +420,7 @@ private struct CaseCardRow: View {
     let record: SharedRecordListResponseRecord
     let entityType: EntityType?
     let statusDef: SharedStatus?
+    let severityDef: SharedStatus?
     let decryptedTitle: String?
 
     var body: some View {
@@ -444,8 +473,7 @@ private struct CaseCardRow: View {
                 }
 
                 // Severity badge
-                if let sevHash = record.severityHash,
-                   let sev = entityType?.severities?.first(where: { $0.value == sevHash }) {
+                if let sev = severityDef {
                     HStack(spacing: 3) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 8))
@@ -693,13 +721,14 @@ private struct CreateCaseSheet: View {
             }
 
             // Build summary JSON
-            let defaultStatus = entityType.statuses.first(where: { $0.isDefault == true })
-                ?? entityType.statuses.first(where: { $0.value == entityType.defaultStatus })
-            let summary: [String: Any] = [
+            // The status and severity are the entity type's VALUES and live only here: the
+            // server never receives them (#2779).
+            var summary: [String: Any] = [
                 "title": trimmedTitle,
                 "description": description.trimmingCharacters(in: .whitespacesAndNewlines),
-                "status": defaultStatus?.label ?? entityType.defaultStatus,
+                "status": entityType.defaultStatus,
             ]
+            if let severity = entityType.defaultSeverity { summary["severity"] = severity }
             let summaryJSON = String(data: try JSONSerialization.data(withJSONObject: summary), encoding: .utf8)!
 
             // Encrypt summary with HPKE envelopes for each reader
@@ -717,7 +746,6 @@ private struct CreateCaseSheet: View {
             // Build the request body
             let body: [String: Any] = [
                 "entityTypeId": entityType.id,
-                "statusHash": entityType.defaultStatus,
                 "encryptedSummary": encrypted.encryptedContent,
                 "summaryEnvelopes": summaryEnvelopes,
                 "assignedTo": [encPubkey],

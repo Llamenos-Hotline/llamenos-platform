@@ -42,6 +42,14 @@ function dedupe(keys: readonly string[]): string[] {
   return out
 }
 
+/** The server could not say who may already read a record, so a re-seal was refused. */
+export class RecordReadersUnavailableError extends Error {
+  constructor(recordId: string) {
+    super(`Could not resolve who may read record ${recordId}; refusing to re-seal it to fewer readers.`)
+    this.name = 'RecordReadersUnavailableError'
+  }
+}
+
 /**
  * Author + the server's tier + every admin of the record's hub, in that order.
  *
@@ -117,11 +125,23 @@ export async function resolveCreationReaders(
  * to the browsed hub's admins hands one hub's case content to another's.
  */
 export async function resolveRecordReaders(
-  params: ReaderParams & { recordId: string; hubId: string },
+  params: ReaderParams & {
+    recordId: string
+    hubId: string
+    /**
+     * Refuse when the server's tier lookup fails, instead of sealing to the author and
+     * the admins alone. A write that REPLACES a tier's envelope set (a status change
+     * re-seals the summary) would otherwise drop every assignee and `editRoles` holder
+     * the record already had: the write succeeds and they can no longer open the case.
+     */
+    failClosed?: boolean
+  },
 ): Promise<RecordReaders> {
   const admins = await hubAdminReaders(params.hubId)
+  const tiers = await lookupTiers({ recordId: params.recordId, hubId: params.hubId })
+  if (tiers === null && params.failClosed) throw new RecordReadersUnavailableError(params.recordId)
   return composeReaders(
-    await lookupTiers({ recordId: params.recordId, hubId: params.hubId }),
+    tiers,
     params.authorPubkey,
     admins,
     params.hubId,

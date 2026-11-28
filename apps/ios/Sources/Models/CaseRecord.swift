@@ -207,9 +207,29 @@ struct CaseManagementEnabledResponse: Codable, Sendable {
 
 // MARK: - Request Bodies
 
+/// A PATCH of a record's sealed content. A status change re-seals the summary, so it
+/// carries the new ciphertext and no status: the server is told only THAT one happened
+/// (`statusChangeTypeHash`), and the transition travels sealed with the timeline entry.
 struct UpdateRecordRequest: Codable, Sendable {
-    let statusHash: String?
-    let severityHash: String?
+    let encryptedSummary: String?
+    let summaryEnvelopes: [SharedAdminEnvelope]?
+    let statusChangeTypeHash: String?
+    let statusChangeContent: String?
+    let statusChangeEnvelopes: [SharedAdminEnvelope]?
+
+    init(
+        encryptedSummary: String? = nil,
+        summaryEnvelopes: [SharedAdminEnvelope]? = nil,
+        statusChangeTypeHash: String? = nil,
+        statusChangeContent: String? = nil,
+        statusChangeEnvelopes: [SharedAdminEnvelope]? = nil
+    ) {
+        self.encryptedSummary = encryptedSummary
+        self.summaryEnvelopes = summaryEnvelopes
+        self.statusChangeTypeHash = statusChangeTypeHash
+        self.statusChangeContent = statusChangeContent
+        self.statusChangeEnvelopes = statusChangeEnvelopes
+    }
 }
 
 struct AssignRecordRequest: Codable, Sendable {

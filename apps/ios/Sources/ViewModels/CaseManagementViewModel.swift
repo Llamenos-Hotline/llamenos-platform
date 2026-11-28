@@ -43,6 +43,11 @@ final class CaseManagementViewModel {
     /// Total record count for pagination.
     var totalRecords: Int = 0
 
+    /// A status filter is active and its scan stopped at `CaseTriage.scanLimit` with candidates
+    /// left, so the list is matches among the newest records only. The screen says so, and an
+    /// empty list says it too: it must not read as "none".
+    var filterScanBounded: Bool = false
+
     /// Currently selected record for the detail panel.
     var selectedRecord: SharedRecordListResponseRecord?
 
@@ -187,9 +192,28 @@ final class CaseManagementViewModel {
         entityTypes.first { $0.id == id }
     }
 
-    /// Status definition for a record.
+    /// Status definition for a record, read from its sealed summary: the server holds none
+    /// (#2779). Nil while the summary is unread or when this device cannot open it.
     func statusDef(for record: SharedRecordListResponseRecord) -> SharedStatus? {
-        entityType(for: record.entityTypeID)?.statuses.first { $0.value == record.statusHash }
+        guard let status = decryptedSummaries[record.id]?.status else { return nil }
+        return entityType(for: record.entityTypeID)?.statuses.first { $0.value == status }
+    }
+
+    /// Severity definition for a record, read from its sealed summary.
+    func severityDef(for record: SharedRecordListResponseRecord) -> SharedStatus? {
+        guard let severity = decryptedSummaries[record.id]?.severity else { return nil }
+        return entityType(for: record.entityTypeID)?.severities?.first { $0.value == severity }
+    }
+
+    /// Record id → status label, for the calendar and timeline rows.
+    var statusLabelByRecord: [String: String] {
+        var labels: [String: String] = [:]
+        for record in records {
+            if let label = statusDef(for: record)?.label ?? decryptedSummaries[record.id]?.status {
+                labels[record.id] = label
+            }
+        }
+        return labels
     }
 
     /// Decrypted title for a record, if available.
@@ -292,12 +316,16 @@ final class CaseManagementViewModel {
             recordsLoadError = nil
             return
         }
+        // The status lives in the sealed summary, so a status filter is applied on this device.
+        if let wanted = statusFilter {
+            await loadFilteredRecords(status: wanted, epoch: epoch)
+            return
+        }
+        filterScanBounded = false
+
         var path = base + "?page=\(currentPage)&limit=\(pageSize)"
         if let etFilter = entityTypeFilter {
             path += "&entityTypeId=\(etFilter)"
-        }
-        if let sFilter = statusFilter {
-            path += "&statusHash=\(sFilter)"
         }
         if crossHubEnabled {
             path += "&crossHub=true"
@@ -314,6 +342,61 @@ final class CaseManagementViewModel {
 
             // Decrypt summaries for all loaded records
             await decryptRecordSummaries(response.records)
+        } catch {
+            guard epoch == recordsLoadEpoch, !Task.isCancelled else { return }
+            errorMessage = error.localizedDescription
+            recordsLoadError = error.localizedDescription
+        }
+    }
+
+    /// Fetch the candidates the server can filter on (hub, entity type), open each summary and
+    /// keep the records whose status is `wanted`, up to `CaseTriage.scanLimit` records. The
+    /// matches are paged locally and `totalRecords` is the size of the local result.
+    private func loadFilteredRecords(status wanted: String, epoch: Int) async {
+        // Resolved here, not passed in, so the API-contract guard can follow the path to a mounted route.
+        guard let base = try? apiService.activeHubPath("/api/records") else {
+            records = []
+            totalRecords = 0
+            recordsLoadError = nil
+            return
+        }
+        var query = "limit=\(CaseTriage.batchSize)"
+        if let etFilter = entityTypeFilter {
+            query += "&entityTypeId=\(etFilter)"
+        }
+        if crossHubEnabled {
+            query += "&crossHub=true"
+        }
+
+        var matches: [SharedRecordListResponseRecord] = []
+        var scanned = 0
+        var page = 1
+        var bounded = false
+
+        do {
+            while true {
+                let response: RecordListResponse = try await apiService.request(
+                    method: "GET", path: base + "?page=\(page)&" + query
+                )
+                guard epoch == recordsLoadEpoch, !Task.isCancelled else { return }
+
+                let room = CaseTriage.scanLimit - scanned
+                let taken = Array(response.records.prefix(room))
+                await decryptRecordSummaries(taken)
+                matches += taken.filter { decryptedSummaries[$0.id]?.status == wanted }
+                scanned += taken.count
+
+                if scanned >= CaseTriage.scanLimit {
+                    bounded = taken.count < response.records.count || response.hasMore
+                    break
+                }
+                if !response.hasMore { break }
+                page += 1
+            }
+            filterScanBounded = bounded
+            totalRecords = matches.count
+            records = CaseTriage.page(of: matches, page: currentPage, pageSize: pageSize)
+            recordsLoadError = nil
         } catch {
             guard epoch == recordsLoadEpoch, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
@@ -375,7 +458,10 @@ final class CaseManagementViewModel {
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     let summary = DecryptedSummary(
                         title: json["title"] as? String,
-                        description: json["description"] as? String
+                        description: json["description"] as? String,
+                        status: json["status"] as? String,
+                        severity: json["severity"] as? String,
+                        plaintext: plaintext
                     )
                     decryptedSummaries[record.id] = summary
                 }
@@ -479,16 +565,63 @@ final class CaseManagementViewModel {
 
     // MARK: - Actions
 
-    /// Update record status.
+    /// Change a record's status: re-seal its summary with the new status VALUE and file the
+    /// transition as a sealed status-change entry. Nothing about the status travels in the
+    /// clear (#2779).
+    ///
+    /// A status change REPLACES the summary, so the title, description and severity it carries
+    /// come from the current ciphertext. A summary this device cannot open is refused, never
+    /// overwritten with a blank one.
     func updateStatus(recordId: String, newStatus: String) async {
         isActionInProgress = true
         defer { isActionInProgress = false }
+        errorMessage = nil
 
         do {
+            guard let current = decryptedSummaries[recordId],
+                  let encryptionPubkey = cryptoService.encryptionPubkeyHex else {
+                errorMessage = NSLocalizedString("cases_error_no_key", comment: "Encryption key not available")
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                return
+            }
+
+            let apiService = self.apiService
+            let readers = try await RecordReaderSet.existingRecordReaders(
+                author: encryptionPubkey,
+                adminReaders: { try await HubAdminReaders.resolve(apiService: apiService) }
+            ) {
+                try await RecordReaderSet.lookupRecordTiers(apiService: apiService, recordId: recordId)
+            }
+
+            var summary = current.json
+            summary["status"] = newStatus
+            let summaryJSON = String(decoding: try JSONSerialization.data(withJSONObject: summary), as: UTF8.self)
+            let sealedSummary = try cryptoService.sealCase(
+                purpose: .summary,
+                plaintext: summaryJSON,
+                readerPubkeys: readers.summary
+            )
+            let sealedChange = try cryptoService.sealCase(
+                purpose: .comment,
+                plaintext: try CaseTriage.statusChangePlaintext(previous: current.status, next: newStatus),
+                readerPubkeys: readers.summary
+            )
+            func wire(_ envelopes: [RecipientEnvelope]) -> [SharedAdminEnvelope] {
+                envelopes.map { SharedAdminEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
+            }
+
             let _: SharedRecordListResponseRecord = try await apiService.request(
                 method: "PATCH", path: try apiService.activeHubPath("/api/records/\(recordId)"),
-                body: UpdateRecordRequest(statusHash: newStatus, severityHash: nil)
+                wireBody: UpdateRecordRequest(
+                    encryptedSummary: sealedSummary.encryptedContent,
+                    summaryEnvelopes: wire(sealedSummary.envelopes),
+                    statusChangeTypeHash: CaseTriage.statusChangeType,
+                    statusChangeContent: sealedChange.encryptedContent,
+                    statusChangeEnvelopes: wire(sealedChange.envelopes)
+                )
             )
+            // The cached summary is the old ciphertext's; reading it again is the point.
+            decryptedSummaries[recordId] = nil
             await loadRecords()
             if selectedRecord?.id == recordId {
                 // Refresh selected record
@@ -551,8 +684,6 @@ final class CaseManagementViewModel {
                 encryptedContent: encrypted.encryptedContent,
                 interactionType: .comment,
                 interactionTypeHash: "comment_hash",
-                newStatusHash: nil,
-                previousStatusHash: nil,
                 sourceID: nil
             )
 
@@ -721,6 +852,20 @@ enum DetailTab: String, CaseIterable, Sendable {
 struct DecryptedSummary {
     let title: String?
     let description: String?
+    /// The status VALUE (the entity type's `statuses[].value`), sealed with the summary.
+    let status: String?
+    /// The severity VALUE (the entity type's `severities[].value`), sealed with the summary.
+    let severity: String?
+    /// The summary exactly as opened. A status change re-seals the WHOLE summary, so keys this
+    /// client does not read must survive it.
+    let plaintext: String
+
+    /// The summary's JSON object; empty when the plaintext is not one.
+    var json: [String: Any] {
+        guard let data = plaintext.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return object
+    }
 }
 
 // MARK: - Request Bodies

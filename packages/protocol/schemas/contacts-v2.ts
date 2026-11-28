@@ -14,9 +14,7 @@ export const contactSchema = z.object({
   summaryEnvelopes: z.array(recipientEnvelopeSchema),
   encryptedPII: z.string().optional(),
   piiEnvelopes: z.array(recipientEnvelopeSchema).optional(),
-  contactTypeHash: z.string().optional(),
   tagHashes: z.array(z.string()),
-  statusHash: z.string().optional(),
   blindIndexes: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -42,11 +40,9 @@ export const createContactBodySchema = z.object({
   summaryEnvelopes: z.array(recipientEnvelopeSchema).min(1),
   encryptedPII: z.string().optional(),
   piiEnvelopes: z.array(recipientEnvelopeSchema).optional(),
-  contactTypeHash: z.string().optional(),
   tagHashes: z.array(z.string()).optional(),
-  statusHash: z.string().optional(),
   blindIndexes: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
-})
+}).strict()
 
 export type CreateContactBody = z.input<typeof createContactBodySchema>
 
@@ -59,10 +55,8 @@ export type UpdateContactBody = z.infer<typeof updateContactBodySchema>
 // --- List contacts query (pagination + blind index filters) ---
 
 export const listContactsQuerySchema = paginationSchema.extend({
-  contactTypeHash: z.string().optional(),
-  statusHash: z.string().optional(),
   nameToken: z.string().optional(),
-})
+}).strict()
 
 export type ListContactsQuery = z.infer<typeof listContactsQuerySchema>
 
@@ -174,7 +168,6 @@ export const contactCaseLinkSchema = z.object({
   caseNumber: z.string().optional(),
   entityTypeLabel: z.string(),
   role: z.string(),
-  status: z.string(),
   createdAt: z.string(),
 })
 export type ContactCaseLink = z.infer<typeof contactCaseLinkSchema>

@@ -99,6 +99,25 @@ object RecordReaderSet {
     }
 
     /**
+     * Readers of an existing record, for a write that REPLACES one of its tiers.
+     *
+     * Unlike [forRecord] a failed lookup is an error, not a fallback. A re-seal replaces the
+     * envelope set, so sealing to the author and the admins alone would silently drop every
+     * assignee and `editRoles` holder the record already had (#1682): the write would succeed
+     * and those volunteers could no longer open the case.
+     *
+     * @throws NoAdminReaderException when [adminReaders] is empty.
+     */
+    suspend fun forReseal(
+        author: String?,
+        adminReaders: suspend () -> List<String>,
+        lookup: suspend () -> EnvelopeRecipientsResponse,
+    ): RecordReaders {
+        val admins = adminReaders()
+        return compose(lookup(), author, admins)
+    }
+
+    /**
      * Readers of a record that does not exist yet, asked at write time.
      *
      * [lookup] performs `GET /api/records/envelope-recipients?entityTypeId=…`,

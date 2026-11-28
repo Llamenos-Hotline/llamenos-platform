@@ -580,8 +580,8 @@ describe('Calls Routes', () => {
       casesSvc.listByContact.mockResolvedValue({
         total: 2,
         records: [
-          { id: 'case-1', caseNumber: 'C001', statusHash: 'hash-open' },
-          { id: 'case-2', caseNumber: 'C002', statusHash: 'hash-closed' },
+          { id: 'case-1', caseNumber: 'C001' },
+          { id: 'case-2', caseNumber: 'C002' },
         ],
       })
 
@@ -596,7 +596,11 @@ describe('Calls Routes', () => {
       const body = await res.json()
       expect(body.contact.id).toBe('contact-1')
       expect(body.activeCaseCount).toBe(2)
-      expect(body.recentCases).toHaveLength(2)
+      // A case's status is sealed in its summary, so the screen-pop names none.
+      expect(body.recentCases).toEqual([
+        { id: 'case-1', caseNumber: 'C001' },
+        { id: 'case-2', caseNumber: 'C002' },
+      ])
       expect(contactsSvc.lookupByIdentifierHash).toHaveBeenCalledWith('hub-1', 'abc123')
     })
 

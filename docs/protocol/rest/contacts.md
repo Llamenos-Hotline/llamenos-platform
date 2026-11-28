@@ -35,7 +35,7 @@ Errors: 503 when the hub has no admin reader (no admin device registered and no 
 
 GET    /api/hubs/:hubId/directory
 Permission: contacts:view
-Query: ?page=&limit=&contactTypeHash=
+Query: ?page=&limit=   (strict: an undeclared key, including the retired `contactTypeHash` / `statusHash`, is 400)
 Response: { "contacts": Contact[], "total": number }
 
 GET    /api/hubs/:hubId/directory/lookup/:identifierHash

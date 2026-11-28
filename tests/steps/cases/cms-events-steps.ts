@@ -27,6 +27,7 @@ import {
   listEventRecordsViaApi,
   listEventReportsViaApi,
   getRecordViaApi,
+  readRecordSummaryViaApi,
 } from '../../api-helpers'
 
 // State is now in casesWorld fixture (casesWorld.eventEntityTypeId, casesWorld.lastEventId, casesWorld.lastEventName)
@@ -121,7 +122,7 @@ Given('events exist', async ({ backendRequest: request, casesWorld, workerHub })
   const entityTypeId = await ensureEventEntityType(request, casesWorld, workerHub)
   const records = await listRecordsViaApi(request, { entityTypeId, hubId: workerHub })
   if (records.records.length === 0) {
-    const event = await createRecordViaApi(request, entityTypeId, { statusHash: 'active', hubId: workerHub })
+    const event = await createRecordViaApi(request, entityTypeId, { status: 'active', hubId: workerHub })
     casesWorld.lastEventId = (event as { id: string }).id
   } else {
     casesWorld.lastEventId = (records.records[0] as { id: string }).id
@@ -195,7 +196,7 @@ Then('the new event should appear in the event list', async ({ page }) => {
 
 Given('an event {string} exists', async ({ backendRequest: request, casesWorld, workerHub }, eventName: string) => {
   const entityTypeId = await ensureEventEntityType(request, casesWorld, workerHub)
-  const event = await createRecordViaApi(request, entityTypeId, { statusHash: 'active', hubId: workerHub })
+  const event = await createRecordViaApi(request, entityTypeId, { status: 'active', hubId: workerHub })
   casesWorld.lastEventId = (event as { id: string }).id
   casesWorld.lastEventName = eventName
 })
@@ -231,25 +232,25 @@ Given('an event with linked cases exists', async ({ backendRequest: request, cas
   const entityTypeId = await ensureEventEntityType(request, casesWorld, workerHub)
   // Use createRecordViaApi directly: the frontend events page uses listRecords (not the /events API),
   // so events must live in the records table to appear in the UI.
-  const event = await createRecordViaApi(request, entityTypeId, { statusHash: 'active', hubId: workerHub })
+  const event = await createRecordViaApi(request, entityTypeId, { status: 'active', hubId: workerHub })
   casesWorld.lastEventId = (event as { id: string }).id
 
   // Create and link a case. Record-based events link via record parent/child —
   // POST /events/:id/records targets the separate events table and 404s here.
   const etId = await arrestCaseTypeId(request, workerHub)
-  const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+  const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
   await updateRecordViaApi(request, (record as { id: string }).id, { parentRecordId: casesWorld.lastEventId! }, workerHub)
 })
 
 Given('an event with {int} linked cases exists', async ({ backendRequest: request, casesWorld, workerHub }, count: number) => {
   const entityTypeId = await ensureEventEntityType(request, casesWorld, workerHub)
   // Use createRecordViaApi: frontend uses listRecords, not the /events API endpoint
-  const event = await createRecordViaApi(request, entityTypeId, { statusHash: 'active', hubId: workerHub })
+  const event = await createRecordViaApi(request, entityTypeId, { status: 'active', hubId: workerHub })
   casesWorld.lastEventId = (event as { id: string }).id
 
   const etId = await arrestCaseTypeId(request, workerHub)
   for (let i = 0; i < count; i++) {
-    const record = await createRecordViaApi(request, etId, { statusHash: 'reported', hubId: workerHub })
+    const record = await createRecordViaApi(request, etId, { status: 'reported', hubId: workerHub })
     await updateRecordViaApi(request, (record as { id: string }).id, { parentRecordId: casesWorld.lastEventId! }, workerHub)
   }
 })
@@ -257,7 +258,7 @@ Given('an event with {int} linked cases exists', async ({ backendRequest: reques
 Given('an event with linked reports exists', async ({ backendRequest: request, casesWorld, workerHub }) => {
   const entityTypeId = await ensureEventEntityType(request, casesWorld, workerHub)
   // Use createRecordViaApi: frontend uses listRecords, not the /events API endpoint
-  const event = await createRecordViaApi(request, entityTypeId, { statusHash: 'active', hubId: workerHub })
+  const event = await createRecordViaApi(request, entityTypeId, { status: 'active', hubId: workerHub })
   casesWorld.lastEventId = (event as { id: string }).id
 
   const report = await createReportViaApi(request, { title: `Event Report ${Date.now()}`, hubId: workerHub })
@@ -318,7 +319,7 @@ Given('an event exists', async ({ backendRequest: request, casesWorld, workerHub
   // Always a fresh event: linking scenarios assert link counts, so reusing an event
   // that earlier scenarios in this worker hub already linked would make them order-dependent.
   const entityTypeId = await ensureEventEntityType(request, casesWorld, workerHub)
-  const event = await createRecordViaApi(request, entityTypeId, { statusHash: 'active', hubId: workerHub })
+  const event = await createRecordViaApi(request, entityTypeId, { status: 'active', hubId: workerHub })
   casesWorld.lastEventId = (event as { id: string }).id
 })
 
@@ -371,7 +372,7 @@ Then('the report should appear in the event\'s linked reports', async ({ page, b
 
 Given('an event with status {string} exists', async ({ backendRequest: request, casesWorld, workerHub }, status: string) => {
   const entityTypeId = await ensureEventEntityType(request, casesWorld, workerHub)
-  const event = await createRecordViaApi(request, entityTypeId, { statusHash: status, hubId: workerHub })
+  const event = await createRecordViaApi(request, entityTypeId, { status: status, hubId: workerHub })
   casesWorld.lastEventId = (event as { id: string }).id
 })
 
@@ -399,6 +400,8 @@ Then('the event status should reflect {string}', async ({ page, backendRequest: 
   // status. Re-read the record through the real API to prove it persisted server-side.
   // Gherkin uses the status value for the write ("completed") and its display
   // label for the pill assertion above ("Completed") — compare case-insensitively.
-  const record = await getRecordViaApi(request, casesWorld.lastEventId, workerHub)
-  expect((record as { statusHash?: string }).statusHash?.toLowerCase()).toBe(status.toLowerCase())
+  // The server holds no status: it lives in the sealed summary, so read it where
+  // the clients do.
+  const summary = await readRecordSummaryViaApi(request, casesWorld.lastEventId, workerHub)
+  expect(summary.status?.toLowerCase()).toBe(status.toLowerCase())
 })

@@ -57,7 +57,6 @@ data class ContactLinkedCase(
     val id: String,
     val caseNumber: String? = null,
     val entityTypeId: String,
-    val statusHash: String,
     val role: String? = null,
     val createdAt: String,
 )

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
+import { useAuth } from '@/lib/auth'
+import { changeRecordStatus } from '@/lib/case-writes'
 import {
   listRecords,
   listEntityTypes,
-  updateRecord,
   getCaseManagementEnabled,
   type CaseRecord,
   type EntityTypeDefinition,
@@ -48,6 +49,7 @@ export function EntityTypeFilteredRecordList({
 }: EntityTypeFilteredRecordListProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
+  const { publicKey } = useAuth()
 
   const [entityTypes, setEntityTypes] = useState<EntityTypeDefinition[]>([])
   const [cmsEnabled, setCmsEnabled] = useState<boolean | null>(null)
@@ -101,16 +103,17 @@ export function EntityTypeFilteredRecordList({
   }, [fetchRecords])
 
   const handleStatusChange = useCallback(async (recordId: string, newStatusValue: string) => {
+    const record = records.find(r => r.id === recordId)
+    if (!record || !publicKey) return
     try {
-      await updateRecord(recordId, { statusHash: newStatusValue })
-      setRecords(prev =>
-        prev.map(r => r.id === recordId ? { ...r, statusHash: newStatusValue, updatedAt: new Date().toISOString() } : r),
-      )
+      // Re-seals the summary with the new status; the server is told nothing of it.
+      const updated = await changeRecordStatus(record, newStatusValue, publicKey)
+      setRecords(prev => prev.map(r => r.id === recordId ? updated : r))
       toast(t('cases.statusUpdated', { defaultValue: 'Status updated' }), 'success')
     } catch {
       toast(t('cases.statusUpdateError', { defaultValue: 'Failed to update status' }), 'error')
     }
-  }, [toast, t])
+  }, [records, publicKey, setRecords, toast, t])
 
   if (cmsEnabled === false) {
     return (

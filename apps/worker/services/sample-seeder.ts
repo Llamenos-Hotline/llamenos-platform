@@ -214,7 +214,6 @@ export async function seedSampleDataset(
       trigramTokens: trigrams(contact.displayName),
       encryptedSummary: sealed.encryptedContent,
       summaryEnvelopes: sealed.envelopes,
-      contactTypeHash: contact.contactType,
       tagHashes: [],
       blindIndexes: {},
     })
@@ -230,13 +229,12 @@ export async function seedSampleDataset(
     fields: [],
     hubId,
   })
-  const statusLabel = (value: string) => SAMPLE_ENTITY_TYPE.statuses.find(s => s.value === value)?.label ?? value
 
   for (const sampleCase of SAMPLE_CASES) {
     const assignee = reader(sampleCase.assignedTo)
     const sealed = sealCaseForReaders(
       'summary',
-      JSON.stringify({ title: sampleCase.title, description: sampleCase.description, status: statusLabel(sampleCase.status) }),
+      JSON.stringify({ title: sampleCase.title, description: sampleCase.description, status: sampleCase.status }),
       [cast.admin, cast.maria, cast.james],
     )
     const { number: caseNumber } = await services.entitySchema.generateCaseNumber({
@@ -248,7 +246,6 @@ export async function seedSampleDataset(
       createdBy: assignee.pubkey,
       caseNumber,
       entityTypeId: entityType.id,
-      statusHash: sampleCase.status,
       assignedTo: [assignee.pubkey],
       blindIndexes: {},
       encryptedSummary: sealed.encryptedContent,
@@ -274,11 +271,17 @@ export async function seedSampleDataset(
           interactionTypeHash: 'comment',
         }, { createdAt })
       } else if (step.kind === 'status') {
+        // The transition is sealed with the interaction: the server never sees a status.
+        const change = sealCaseForReaders(
+          'comment',
+          JSON.stringify({ text: '', previousStatus: step.from, newStatus: step.to }),
+          [cast.admin, cast.maria, cast.james],
+        )
         await services.cases.createInteraction(record.id, author.pubkey, {
           interactionType: 'status_change',
+          encryptedContent: change.encryptedContent,
+          contentEnvelopes: change.envelopes,
           interactionTypeHash: 'status_change',
-          previousStatusHash: step.from,
-          newStatusHash: step.to,
         }, { createdAt })
       } else {
         const linked = noteIdByCall.get(step.noteOfCall)

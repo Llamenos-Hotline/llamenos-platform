@@ -80,14 +80,12 @@ final class ContactFormViewModel {
 
         let body = CreateContactBody(
             blindIndexes: nil,
-            contactTypeHash: nil,
             encryptedPII: piiResult?.ciphertextHex,
             encryptedSummary: summaryResult.ciphertextHex,
             hubID: hubId,
             identifierHashes: [],
             nameHash: nil,
             piiEnvelopes: piiEnvelopes,
-            statusHash: nil,
             summaryEnvelopes: summaryEnvelopes,
             tagHashes: nil,
             trigramTokens: nil
@@ -137,14 +135,12 @@ final class ContactFormViewModel {
 
         let body = UpdateContactBody(
             blindIndexes: nil,
-            contactTypeHash: nil,
             encryptedPII: piiResult?.ciphertextHex,
             encryptedSummary: summaryResult.ciphertextHex,
             hubID: hubId,
             identifierHashes: nil,
             nameHash: nil,
             piiEnvelopes: piiEnvelopes,
-            statusHash: nil,
             summaryEnvelopes: summaryEnvelopes,
             tagHashes: nil,
             trigramTokens: nil

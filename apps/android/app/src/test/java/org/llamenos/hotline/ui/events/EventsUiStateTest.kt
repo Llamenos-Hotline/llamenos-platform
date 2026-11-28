@@ -40,7 +40,6 @@ class EventsUiStateTest {
         parentRecordID = "event-parent",
         reportCount = 0.0,
         reportIDS = emptyList(),
-        statusHash = "open",
         summaryEnvelopes = emptyList(),
         updatedAt = "2026-09-01T00:00:00Z",
     )

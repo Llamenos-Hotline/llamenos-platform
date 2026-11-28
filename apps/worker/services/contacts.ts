@@ -51,7 +51,6 @@ export interface ListContactsInput {
   hubId: string
   page?: number
   limit?: number
-  contactTypeHash?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -78,9 +77,7 @@ export class ContactsService {
         summaryEnvelopes: input.summaryEnvelopes,
         encryptedPii: input.encryptedPII ?? null,
         piiEnvelopes: input.piiEnvelopes ?? null,
-        contactTypeHash: input.contactTypeHash ?? null,
         tagHashes: input.tagHashes ?? [],
-        statusHash: input.statusHash ?? null,
         blindIndexes: input.blindIndexes ?? {},
         caseCount: 0,
         noteCount: 0,
@@ -132,9 +129,7 @@ export class ContactsService {
     if (input.summaryEnvelopes !== undefined) values.summaryEnvelopes = input.summaryEnvelopes
     if (input.encryptedPII !== undefined) values.encryptedPii = input.encryptedPII
     if (input.piiEnvelopes !== undefined) values.piiEnvelopes = input.piiEnvelopes
-    if (input.contactTypeHash !== undefined) values.contactTypeHash = input.contactTypeHash
     if (input.tagHashes !== undefined) values.tagHashes = input.tagHashes
-    if (input.statusHash !== undefined) values.statusHash = input.statusHash
     if (input.blindIndexes !== undefined) values.blindIndexes = input.blindIndexes
 
     const [updated] = await this.db
@@ -201,10 +196,6 @@ export class ContactsService {
     const offset = (page - 1) * limit
 
     const conditions = [eq(contacts.hubId, input.hubId), isNull(contacts.deletedAt)]
-
-    if (input.contactTypeHash) {
-      conditions.push(eq(contacts.contactTypeHash, input.contactTypeHash))
-    }
 
     const where = and(...conditions)
 
@@ -754,7 +745,6 @@ export class ContactsService {
           summaryEnvelopes: mergedSummaryEnvelopes,
           identifierHashes: mergedBlindIndexes.identifierHashes ?? [],
           tagHashes: mergedBlindIndexes.tagHashes ?? [],
-          contactTypeHash: mergedBlindIndexes.contactTypeHash ?? null,
           trigramTokens: mergedTrigramTokens ?? [],
           nameHash: mergedNameHash ?? null,
           updatedAt: mergedAt,
@@ -883,7 +873,6 @@ export class ContactsService {
       summaryEnvelopes: c.summaryEnvelopes,
       identifierHashes: c.blindIndexes.identifierHashes ?? [],
       tagHashes: c.blindIndexes.tagHashes ?? [],
-      contactTypeHash: c.blindIndexes.contactTypeHash ?? null,
       trigramTokens: c.trigramTokens ?? [],
       nameHash: c.nameHash ?? null,
       createdAt: new Date(),

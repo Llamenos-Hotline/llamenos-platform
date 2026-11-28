@@ -425,11 +425,6 @@ private fun LinkedCaseCard(
                             color = MaterialTheme.colorScheme.primary,
                         )
                     }
-                    Text(
-                        text = linkedCase.statusHash,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    )
                 }
             }
             Text(

@@ -18,6 +18,7 @@ import { SAMPLE_HUB } from '../lib/sample-dataset'
 import { sampleIdentities } from '../lib/sample-identities'
 import { getDb } from '../db'
 import { sql as rawSql, eq } from 'drizzle-orm'
+import { caseSeal } from '@llamenos/crypto/ffi'
 import { signalMessageQueue } from '../db/schema'
 import { SignalIdentityService } from '../messaging/signal/identity'
 import { SignalMessageQueue } from '../messaging/signal/queue'
@@ -592,26 +593,37 @@ dev.post('/test-seed', async (c) => {
 
     entityTypeIds.push({ id: entityTypeId, name: tmpl.name, category: tmpl.category })
 
-    // Create records for this entity type
-    // Use a dummy HPKE envelope so the app can find a readable envelope.
-    // Without this, records exist in DB but the app filters them out
-    // (no envelope matching the user's pubkey).
+    // Create records for this entity type.
+    //
+    // The summary is sealed to the devices the server can actually address: the
+    // registered X25519 keys of the users in `assignTo`. A client opens it, and a
+    // client that changes the status can only do so by opening the summary and
+    // re-sealing it — the server holds no status (#2779) — so a summary nobody can
+    // open makes every status-changing scenario fail. A record with no resolvable
+    // reader (the pre-launch seed, before any device has registered) keeps a dummy
+    // envelope so the app's list still finds a record addressed to it; its summary
+    // is not a ciphertext and no client can open it. The lookup is part of each
+    // record's step: a lookup that fails is a record that did not happen (#3088),
+    // never one created with a summary its assignees cannot open.
     const dummyEnvelope = { pubkey: adminSeed, ct: 'a'.repeat(64), enc: adminSeed }
     for (let i = 0; i < etSpec.records; i++) {
       const isEvent = tmpl.category === 'event'
-      const record = await outcome.run(`record ${tmpl.name}[${i}]`, () =>
-        services.cases.create({
+      const record = await outcome.run(`record ${tmpl.name}[${i}]`, async () => {
+        const readerPubkeys = await services.identity.buildReaderPubkeys(undefined, etSpec.assignTo)
+        const title = `Test ${isEvent ? 'Event' : 'Case'} ${i + 1}`
+        const sealed = readerPubkeys.length > 0
+          ? caseSeal('summary', JSON.stringify({ title, description: `Seeded ${isEvent ? 'event' : 'case'}`, status: tmpl.defaultStatus }), readerPubkeys)
+          : undefined
+        return services.cases.create({
           entityTypeId,
-          statusHash: tmpl.defaultStatus,
           assignedTo: etSpec.assignTo,
           blindIndexes: {},
-          encryptedSummary: btoa(isEvent
-            ? `{"title":"Test Event ${i + 1}","summary":"Seeded event"}`
-            : `{"title":"Test Case ${i + 1}","summary":"Seeded case"}`),
-          summaryEnvelopes: [dummyEnvelope],
+          encryptedSummary: sealed?.encryptedContent ?? btoa(JSON.stringify({ title, summary: `Seeded ${isEvent ? 'event' : 'case'}` })),
+          summaryEnvelopes: sealed?.readerEnvelopes ?? [dummyEnvelope],
           createdBy: adminSeed,
           hubId,
-        }))
+        })
+      })
       if (record) recordIds.push({ id: record.id, entityTypeId, caseNumber: record.caseNumber ?? undefined })
     }
   }
@@ -677,10 +689,9 @@ dev.post('/test-seed', async (c) => {
     const contact = await outcome.run(`contact ${contactSpec.displayName}`, () =>
       services.contacts.create({
         hubId,
-        identifierHashes: [contactSpec.displayName.toLowerCase().replace(/\s+/g, '-')],
+        identifierHashes: [],
         encryptedSummary: btoa(JSON.stringify({ displayName: contactSpec.displayName })),
         summaryEnvelopes: [dummyEnvelope],
-        contactTypeHash: contactSpec.contactType,
       }))
     if (contact) contactIds.push({ id: contact.id })
   }

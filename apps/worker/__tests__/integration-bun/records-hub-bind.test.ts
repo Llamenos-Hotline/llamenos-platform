@@ -162,7 +162,6 @@ const typeBody = (hubId: string, name: string, numberPrefix: string) => ({
 const envelopes = (pubkey: string) => [{ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }]
 const createBody = (entityTypeId: string, extra: Record<string, unknown> = {}) => ({
   entityTypeId,
-  statusHash: 'open',
   encryptedSummary: 'ciphertext',
   summaryEnvelopes: envelopes(ADMIN_DEVICE_KEY),
   ...extra,
@@ -193,7 +192,7 @@ beforeAll(async () => {
   reportB = await insertReport(HUB_B)
   const insertRecord = async (hubId: string, entityTypeId: string, owner: Actor) =>
     (await db.insert(caseRecords).values({
-      hubId, entityTypeId, statusHash: 'open', createdBy: owner.pubkey,
+      hubId, entityTypeId, createdBy: owner.pubkey,
       summaryEnvelopes: envelopes(owner.pubkey),
     }).returning())[0].id
   recordA = await insertRecord(HUB_A, typeA, ADMIN_A)

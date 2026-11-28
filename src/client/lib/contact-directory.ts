@@ -37,11 +37,6 @@ export async function decryptContact(raw: RawContact): Promise<DirectoryContact>
     }
   }
 
-  // Use contactTypeHash as fallback
-  if (!canDecrypt && raw.contactTypeHash) {
-    contactType = raw.contactTypeHash as DirectoryContactType
-  }
-
   // Decrypt PII tier
   if (raw.encryptedPII && raw.piiEnvelopes?.length) {
     const piiPlaintext = await decryptMessage(raw.encryptedPII, raw.piiEnvelopes)
@@ -95,8 +90,8 @@ export async function decryptContact(raw: RawContact): Promise<DirectoryContact>
 export const DIRECTORY_PAGE_SIZE = 50
 
 /** Fetch one page of the directory and decrypt it. */
-export async function loadDecryptedContacts(params?: { contactTypeHash?: string }) {
-  const res = await listRawContacts({ limit: DIRECTORY_PAGE_SIZE, ...params })
+export async function loadDecryptedContacts() {
+  const res = await listRawContacts({ limit: DIRECTORY_PAGE_SIZE })
   return { contacts: await Promise.all(res.contacts.map(decryptContact)), total: res.total }
 }
 

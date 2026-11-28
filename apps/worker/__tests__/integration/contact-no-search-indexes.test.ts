@@ -42,9 +42,7 @@ const CONTACTS_DDL = `
     summary_envelopes     JSONB NOT NULL DEFAULT '[]'::jsonb,
     encrypted_pii         TEXT,
     pii_envelopes         JSONB,
-    contact_type_hash     TEXT,
     tag_hashes            TEXT[] NOT NULL DEFAULT '{}'::text[],
-    status_hash           TEXT,
     blind_indexes         JSONB NOT NULL DEFAULT '{}'::jsonb,
     case_count            INTEGER NOT NULL DEFAULT 0,
     note_count            INTEGER NOT NULL DEFAULT 0,
@@ -108,7 +106,6 @@ describe('contact create / read / edit without search indexes', () => {
       hubId: HUB_ID,
       encryptedSummary: 'ciphertext-v1',
       summaryEnvelopes: [ENVELOPE],
-      contactTypeHash: 'individual',
       tagHashes: [],
       blindIndexes: {},
     })

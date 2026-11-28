@@ -273,7 +273,8 @@ Query parameters:
 - `entityTypeId` (string, optional): Filter by entity type
 - `assignedTo` (string, optional): Filter by assignment (admin only)
 - `parentRecordId` (string, optional): Filter sub-records
-- `field_*` / `*Hash`: Blind-index filters
+
+The list schema is **strict**: a query carrying `statusHash`, `severityHash` or any other key it does not declare is refused with `400`. There is no server-side status or severity filter; those live only in the sealed summary, and a client that filters by them opens the summaries it fetched (see "Triage state is sealed" in `docs/protocol/rest/records-events-evidence.md` §4.31).
 
 Non-admin users automatically see only records assigned to or created by them.
 
@@ -285,8 +286,6 @@ Non-admin users automatically see only records assigned to or created by them.
       "id": "abc-123",
       "entityTypeId": "550e8400-...",
       "caseNumber": "JS-0001",
-      "statusHash": "reported",
-      "severityHash": "standard",
       "assignedTo": ["pubkey1", "pubkey2"],
       "createdBy": "pubkey1",
       "contactCount": 3,
@@ -327,9 +326,7 @@ POST /api/records
 ```json
 {
   "entityTypeId": "550e8400-...",
-  "statusHash": "reported",
-  "severityHash": "standard",
-  "encryptedSummary": "<base64>",
+  "encryptedSummary": "<base64>",  // carries the title, description, status and severity — sealed
   "summaryEnvelopes": [
     { "pubkey": "...", "encryptedKey": "<base64>" }
   ],
@@ -353,14 +350,15 @@ PATCH /api/records/:id
 **Request:**
 ```json
 {
-  "statusHash": "in_custody",
-  "severityHash": "urgent",
-  "encryptedFields": "<base64>",
-  "fieldEnvelopes": [ ... ]
+  "encryptedSummary": "<hex>",          // the re-sealed summary, carrying the new status value
+  "summaryEnvelopes": [ ... ],
+  "statusChangeTypeHash": "status_change",
+  "statusChangeContent": "<hex>",       // sealed {text, previousStatus, newStatus}
+  "statusChangeEnvelopes": [ ... ]
 }
 ```
 
-All fields optional. Status changes are automatically logged as interactions on the timeline.
+All fields optional, and the body is strict (an undeclared key is `400`). The server never sees a status: a status change re-seals the summary, and `statusChangeTypeHash` is how the client says one happened. The server then files a `status_change` entry on the timeline whose content is the sealed transition.
 
 ### Delete Record
 
@@ -604,8 +602,6 @@ GET /api/directory?page=1&limit=50
 
 Query parameters:
 - `page`, `limit`: Pagination
-- `contactTypeHash`: Filter by contact type (blind index)
-- `statusHash`: Filter by status
 - `nameToken`: Blind-index name search token
 
 ### Search Contacts

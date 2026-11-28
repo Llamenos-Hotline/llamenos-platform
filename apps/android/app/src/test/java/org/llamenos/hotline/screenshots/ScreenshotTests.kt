@@ -328,7 +328,6 @@ class ScreenshotTests {
         interactionCount = 3.0,
         reportCount = 0.0,
         reportIDS = emptyList(),
-        statusHash = "open",
         summaryEnvelopes = emptyList(),
         updatedAt = sampleTimestamp,
     )

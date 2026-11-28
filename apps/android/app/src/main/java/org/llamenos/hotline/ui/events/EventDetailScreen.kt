@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
 import org.llamenos.hotline.model.EntityTypeDefinition
+import org.llamenos.hotline.ui.cases.DecryptedSummary
 import org.llamenos.hotline.ui.cases.parseHexColor
 import org.llamenos.hotline.ui.components.EmptyState
 import org.llamenos.hotline.util.DateFormatUtils
@@ -162,6 +163,7 @@ fun EventDetailScreen(
                     EventHeaderCard(
                         event = event,
                         entityType = entityType,
+                        summary = uiState.summaries[event.id],
                     )
 
                     // Tab row
@@ -244,10 +246,12 @@ fun EventDetailScreen(
 private fun EventHeaderCard(
     event: Record,
     entityType: EntityTypeDefinition?,
+    /** The event's opened summary: the status lives there, the server holds none. */
+    summary: DecryptedSummary?,
     modifier: Modifier = Modifier,
 ) {
-    val statusOption = entityType?.statuses?.find { it.value == event.statusHash }
-    val statusLabel = statusOption?.label ?: event.statusHash
+    val statusOption = entityType?.statuses?.find { it.value == summary?.status }
+    val statusLabel = statusOption?.label ?: summary?.status ?: "—"
     val statusColor = statusOption?.color?.let { parseHexColor(it) }
 
     Card(

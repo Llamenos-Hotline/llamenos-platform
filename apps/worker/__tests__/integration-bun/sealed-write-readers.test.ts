@@ -176,7 +176,7 @@ beforeAll(async () => {
     numberPrefix: PREFIX,
   })).id
   recordId = (await db.insert(caseRecords).values({
-    hubId: HUB, entityTypeId: typeId, statusHash: 'open', createdBy: ADMIN_PUBKEY, summaryEnvelopes: sealedTo(ADMIN_DEVICE),
+    hubId: HUB, entityTypeId: typeId, createdBy: ADMIN_PUBKEY, summaryEnvelopes: sealedTo(ADMIN_DEVICE),
   }).returning())[0].id
 })
 
@@ -202,7 +202,7 @@ const NOT_ADMIN: Array<[string, string[]]> = [
 
 describe('records', () => {
   const body = (summary: string[], extra: Record<string, unknown> = {}) => ({
-    entityTypeId: typeId, statusHash: 'open', encryptedSummary: 'ct', summaryEnvelopes: sealedTo(...summary), ...extra,
+    entityTypeId: typeId, encryptedSummary: 'ct', summaryEnvelopes: sealedTo(...summary), ...extra,
   })
 
   it('accepts a case sealed to a registered admin device, with a volunteer beside it', async () => {
@@ -260,7 +260,7 @@ describe('records', () => {
 
 describe('events', () => {
   const body = (keys: string[]) => ({
-    entityTypeId: typeId, startDate: '2026-12-01', eventTypeHash: 'e', statusHash: 'open',
+    entityTypeId: typeId, startDate: '2026-12-01', eventTypeHash: 'e',
     encryptedDetails: 'ct', detailEnvelopes: sealedTo(...keys),
   })
 

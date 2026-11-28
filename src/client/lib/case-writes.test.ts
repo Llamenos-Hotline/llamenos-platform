@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   prepareEvidenceUpload: vi.fn(),
   chunkedUpload: vi.fn(),
   getRecordEnvelopeRecipients: vi.fn(),
+  readTriage: vi.fn(),
 }))
 
 vi.mock('./api', () => ({
@@ -55,8 +56,9 @@ vi.mock('./api/records', () => ({ getRecordEnvelopeRecipients: mocks.getRecordEn
 vi.mock('./platform', async importOriginal => ({ ...(await importOriginal<typeof import('./platform')>()), sealCase: mocks.sealCase }))
 vi.mock('./evidence-upload', () => ({ prepareEvidenceUpload: mocks.prepareEvidenceUpload }))
 vi.mock('./chunked-upload', () => ({ chunkedUpload: mocks.chunkedUpload }))
+vi.mock('./case-triage', () => ({ readTriage: mocks.readTriage }))
 
-import { saveRecordFields, postCaseComment, uploadCaseEvidence } from './case-writes'
+import { saveRecordFields, postCaseComment, uploadCaseEvidence, changeRecordStatus, SummaryUnreadableError } from './case-writes'
 
 /** A record of hub B, opened from the cross-hub list while hub A is active. */
 const RECORD_IN_B = { id: 'rec-1', hubId: HUB_B }
@@ -167,5 +169,54 @@ describe('#2527 — evidence on a record in hub B, hub A active', () => {
       hubId: HUB_B,
     }))
     expect(mocks.uploadEvidence).toHaveBeenCalledWith('rec-1', HUB_B, expect.anything())
+  })
+})
+
+describe('#2779 — a status change is sealed, never sent', () => {
+  const record = { ...RECORD_IN_B, encryptedSummary: 'old-ct', summaryEnvelopes: [] }
+
+  beforeEach(() => {
+    mocks.readTriage.mockResolvedValue({ title: 'Arrest at 5th', description: 'd', status: 'open', severity: 'high' })
+  })
+
+  it('re-seals the summary with the new status value and keeps the rest of it', async () => {
+    await changeRecordStatus(record, 'closed', AUTHOR)
+
+    const [purpose, plaintext] = mocks.sealCase.mock.calls[0] as [string, string]
+    expect(purpose).toBe('summary')
+    expect(JSON.parse(plaintext)).toEqual({ title: 'Arrest at 5th', description: 'd', status: 'closed', severity: 'high' })
+  })
+
+  it('files the transition as a sealed entry, in the record\'s hub', async () => {
+    await changeRecordStatus(record, 'closed', AUTHOR)
+
+    const [purpose, plaintext] = mocks.sealCase.mock.calls[1] as [string, string]
+    expect(purpose).toBe('comment')
+    expect(JSON.parse(plaintext)).toEqual({ text: '', previousStatus: 'open', newStatus: 'closed' })
+    expect(mocks.updateRecord).toHaveBeenCalledWith('rec-1', expect.anything(), HUB_B)
+  })
+
+  it('sends no status, severity or index in the clear', async () => {
+    await changeRecordStatus(record, 'closed', AUTHOR)
+
+    const body = mocks.updateRecord.mock.calls[0][1] as Record<string, unknown>
+    expect(Object.keys(body).sort()).toEqual([
+      'encryptedSummary', 'statusChangeContent', 'statusChangeEnvelopes', 'statusChangeTypeHash', 'summaryEnvelopes',
+    ])
+    expect(JSON.stringify(body)).not.toContain('closed')
+    expect(JSON.stringify(body)).not.toContain('"open"')
+  })
+
+  it('refuses to re-seal to fewer readers when the tier lookup fails', async () => {
+    mocks.getRecordEnvelopeRecipients.mockRejectedValue(new Error('network'))
+    await expect(changeRecordStatus(record, 'closed', AUTHOR)).rejects.toThrow(/refusing to re-seal/)
+    expect(mocks.sealCase).not.toHaveBeenCalled()
+    expect(mocks.updateRecord).not.toHaveBeenCalled()
+  })
+
+  it('refuses to overwrite a summary this device cannot open', async () => {
+    mocks.readTriage.mockResolvedValue(null)
+    await expect(changeRecordStatus(record, 'closed', AUTHOR)).rejects.toBeInstanceOf(SummaryUnreadableError)
+    expect(mocks.updateRecord).not.toHaveBeenCalled()
   })
 })

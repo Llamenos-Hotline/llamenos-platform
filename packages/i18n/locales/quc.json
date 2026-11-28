@@ -3084,6 +3084,7 @@
   "methodVoice": "Oyonik",
   "contactDirectory": {
     "caseStatus": "Ub'antajik",
+    "partialNotice": "Mostrando coincidencias entre los primeros {{count}} de {{total}} contactos. No se revisó el resto.",
     "filterAll": "All",
     "editContact": "Tijalwachix Winaq",
     "addIdentifier": "Titz'aqatisax",
@@ -3660,6 +3661,8 @@
     "noInteractions": "No activity yet",
     "noInteractionsHint": "No interactions yet",
     "noResults": "No matching cases",
+    "resultsBounded": "Mostrando coincidencias entre los {{count}} casos más recientes. No se revisaron los casos anteriores.",
+    "noResultsBounded": "Sin coincidencias entre los {{count}} casos más recientes. No se revisaron los casos anteriores.",
     "noSuggestions": "No available volunteers found",
     "noSuggestionsHint": "Make sure volunteers are on-shift and have capacity.",
     "notEnabled": "Case management is not enabled",

@@ -10,16 +10,12 @@ export type { AssignmentSuggestion }
 
 export async function listRecords(params?: {
   entityTypeId?: string
-  statusHash?: string
-  severityHash?: string
   assignedTo?: string
   page?: number
   limit?: number
 }) {
   const qs = new URLSearchParams()
   if (params?.entityTypeId) qs.set('entityTypeId', params.entityTypeId)
-  if (params?.statusHash) qs.set('statusHash', params.statusHash)
-  if (params?.severityHash) qs.set('severityHash', params.severityHash)
   if (params?.assignedTo) qs.set('assignedTo', params.assignedTo)
   if (params?.page) qs.set('page', String(params.page))
   qs.set('limit', String(params?.limit ?? 50))

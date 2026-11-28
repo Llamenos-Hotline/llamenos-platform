@@ -11,8 +11,7 @@ export const mergeContactsBodySchema = z.object({
   mergedBlindIndexes: z.object({
     identifierHashes: z.array(z.string()).optional().default([]),
     tagHashes: z.array(z.string()).optional().default([]),
-    contactTypeHash: z.string().optional(),
-  }),
+  }).strict(),
   mergedTrigramTokens: z.array(z.string()).optional().default([]),
   mergedNameHash: z.string().optional(),
 })

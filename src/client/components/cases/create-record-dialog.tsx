@@ -118,14 +118,14 @@ export function CreateRecordDialog({
         authorPubkey: publicKey,
       })
 
-      // Encrypt summary (title + description + status + severity)
+      // Encrypt summary (title + description + status + severity). The status and
+      // severity are the entity type's VALUES, and live only here: the server
+      // never receives them (#2779).
       const summary = JSON.stringify({
         title: title.trim(),
         description: description.trim(),
-        status: selectedType.statuses.find(s => s.value === selectedType.defaultStatus)?.label ?? selectedType.defaultStatus,
-        severity: selectedType.defaultSeverity
-          ? selectedType.severities?.find(s => s.value === selectedType.defaultSeverity)?.label ?? selectedType.defaultSeverity
-          : undefined,
+        status: selectedType.defaultStatus,
+        severity: selectedType.defaultSeverity,
       })
       const encryptedSummary = await sealCase('summary', summary, readers.summary)
 
@@ -139,14 +139,8 @@ export function CreateRecordDialog({
         encryptedFields = await sealCase('fields', fieldsPayload, readers.fields)
       }
 
-      // Build the blind index status hash (use the default status value as a simple hash for now)
-      // In production, this would use HMAC with the hub key for blind indexing
-      const statusHash = selectedType.defaultStatus
-
       const body: CreateRecordBody = {
         entityTypeId: selectedType.id,
-        statusHash,
-        severityHash: selectedType.defaultSeverity,
         encryptedSummary: encryptedSummary.encryptedContent,
         summaryEnvelopes: encryptedSummary.readerEnvelopes,
         ...(encryptedFields && {

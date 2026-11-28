@@ -124,10 +124,10 @@ describe('GET /contacts', () => {
     const { app, mockContacts } = makeApp({ permissions: ['contacts:view'] })
     mockContacts.list.mockResolvedValue({ contacts: [], total: 0 })
 
-    const res = await app.request('/?page=2&limit=5&contactTypeHash=cth-abc')
+    const res = await app.request('/?page=2&limit=5')
     expect(res.status).toBe(200)
     expect(mockContacts.list).toHaveBeenCalledWith(
-      expect.objectContaining({ page: 2, limit: 5, contactTypeHash: 'cth-abc' }),
+      expect.objectContaining({ page: 2, limit: 5 }),
     )
   })
 
@@ -719,7 +719,7 @@ describe('contact writes name an admin reader (#2174)', () => {
       expect(mockIdentity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, 'hub-1')
 
       mockIdentity.listAdminEnvelopeRecipients.mockClear()
-      const unsealed = await send(app, 'PATCH', '/contact-1', { statusHash: 'closed' })
+      const unsealed = await send(app, 'PATCH', '/contact-1', { tagHashes: ['tag-1'] })
       expect(unsealed.status).toBe(200)
       expect(mockIdentity.listAdminEnvelopeRecipients).not.toHaveBeenCalled()
     })

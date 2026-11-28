@@ -165,7 +165,6 @@ describe('POST /events', () => {
     entityTypeId: '550e8400-e29b-41d4-a716-446655440000',
     startDate: '2026-01-01',
     eventTypeHash: 'type-hash-abc',
-    statusHash: 'status-hash-abc',
     encryptedDetails: 'encrypted-payload',
     detailEnvelopes: [envelopeTo(ADMIN)],
   }
@@ -314,7 +313,7 @@ describe('PATCH /events/:id', () => {
     const res = await app.request('/ev-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ encryptedTitle: 'new-title', titleEnvelopes: [] }),
+      body: JSON.stringify({ locationApproximate: 'new-place' }),
     })
 
     expect(res.status).toBe(200)
@@ -369,7 +368,7 @@ describe('PATCH /events/:id', () => {
     const res = await app.request('/ev-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ statusHash: 'closed' }),
+      body: JSON.stringify({ locationApproximate: 'Elsewhere' }),
     })
 
     expect(res.status).toBe(200)

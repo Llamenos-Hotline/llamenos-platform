@@ -18,16 +18,16 @@ describe('parseBlindIndexFilters', () => {
   })
 
   it('extracts params ending in "Hash"', () => {
-    const params = new URLSearchParams({ statusHash: 'abc123', name: 'bob' })
+    const params = new URLSearchParams({ nameHash: 'abc123', name: 'bob' })
     const filters = parseBlindIndexFilters(params)
-    expect(filters.has('statusHash')).toBe(true)
-    expect(filters.get('statusHash')).toEqual(['abc123'])
+    expect(filters.has('nameHash')).toBe(true)
+    expect(filters.get('nameHash')).toEqual(['abc123'])
   })
 
-  it('extracts "nameToken" literal', () => {
-    const params = new URLSearchParams({ nameToken: 'tok1' })
+  it('extracts "nameHash" literal', () => {
+    const params = new URLSearchParams({ nameHash: 'tok1' })
     const filters = parseBlindIndexFilters(params)
-    expect(filters.has('nameToken')).toBe(true)
+    expect(filters.has('nameHash')).toBe(true)
   })
 
   it('extracts params starting with "field_"', () => {
@@ -49,32 +49,32 @@ describe('parseBlindIndexFilters', () => {
   })
 
   it('splits comma-separated values into array for OR queries', () => {
-    const params = new URLSearchParams({ statusHash: 'hash1,hash2,hash3' })
+    const params = new URLSearchParams({ nameHash: 'hash1,hash2,hash3' })
     const filters = parseBlindIndexFilters(params)
-    expect(filters.get('statusHash')).toEqual(['hash1', 'hash2', 'hash3'])
+    expect(filters.get('nameHash')).toEqual(['hash1', 'hash2', 'hash3'])
   })
 
   it('trims whitespace from split values', () => {
-    const params = new URLSearchParams({ statusHash: 'hash1, hash2 , hash3' })
+    const params = new URLSearchParams({ nameHash: 'hash1, hash2 , hash3' })
     const filters = parseBlindIndexFilters(params)
-    expect(filters.get('statusHash')).toEqual(['hash1', 'hash2', 'hash3'])
+    expect(filters.get('nameHash')).toEqual(['hash1', 'hash2', 'hash3'])
   })
 
   it('filters out empty values from comma-split', () => {
-    const params = new URLSearchParams({ statusHash: 'hash1,,hash2' })
+    const params = new URLSearchParams({ nameHash: 'hash1,,hash2' })
     const filters = parseBlindIndexFilters(params)
-    expect(filters.get('statusHash')).toEqual(['hash1', 'hash2'])
+    expect(filters.get('nameHash')).toEqual(['hash1', 'hash2'])
   })
 
   it('handles multiple blind index params simultaneously', () => {
-    const params = new URLSearchParams({ statusHash: 'abc', severityHash: 'def' })
+    const params = new URLSearchParams({ nameHash: 'abc', tagHash: 'def' })
     const filters = parseBlindIndexFilters(params)
     expect(filters.size).toBe(2)
   })
 
   it('does not include non-blind-index params', () => {
     const params = new URLSearchParams({
-      statusHash: 'abc',
+      nameHash: 'abc',
       hubId: '123', // not a blind index param
       page: '2',
     })
@@ -91,30 +91,30 @@ describe('parseBlindIndexFilters', () => {
 describe('matchesBlindIndexFilters', () => {
   it('returns true when no filters (no filter = match all)', () => {
     const filters = new Map<string, string[]>()
-    expect(matchesBlindIndexFilters({ statusHash: 'abc' }, filters)).toBe(true)
+    expect(matchesBlindIndexFilters({ nameHash: 'abc' }, filters)).toBe(true)
   })
 
   it('returns true when all exact filters match', () => {
-    const filters = new Map([['statusHash', ['abc123']], ['severityHash', ['def456']]])
-    const indexes = { statusHash: 'abc123', severityHash: 'def456' }
+    const filters = new Map([['nameHash', ['abc123']], ['tagHash', ['def456']]])
+    const indexes = { nameHash: 'abc123', tagHash: 'def456' }
     expect(matchesBlindIndexFilters(indexes, filters)).toBe(true)
   })
 
   it('returns false when one filter does not match', () => {
-    const filters = new Map([['statusHash', ['abc123']], ['severityHash', ['def456']]])
-    const indexes = { statusHash: 'abc123', severityHash: 'wrong' }
+    const filters = new Map([['nameHash', ['abc123']], ['tagHash', ['def456']]])
+    const indexes = { nameHash: 'abc123', tagHash: 'wrong' }
     expect(matchesBlindIndexFilters(indexes, filters)).toBe(false)
   })
 
   it('returns false when a required index is missing from record', () => {
-    const filters = new Map([['statusHash', ['abc123']]])
+    const filters = new Map([['nameHash', ['abc123']]])
     expect(matchesBlindIndexFilters({}, filters)).toBe(false)
   })
 
   it('OR logic: matches if any filter value equals the record value', () => {
-    const filters = new Map([['statusHash', ['val1', 'val2', 'val3']]])
-    expect(matchesBlindIndexFilters({ statusHash: 'val2' }, filters)).toBe(true)
-    expect(matchesBlindIndexFilters({ statusHash: 'val99' }, filters)).toBe(false)
+    const filters = new Map([['nameHash', ['val1', 'val2', 'val3']]])
+    expect(matchesBlindIndexFilters({ nameHash: 'val2' }, filters)).toBe(true)
+    expect(matchesBlindIndexFilters({ nameHash: 'val99' }, filters)).toBe(false)
   })
 
   it('array record value: matches if any filter value is in the array', () => {
@@ -131,17 +131,17 @@ describe('matchesBlindIndexFilters', () => {
 
   it('AND logic: all filters must match', () => {
     const filters = new Map([
-      ['statusHash', ['open']],
-      ['severityHash', ['high']],
+      ['nameHash', ['open']],
+      ['tagHash', ['high']],
     ])
     // Only one matches
-    expect(matchesBlindIndexFilters({ statusHash: 'open', severityHash: 'low' }, filters)).toBe(false)
+    expect(matchesBlindIndexFilters({ nameHash: 'open', tagHash: 'low' }, filters)).toBe(false)
     // Both match
-    expect(matchesBlindIndexFilters({ statusHash: 'open', severityHash: 'high' }, filters)).toBe(true)
+    expect(matchesBlindIndexFilters({ nameHash: 'open', tagHash: 'high' }, filters)).toBe(true)
   })
 
   it('returns false when record index is null', () => {
-    const filters = new Map([['statusHash', ['abc']]])
-    expect(matchesBlindIndexFilters({ statusHash: null as unknown as string }, filters)).toBe(false)
+    const filters = new Map([['nameHash', ['abc']]])
+    expect(matchesBlindIndexFilters({ nameHash: null as unknown as string }, filters)).toBe(false)
   })
 })
