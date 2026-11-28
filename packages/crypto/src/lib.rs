@@ -66,6 +66,8 @@ pub mod id_profile;
 pub mod shape;
 
 #[cfg(test)]
+mod hub_chain_vectors;
+#[cfg(test)]
 mod vectors;
 
 // === The one definition of an envelope AAD (mirrors packages/shared/envelope-aad.ts) ===

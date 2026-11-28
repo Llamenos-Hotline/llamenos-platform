@@ -29,14 +29,14 @@ const FIXTURE_DEVICES_PATH: &str = "tests/fixtures/v2/fixture-reader-devices.jso
 const SERVER_EVENT_PATH: &str = "tests/fixtures/v2/server-event.json";
 const DEVICE_BINDING_PATH: &str = "tests/fixtures/v2/device-binding.json";
 
-fn rng(label: &str) -> ChaCha20Rng {
+pub(crate) fn rng(label: &str) -> ChaCha20Rng {
     let mut seed = [0u8; 32];
     let digest = <sha2::Sha256 as sha2::Digest>::digest(label.as_bytes());
     seed.copy_from_slice(&digest);
     ChaCha20Rng::from_seed(seed)
 }
 
-fn bytes32(rng: &mut ChaCha20Rng) -> [u8; 32] {
+pub(crate) fn bytes32(rng: &mut ChaCha20Rng) -> [u8; 32] {
     let mut b = [0u8; 32];
     rng.fill_bytes(&mut b);
     b
@@ -732,7 +732,7 @@ fn render(v: &Value) -> String {
     s
 }
 
-fn check_or_write(path: &str, v: &Value) {
+pub(crate) fn check_or_write(path: &str, v: &Value) {
     let full = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
     let rendered = render(v);
     if std::env::var_os("LLAMENOS_WRITE_VECTORS").is_some() {
@@ -750,7 +750,7 @@ fn check_or_write(path: &str, v: &Value) {
     );
 }
 
-fn load(path: &str) -> Value {
+pub(crate) fn load(path: &str) -> Value {
     let full = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
     serde_json::from_str(&std::fs::read_to_string(full).unwrap()).unwrap()
 }
@@ -776,6 +776,14 @@ fn vectors_are_generated_by_this_crate() {
     check_or_write(HPKE_WRAP_PATH, &generate_hpke_wrap());
     check_or_write(SERVER_EVENT_PATH, &generate_server_event());
     check_or_write(DEVICE_BINDING_PATH, &generate_device_binding());
+    check_or_write(
+        crate::hub_chain_vectors::HUB_CHAIN_PATH,
+        &crate::hub_chain_vectors::generate_hub_chain(),
+    );
+    check_or_write(
+        crate::hub_chain_vectors::RECOVERY_PATH,
+        &crate::hub_chain_vectors::generate_recovery(),
+    );
     // Production Argon2id only (see generate_fixture_reader_devices).
     if !cfg!(feature = "test-kdf") {
         check_or_write(FIXTURE_DEVICES_PATH, &generate_fixture_reader_devices());

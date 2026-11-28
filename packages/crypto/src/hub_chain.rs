@@ -289,6 +289,28 @@ pub fn assemble_hub_link(
     })
 }
 
+/// Assemble a link with a given entry hash, unchecked. Test-only: negative
+/// vectors need links no conforming writer can produce.
+#[cfg(test)]
+pub(crate) fn assemble_hub_link_unchecked(
+    unsigned: &UnsignedHubLink,
+    signer_device_hex: &str,
+    entry_hash: &str,
+    sig_hex: &str,
+) -> HubChainLink {
+    HubChainLink {
+        hub: unsigned.hub.clone(),
+        seq: unsigned.seq,
+        prev_hash: unsigned.prev_hash.clone(),
+        signer_user: unsigned.signer_user.clone(),
+        signer_device: signer_device_hex.to_string(),
+        signer_user_head: unsigned.signer_user_head.clone(),
+        body: unsigned.body.clone(),
+        entry_hash: entry_hash.to_string(),
+        sig: sig_hex.to_string(),
+    }
+}
+
 /// Sign `unsigned` with this device (D11).
 pub fn sign_hub_link(
     secrets: &DeviceSecrets,
@@ -694,27 +716,57 @@ fn kem_pk(pk: &str, format: u64) -> Result<Vec<u8>, CryptoError> {
 struct Context<'a> {
     users: BTreeMap<String, &'a [SigchainLink]>,
     hubs: BTreeMap<String, &'a [HubChainLink]>,
+    /// Hubs whose supplied chain the verifier may take recovery evidence from:
+    /// the chain being verified (checked against its anchor) and every other
+    /// hub chain that matched a trusted anchor this device holds for it.
+    anchored: BTreeSet<String>,
     depth: u8,
 }
 
 impl<'a> Context<'a> {
-    fn new(user_chains: &'a [Vec<SigchainLink>], hub_chains: &'a [Vec<HubChainLink>]) -> Self {
-        let users = user_chains
-            .iter()
-            .filter_map(|c| {
-                c.first()
-                    .map(|g| (g.signer_pubkey.to_ascii_lowercase(), c.as_slice()))
-            })
-            .collect();
-        let hubs = hub_chains
-            .iter()
-            .filter_map(|c| c.first().map(|g| (g.hub.clone(), c.as_slice())))
-            .collect();
-        Context {
+    fn new(
+        user_chains: &'a [Vec<SigchainLink>],
+        hub_chains: &'a [Vec<HubChainLink>],
+        hub_anchors: &[HubAnchor],
+    ) -> Result<Self, CryptoError> {
+        let mut users = BTreeMap::new();
+        for c in user_chains {
+            if let Some(g) = c.first() {
+                if users
+                    .insert(g.signer_pubkey.to_ascii_lowercase(), c.as_slice())
+                    .is_some()
+                {
+                    return Err(rej(
+                        "chain_duplicate_input",
+                        format!("two user chains were supplied for {}", g.signer_pubkey),
+                    ));
+                }
+            }
+        }
+        let mut hubs = BTreeMap::new();
+        for c in hub_chains {
+            if let Some(g) = c.first() {
+                if hubs.insert(g.hub.clone(), c.as_slice()).is_some() {
+                    return Err(rej(
+                        "chain_duplicate_input",
+                        format!("two chains were supplied for hub {}", g.hub),
+                    ));
+                }
+            }
+        }
+        let mut anchored = BTreeSet::new();
+        for a in hub_anchors {
+            if let Some(links) = hubs.get(&a.hub) {
+                check_anchor(links, &a.head)?;
+                anchored.insert(a.hub.clone());
+            }
+        }
+        Ok(Context {
             users,
             hubs,
+            anchored,
             depth: 0,
-        }
+        })
     }
 
     fn deeper(&self) -> Result<Context<'a>, CryptoError> {
@@ -727,6 +779,7 @@ impl<'a> Context<'a> {
         Ok(Context {
             users: self.users.clone(),
             hubs: self.hubs.clone(),
+            anchored: self.anchored.clone(),
             depth: self.depth + 1,
         })
     }
@@ -912,10 +965,8 @@ fn apply_link(
     }
     let role_mgmt = [VOCABULARY.role_management.clone()];
     let require = |st: &Replay, perms: &[String]| -> Result<(), CryptoError> {
-        if st.is_member(user) || (st.bootstrap && user == st.founder) {
-            if st.has_all(user, perms) {
-                return Ok(());
-            }
+        if (st.is_member(user) || (st.bootstrap && user == st.founder)) && st.has_all(user, perms) {
+            return Ok(());
         }
         Err(rej(
             "chain_unauthorised_signer",
@@ -1140,6 +1191,9 @@ fn apply_link(
     Ok(())
 }
 
+/// A permission check against the state at `n − 1`.
+type Require<'a> = dyn Fn(&Replay, &[String]) -> Result<(), CryptoError> + 'a;
+
 fn apply_genesis(st: &mut Replay, body: &Body<'_>, signer: &str) -> Result<(), CryptoError> {
     body.only(&["founder", "migration", "members"])?;
     let founder = body.str("founder")?;
@@ -1204,7 +1258,7 @@ fn apply_group_epoch(
     signer: &str,
     role_mgmt: &[String],
     n: u64,
-    require: &dyn Fn(&Replay, &[String]) -> Result<(), CryptoError>,
+    require: &Require<'_>,
 ) -> Result<(), CryptoError> {
     body.only(&[
         "group", "kind", "subject", "epoch", "format", "pk", "escrow", "reason", "index",
@@ -1343,6 +1397,14 @@ fn apply_group_epoch(
 
 // ── Public verification API ──
 
+/// A trusted anchor for a hub other than the one being verified (§5.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HubAnchor {
+    pub hub: String,
+    pub head: ChainHead,
+}
+
 /// Everything a verifier needs (§5.4, §5.7): the hub chain, the user chains of
 /// its signers (and of recovery holders), any other hub chains a recovery link
 /// names, and the trusted anchor `{seq, hash}` this device already holds —
@@ -1358,6 +1420,10 @@ pub struct HubChainInput {
     pub hub_chains: Vec<Vec<HubChainLink>>,
     #[serde(default)]
     pub anchor: Option<ChainHead>,
+    /// Trusted anchors for the chains in `hub_chains`. A recovery link may only
+    /// draw its evidence from an anchored hub chain (or the chain being verified).
+    #[serde(default)]
+    pub hub_anchors: Vec<HubAnchor>,
 }
 
 /// A verified hub chain: its head, the state after it, `H(canonical(state))`
@@ -1404,7 +1470,14 @@ pub fn verify_hub_chain(input: &HubChainInput) -> Result<HubChainVerified, Crypt
     if let Some(anchor) = &input.anchor {
         check_anchor(&input.links, anchor)?;
     }
-    let ctx = Context::new(&input.user_chains, &input.hub_chains);
+    // The chain being verified is its own recovery evidence: put it in the
+    // context (refusing a second copy of it in `hub_chains`) as anchored.
+    let mut hub_chains = input.hub_chains.clone();
+    hub_chains.push(input.links.clone());
+    let mut ctx = Context::new(&input.user_chains, &hub_chains, &input.hub_anchors)?;
+    if let Some(first) = input.links.first() {
+        ctx.anchored.insert(first.hub.clone());
+    }
     let mut alerts = Vec::new();
     let st = replay(&input.links, &ctx, &mut alerts)?;
     let state_hash = st.state_hash()?;
@@ -1423,7 +1496,11 @@ pub fn state_after(
     links: &[HubChainLink],
     user_chains: &[Vec<SigchainLink>],
 ) -> Result<HubState, CryptoError> {
-    let ctx = Context::new(user_chains, &[]);
+    let own = [links.to_vec()];
+    let mut ctx = Context::new(user_chains, &own, &[])?;
+    if let Some(first) = links.first() {
+        ctx.anchored.insert(first.hub.clone());
+    }
     Ok(replay(links, &ctx, &mut Vec::new())?.view())
 }
 
@@ -1433,8 +1510,9 @@ pub fn verify_sigchain_in_context(
     links: &[SigchainLink],
     user_chains: &[Vec<SigchainLink>],
     hub_chains: &[Vec<HubChainLink>],
+    hub_anchors: &[HubAnchor],
 ) -> Result<SigchainVerifiedState, CryptoError> {
-    let ctx = Context::new(user_chains, hub_chains);
+    let ctx = Context::new(user_chains, hub_chains, hub_anchors)?;
     verify_sigchain_with(links, &ctx)
 }
 
@@ -1557,6 +1635,15 @@ impl RecoveryVerifier for Context<'_> {
         let hub_head: ChainHead =
             serde_json::from_value(p.obj.get("hubHead").cloned().unwrap_or(Value::Null))
                 .map_err(|_| rej("recovery_unverifiable", "hubHead is {seq, hash}"))?;
+        if !self.anchored.contains(hub) {
+            return Err(rej(
+                "recovery_unverifiable",
+                format!(
+                    "recovery at seq {} names hub {hub}, for which no trusted anchor is held",
+                    link.seq
+                ),
+            ));
+        }
         let hub_links = self.hubs.get(hub).copied().ok_or_else(|| {
             rej(
                 "recovery_unverifiable",
@@ -1583,6 +1670,15 @@ impl RecoveryVerifier for Context<'_> {
             return Err(rej(
                 "recovery_hub_head",
                 format!("hub {hub} has a different link at seq {}", hub_head.seq),
+            ));
+        }
+        if !hub_state.is_member(user) {
+            return Err(rej(
+                "recovery_not_member",
+                format!(
+                    "{user} is not a member of hub {hub} at seq {}",
+                    hub_head.seq
+                ),
             ));
         }
         let group = hub_state.recovery_group.clone().ok_or_else(|| {
@@ -1796,6 +1892,7 @@ pub(crate) mod tests {
             user_chains: users.to_vec(),
             hub_chains: vec![],
             anchor: None,
+            hub_anchors: vec![],
         })
     }
 
@@ -1868,6 +1965,7 @@ pub(crate) mod tests {
                 seq: 1,
                 hash: "00".repeat(32),
             }),
+            hub_anchors: vec![],
         };
         assert_eq!(verify_hub_chain(&input).unwrap_err().code(), "chain_fork");
     }
