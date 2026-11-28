@@ -20,6 +20,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono'
+import { founding, newFounder, storeUserChain } from '../helpers/founder'
 import type { AppEnv } from '../../types'
 import * as schema from '../../db/schema'
 import type { TelephonyAdapter } from '../../telephony/adapter'
@@ -174,8 +175,11 @@ describe('the day-1 path: the wizard-configured number reaches the default hub (
       lastCheckedAt: new Date(),
     })
     await fresh.db.delete(schema.hubs)
-    const admin = 'e'.repeat(64)
+    // A real identity whose device signs the default hub's genesis (#2963).
+    const founder = newFounder()
+    const admin = founder.pubkey
     await fresh.db.insert(schema.users).values({ pubkey: admin, displayName: 'Setup admin' }).onConflictDoNothing()
+    const hub = founding(founder, await storeUserChain(fresh.db, founder))
     // The wizard registers the admin's device before completing setup: the hub's
     // first admin must be its reader (#1034).
     await fresh.db.insert(schema.devices).values({ pubkey: admin, platform: 'desktop', x25519Pubkey: 'ab'.repeat(32) })
@@ -192,7 +196,7 @@ describe('the day-1 path: the wizard-configured number reaches the default hub (
     const done = await setupApp.request('/api/setup/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ hub }),
     }, { ...ENV, HOTLINE_NAME: 'Day One' })
     expect(done.status).toBe(200)
 
