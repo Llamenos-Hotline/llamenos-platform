@@ -70,6 +70,4 @@ typealias SendMessageBodyReaderEnvelope = SharedAdminEnvelope
 // Entity type definition status struct — EntityTypeDefinition.statuses[] deduplicated to SharedStatus
 typealias EntityTypeDefinitionStatus = SharedStatus
 
-// Note reply — NoteRepliesResponse.replies deduplicated to SharedNote
-typealias Reply = SharedNote
 typealias Note = SharedNote

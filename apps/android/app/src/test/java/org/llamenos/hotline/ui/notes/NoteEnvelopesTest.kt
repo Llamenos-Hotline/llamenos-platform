@@ -5,7 +5,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.llamenos.hotline.crypto.HpkeEnvelope
 import org.llamenos.hotline.crypto.NoteEnvelope
+import kotlinx.serialization.json.Json
 import org.llamenos.protocol.AuthorEnvelope
+import org.llamenos.protocol.NoteRepliesResponse
+import org.llamenos.protocol.NoteReplyResponse
+import org.llamenos.protocol.SharedAdminEnvelope
 import org.llamenos.protocol.SharedNote
 import org.llamenos.protocol.SharedNoteAdminEnvelope
 
@@ -137,6 +141,63 @@ class NoteEnvelopesTest {
                     SharedNoteAdminEnvelope(pubkey = adminPub, enc = "enc-adm", ct = "ct-adm"),
                 ),
             ),
+            authorPub,
+        )
+        assertTrue(candidates.isEmpty())
+    }
+
+    // ── Note replies (#2300) ────────────────────────────────────────────────
+    // GET /notes/:id/replies answers `note_replies` rows: no `updatedAt`, no
+    // `authorEnvelope`/`adminEnvelopes`, `readerEnvelopes` instead. Decoding it
+    // as a note threw MissingFieldException on every response, which
+    // `loadReplies` swallowed, so replies never loaded.
+
+    private fun reply(readerEnvelopes: List<SharedAdminEnvelope>) = NoteReplyResponse(
+        id = "reply-1",
+        noteID = "note-1",
+        authorPubkey = "cc".repeat(32),
+        encryptedContent = "deadbeef",
+        createdAt = "2026-01-01T00:00:00Z",
+        readerEnvelopes = readerEnvelopes,
+    )
+
+    @Test
+    fun `replies response decodes the note_replies row the server sends`() {
+        val body = """
+            {"replies":[{
+              "id":"b2c3d4e5-f6a7-4890-8bcd-ef1234567890",
+              "noteId":"a1b2c3d4-e5f6-4789-8abc-def123456789",
+              "authorPubkey":"${"cc".repeat(32)}",
+              "encryptedContent":"encrypted-reply",
+              "readerEnvelopes":[{"pubkey":"$authorPub","enc":"enc-a","ct":"ct-a"}],
+              "createdAt":"2026-01-01T00:00:00.000Z"
+            }]}
+        """.trimIndent()
+        val decoded = Json.decodeFromString<NoteRepliesResponse>(body)
+        assertEquals(1, decoded.replies.size)
+        assertEquals("a1b2c3d4-e5f6-4789-8abc-def123456789", decoded.replies[0].noteID)
+        assertEquals(listOf(authorPub), decoded.replies[0].readerEnvelopes.map { it.pubkey })
+    }
+
+    @Test
+    fun `reply read candidates come from our readerEnvelopes entry`() {
+        val candidates = noteReplyReadCandidates(
+            reply(
+                listOf(
+                    SharedAdminEnvelope(pubkey = authorPub, enc = "enc-a", ct = "ct-a"),
+                    SharedAdminEnvelope(pubkey = adminPub, enc = "enc-adm", ct = "ct-adm"),
+                ),
+            ),
+            adminPub,
+        )
+        assertEquals(listOf("enc-adm"), candidates.map { it.enc })
+        assertEquals(listOf("ct-adm"), candidates.map { it.ct })
+    }
+
+    @Test
+    fun `reply read candidates are empty when no envelope is ours`() {
+        val candidates = noteReplyReadCandidates(
+            reply(listOf(SharedAdminEnvelope(pubkey = adminPub, enc = "enc-adm", ct = "ct-adm"))),
             authorPub,
         )
         assertTrue(candidates.isEmpty())

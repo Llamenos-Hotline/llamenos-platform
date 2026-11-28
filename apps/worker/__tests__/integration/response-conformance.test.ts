@@ -78,7 +78,7 @@ import { configResponseSchema } from '@protocol/schemas/config'
 import { activeCallsResponseSchema, todayCountResponseSchema, callPresenceResponseSchema } from '@protocol/schemas/calls'
 import type { activeCalls, noteReplies } from '../../db/schema'
 import { hubListResponseSchema, hubDetailResponseSchema, type Hub } from '@protocol/schemas/hubs'
-import { noteListResponseSchema, noteStoredResponseSchema, noteReplyStoredResponseSchema } from '@protocol/schemas/notes'
+import { noteListResponseSchema, noteStoredResponseSchema, noteReplyStoredResponseSchema, noteRepliesResponseSchema } from '@protocol/schemas/notes'
 import { banListResponseSchema } from '@protocol/schemas/bans'
 import { inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
 import { userListResponseSchema, userResponseSchema } from '@protocol/schemas/users'
@@ -589,17 +589,45 @@ describe('Notes Routes — response conformance', () => {
   // `{ reply: noteResponseSchema }` fails against the real body. The fixture is
   // therefore the ROW the service returns, not something shaped like the
   // schema (#1362), so a route that leaked or dropped a column would show here.
+  // A `note_replies` row exactly as the service returns it (#1362: the fixture
+  // is the ROW, so a route that leaked or dropped a column shows here).
+  const buildReplyRow = (adminKey: string): typeof noteReplies.$inferSelect => ({
+    id: 'b2c3d4e5-f6a7-4890-8bcd-ef1234567890',
+    noteId: mockNote.id,
+    authorPubkey: MOCK_PUBKEY,
+    encryptedContent: 'encrypted-reply-base64',
+    readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }],
+    createdAt: new Date(),
+    cryptoFormat: CRYPTO_FORMAT_CURRENT,
+  })
+
+  // GET /notes/:id/replies answers `{ replies: NoteReplyRow[] }` but DECLARED
+  // `{ replies: noteResponseSchema[] }` — the note shape, which needs
+  // `updatedAt` a reply row has never had. Android decoded it against that
+  // declaration, threw MissingFieldException on every real body, and the
+  // catch in `loadReplies` hid it (#2300).
+  it('GET /notes/:id/replies — conforms to noteRepliesResponseSchema', async () => {
+    const adminKey = 'a'.repeat(64)
+    const replyRow = buildReplyRow(adminKey)
+    const mockRecords = {
+      getNote: vi.fn().mockResolvedValue({ ...mockNote, hubId: DEFAULT_HUB_ID }),
+      listReplies: vi.fn().mockResolvedValue([replyRow]),
+    }
+    const { app, env } = buildApp('/notes', notesRoutes, {
+      services: { records: mockRecords },
+    })
+
+    const result = await assertConformsToSchema(app, 'GET', `/notes/${mockNote.id}/replies`, noteRepliesResponseSchema, { env })
+    expect(result.parsed.replies).toHaveLength(1)
+    expect(result.parsed.replies[0].id).toBe(replyRow.id)
+    expect(result.parsed.replies[0].noteId).toBe(mockNote.id)
+    expect(result.parsed.replies[0].readerEnvelopes).toHaveLength(1)
+    expect(mockRecords.listReplies).toHaveBeenCalledWith(mockNote.id)
+  })
+
   it('POST /notes/:id/replies — conforms to noteReplyStoredResponseSchema', async () => {
     const adminKey = 'a'.repeat(64)
-    const replyRow: typeof noteReplies.$inferSelect = {
-      id: 'b2c3d4e5-f6a7-4890-8bcd-ef1234567890',
-      noteId: mockNote.id,
-      authorPubkey: MOCK_PUBKEY,
-      encryptedContent: 'encrypted-reply-base64',
-      readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'c'.repeat(96) }],
-      createdAt: new Date(),
-      cryptoFormat: CRYPTO_FORMAT_CURRENT,
-    }
+    const replyRow = buildReplyRow(adminKey)
     const mockRecords = {
       getNote: vi.fn().mockResolvedValue({ ...mockNote, hubId: DEFAULT_HUB_ID }),
       createReply: vi.fn().mockResolvedValue(replyRow),

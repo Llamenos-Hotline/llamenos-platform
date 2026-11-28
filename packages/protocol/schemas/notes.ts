@@ -50,8 +50,9 @@ export const noteListResponseSchema = z.object({
   ...paginatedMeta,
 })
 
+/** What `GET /notes/:id/replies` answers: `note_replies` rows, never notes (#2300). */
 export const noteRepliesResponseSchema = z.object({
-  replies: z.array(noteResponseSchema),
+  replies: z.array(noteReplyResponseSchema),
 })
 
 // --- Input schemas ---
