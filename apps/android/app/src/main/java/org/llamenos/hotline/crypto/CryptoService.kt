@@ -885,8 +885,8 @@ class CryptoService @Inject constructor() {
 
     /**
      * One stateless hub-chain operation in Rust (`hub_chain::call`): [requestJson]
-     * is `{"op": "verify" | "signingMessage" | "assemble" | "permsHash" |
-     * "verifySigchain" | "approvalMessage" | "build" | "usersNamed", …}`, the answer the crate's JSON. The
+     * names the op (the crate's `hub_chain::call` table lists them); the app uses
+     * `verify`, `verifySigchain` and `usersNamed`, the answer the crate's JSON. The
      * app never canonicalises, hashes or checks a hub link itself.
      */
     suspend fun hubChainCall(requestJson: String): String =
