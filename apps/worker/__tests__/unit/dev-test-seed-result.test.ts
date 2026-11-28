@@ -30,11 +30,19 @@ const ADMIN_SEED = 'b'.repeat(64)
 const MEMBER = 'c'.repeat(64)
 const ENV = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }
 
-function seedApp(overrides: { setHubRole?: () => Promise<void>; createEntityType?: (arg: unknown) => Promise<{ id: string }> } = {}) {
+function seedApp(overrides: {
+  setHubRole?: () => Promise<void>
+  createEntityType?: (arg: unknown) => Promise<{ id: string }>
+  buildReaderPubkeys?: () => Promise<string[]>
+} = {}) {
   const services = {
     settingsBootstrap: { ensureInit: vi.fn(async () => undefined) },
     hubSettings: { setCaseManagementEnabled: vi.fn(async () => ({ enabled: true })) },
-    identity: { setHubRole: vi.fn(overrides.setHubRole ?? (async () => undefined)) },
+    identity: {
+      setHubRole: vi.fn(overrides.setHubRole ?? (async () => undefined)),
+      // No registered device: the record keeps the dummy envelope (see routes/dev.ts).
+      buildReaderPubkeys: vi.fn(overrides.buildReaderPubkeys ?? (async () => [])),
+    },
     entitySchema: {
       createEntityType: vi.fn(overrides.createEntityType ?? (async () => ({ id: 'et-1' }))),
       getEntityTypes: vi.fn(async () => ({ entityTypes: [{ id: 'et-existing', name: 'arrest_case' }] })),
@@ -105,6 +113,16 @@ describe('test-seed reports per-step outcomes (#3088)', () => {
     expect(body.ok).toBe(false)
     expect(body.failures).toEqual(['entityType arrest_case: boom'])
     expect(body.records).toEqual([])
+  })
+
+  it('fails a record step whose reader lookup fails, and creates no record it could not seal', async () => {
+    const { seed, services } = seedApp({ buildReaderPubkeys: async () => { throw new Error('reader lookup failed') } })
+    const { body } = await seed({ entityTypes: [{ template: 'arrest_case', records: 1 }] })
+
+    expect(body.ok).toBe(false)
+    expect(body.failures).toEqual(['record arrest_case[0]: reader lookup failed'])
+    expect(body.records).toEqual([])
+    expect(services.cases.create).not.toHaveBeenCalled()
   })
 
   it('treats a reused entity type as ok with a warning — a warning is not a failure', async () => {

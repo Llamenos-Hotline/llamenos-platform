@@ -602,15 +602,14 @@ dev.post('/test-seed', async (c) => {
     // open makes every status-changing scenario fail. A record with no resolvable
     // reader (the pre-launch seed, before any device has registered) keeps a dummy
     // envelope so the app's list still finds a record addressed to it; its summary
-    // is not a ciphertext and no client can open it.
-    // A failed lookup is a failed step (#3088): the records are still created, with
-    // the dummy envelope, and `ok` is false.
-    const readerPubkeys = (await outcome.run(`readers ${tmpl.name}`, () =>
-      services.identity.buildReaderPubkeys(undefined, etSpec.assignTo))) ?? []
+    // is not a ciphertext and no client can open it. The lookup is part of each
+    // record's step: a lookup that fails is a record that did not happen (#3088),
+    // never one created with a summary its assignees cannot open.
     const dummyEnvelope = { pubkey: adminSeed, ct: 'a'.repeat(64), enc: adminSeed }
     for (let i = 0; i < etSpec.records; i++) {
       const isEvent = tmpl.category === 'event'
       const record = await outcome.run(`record ${tmpl.name}[${i}]`, async () => {
+        const readerPubkeys = await services.identity.buildReaderPubkeys(undefined, etSpec.assignTo)
         const title = `Test ${isEvent ? 'Event' : 'Case'} ${i + 1}`
         const sealed = readerPubkeys.length > 0
           ? caseSeal('summary', JSON.stringify({ title, description: `Seeded ${isEvent ? 'event' : 'case'}`, status: tmpl.defaultStatus }), readerPubkeys)

@@ -63,7 +63,8 @@
         "symbol": "computeEntryHash"
       },
       "accepts": [
-        "^record\\.hash"
+        "^record\\.hash",
+        "^link\\.hash"
       ]
     },
     "eventTypeHash": {
