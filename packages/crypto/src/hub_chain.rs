@@ -57,7 +57,25 @@ fn rej(code: &'static str, detail: impl Into<String>) -> CryptoError {
     }
 }
 
-// ── Permission vocabulary (packages/protocol/hub-chain-permissions.json) ──
+// ── Permission vocabulary ──
+//
+// The system permission ids the chain evaluates. They are constants of the
+// crate, not read from `packages/protocol/` at compile time: the crate builds
+// on its own (the server image's Rust stage, `cargo package`, the mobile
+// builds carry only `packages/crypto/`). `packages/protocol/hub-chain-permissions.json`
+// states the same vocabulary for the hosts, and `vocabulary_matches_protocol_json`
+// fails CI if the two drift — the `labels.rs` / `crypto-labels.json` pattern.
+
+/// The permission that authorises role and group administration links.
+const ROLE_MANAGEMENT: &str = "hubs:manage-members";
+
+/// Each closed reader-purpose word and the permissions whose holders are that
+/// purpose group's members.
+const READER_PURPOSES: &[(&str, &[&str])] = &[
+    ("admin", &["notes:read-all", "settings:manage"]),
+    ("call-history", &["calls:read-history"]),
+    ("shift-overrides", &["shifts:manage-overrides"]),
+];
 
 struct Vocabulary {
     role_management: String,
@@ -66,14 +84,17 @@ struct Vocabulary {
 }
 
 static VOCABULARY: LazyLock<Vocabulary> = LazyLock::new(|| {
-    let v: Value = serde_json::from_str(include_str!("../../protocol/hub-chain-permissions.json"))
-        .expect("hub-chain-permissions.json is valid JSON");
-    let role_management = v["roleManagement"]
-        .as_str()
-        .expect("roleManagement is a string")
-        .to_string();
-    let reader_purposes: BTreeMap<String, Vec<String>> =
-        serde_json::from_value(v["readerPurposes"].clone()).expect("readerPurposes map");
+    let reader_purposes: BTreeMap<String, Vec<String>> = READER_PURPOSES
+        .iter()
+        .map(|(purpose, perms)| {
+            (
+                purpose.to_string(),
+                perms.iter().map(|p| p.to_string()).collect(),
+            )
+        })
+        .collect();
+    // Escrow management is every permission of every reader purpose (the same
+    // rule as the escrow-key route's `assertMayManageHubEscrow`).
     let escrow_management = reader_purposes
         .values()
         .flatten()
@@ -82,7 +103,7 @@ static VOCABULARY: LazyLock<Vocabulary> = LazyLock::new(|| {
         .into_iter()
         .collect();
     Vocabulary {
-        role_management,
+        role_management: ROLE_MANAGEMENT.to_string(),
         reader_purposes,
         escrow_management,
     }
@@ -1910,6 +1931,22 @@ pub fn sign_approval_json(
 pub(crate) mod tests {
     use super::*;
     use crate::sigchain::{create_sigchain_link, user_init_payload};
+
+    /// CI GUARD: the crate's permission vocabulary is the one
+    /// `packages/protocol/hub-chain-permissions.json` states for the hosts.
+    #[test]
+    fn vocabulary_matches_protocol_json() {
+        let v: Value =
+            serde_json::from_str(include_str!("../../protocol/hub-chain-permissions.json"))
+                .expect("hub-chain-permissions.json parses");
+        assert_eq!(v["roleManagement"].as_str(), Some(ROLE_MANAGEMENT));
+        let json: BTreeMap<String, Vec<String>> =
+            serde_json::from_value(v["readerPurposes"].clone()).expect("readerPurposes map");
+        assert_eq!(
+            json, VOCABULARY.reader_purposes,
+            "readerPurposes drifted from the crate"
+        );
+    }
 
     pub(crate) fn device(seed: u8) -> DeviceSecrets {
         DeviceSecrets {
