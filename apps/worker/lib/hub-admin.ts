@@ -59,7 +59,7 @@
 import { and, eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { users, roles as roleDefinitions, hubs } from '../db/schema'
-import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, roleUsableIn, rolesConferHubAdmin, rolesGrantAll, type RoleCatalog } from '@shared/permissions'
+import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, expandPermissions, roleUsableIn, rolesConferHubAdmin, rolesGrantAll, type RoleCatalog } from '@shared/permissions'
 import { ServiceError } from '../services/service-error'
 import { isRevokedSigningKey } from './revoked-signing-keys'
 
@@ -178,12 +178,26 @@ export function hubFounderRoleIds(catalog: RoleCatalog): string[] {
  * cached role id against ITS catalog, so a bundle named after a role with
  * instance authority (`role-super-admin`) must never reach the cache.
  */
-export function hubGrantableRoleIds(roleIds: readonly string[], catalog: RoleCatalog, hubId: string): string[] {
+export function hubGrantableRoleIds(
+  roleIds: readonly string[],
+  catalog: RoleCatalog,
+  hubId: string,
+  /**
+   * The chain's own permission set for each bundle. When given, a role is cached
+   * only if the chain bundle declares every concrete permission the catalog role
+   * confers: the server resolves the cached id against ITS catalog, so a chain
+   * bundle narrower than the catalog role must not inherit the broader set.
+   */
+  chainPermissions?: ReadonlyMap<string, readonly string[]>,
+): string[] {
   const known = new Set(catalog.map(r => r.id))
   const defs = [...catalog, ...DEFAULT_ROLES.filter(r => !known.has(r.id))]
   return roleIds.filter(id => {
     const def = defs.find(r => r.id === id)
-    return def !== undefined && roleUsableIn(id, defs, hubId) && !def.permissions.some(isInstanceLevel)
+    if (def === undefined || !roleUsableIn(id, defs, hubId) || def.permissions.some(isInstanceLevel)) return false
+    if (!chainPermissions) return true
+    const declared = new Set(chainPermissions.get(id) ?? [])
+    return expandPermissions(def.permissions).every(p => declared.has(p))
   })
 }
 

@@ -29,6 +29,7 @@ import { appendValidatedSigchainLink } from '../../services/crypto-keys'
 import { createSigchainLinkMock, userInitPayloadMock } from '../../../../tests/mocks/sigchain-mock'
 import { bundlePermsHashMock, newHubGenesisMock, signHubLinkMock } from '../../../../tests/mocks/hub-chain-mock'
 import type { ChainHead, HubChainLink } from '@protocol/schemas/hub-chain'
+import { DEFAULT_ROLES, expandPermissions } from '@shared/permissions'
 import { requireDatabaseUrl } from '../helpers/database-url'
 
 const db = createDatabase(requireDatabaseUrl())
@@ -99,7 +100,10 @@ function next(prev: HubChainLink, signer: TestUser, body: HubChainLink['body']):
   }, signer.seedHex)
 }
 
-const ADMIN_PERMS = ['calls:read-history', 'hubs:manage-members', 'notes:read-all', 'settings:manage', 'shifts:manage-overrides']
+/** A bundle declaring exactly what the catalog role of the same id confers — the form a client commits. */
+const rolePerms = (id: string) => expandPermissions(DEFAULT_ROLES.find(r => r.id === id)!.permissions)
+const ADMIN_PERMS = rolePerms('role-hub-admin')
+const VOLUNTEER_PERMS = rolePerms('role-volunteer')
 const bundle = (name: string, permissions: string[]) => ({
   type: 'policy' as const, kind: 'bundle', bundle: name, permissions, permsHash: bundlePermsHashMock(permissions),
 })
@@ -151,7 +155,7 @@ describe('hub chain: append', () => {
     const { id, genesis } = await foundHub(founder)
     const l2 = next(genesis, founder, bundle('role-hub-admin', ADMIN_PERMS))
     expect(await chain.append(id, l2)).toEqual({ seq: 2, hash: l2.entryHash })
-    const l3 = next(l2, founder, bundle('role-volunteer', ['calls:answer']))
+    const l3 = next(l2, founder, bundle('role-volunteer', VOLUNTEER_PERMS))
     await chain.append(id, l3)
     const l4 = next(l3, founder, { type: 'role_grant', user: volunteer.pubkey, bundle: 'role-volunteer' })
     await chain.append(id, l4)
@@ -166,7 +170,7 @@ describe('hub chain: append', () => {
     const founder = await makeUser('founder')
     const { id, genesis } = await foundHub(founder)
     const winner = next(genesis, founder, bundle('role-hub-admin', ADMIN_PERMS))
-    const loser = next(genesis, founder, bundle('role-volunteer', ['calls:answer']))
+    const loser = next(genesis, founder, bundle('role-volunteer', VOLUNTEER_PERMS))
     await chain.append(id, winner)
     const err = await chain.append(id, loser).catch(e => e)
     expect(err).toBeInstanceOf(HubChainConflictError)
@@ -186,7 +190,7 @@ describe('hub chain: append', () => {
     expect(err).toBeInstanceOf(HubChainRejectedError)
     expect(err).toMatchObject({ status: 400, code: 'chain_unauthorised_signer' })
     // A signed link whose body the server altered afterwards.
-    const altered = { ...next(l2, founder, bundle('role-volunteer', ['calls:answer'])) }
+    const altered = { ...next(l2, founder, bundle('role-volunteer', VOLUNTEER_PERMS)) }
     altered.body = { ...altered.body, permissions: ['calls:answer', 'notes:read-all'] }
     expect(await chain.append(id, altered).catch(e => e)).toMatchObject({ status: 400, code: 'chain_entry_hash' })
     expect((await chain.read(id, 1, 10)).links).toEqual([genesis, l2])
@@ -200,6 +204,17 @@ describe('hub chain: append', () => {
     const genesis = newHubGenesisMock(id, founder.seedHex, founder.head, ['role-hub-admin'])
     expect(await chain.append(id, genesis).catch(e => e)).toMatchObject({ status: 400, code: 'chain_genesis' })
     expect(await db.select().from(hubChainLinks).where(eq(hubChainLinks.hubId, id))).toEqual([])
+  })
+
+  it('never caches a chain bundle narrower than the catalog role it is named after', async () => {
+    const founder = await makeUser('founder')
+    const target = await makeUser('target')
+    const { id, genesis } = await foundHub(founder)
+    const l2 = next(genesis, founder, bundle('role-hub-admin', ADMIN_PERMS))
+    const l3 = next(l2, founder, bundle('role-volunteer', ['calls:answer']))
+    const l4 = next(l3, founder, { type: 'role_grant', user: target.pubkey, bundle: 'role-volunteer' })
+    for (const l of [l2, l3, l4]) await chain.append(id, l)
+    expect((await hubRolesOf(target.pubkey)).find(hr => hr.hubId === id)).toBeUndefined()
   })
 
   it('never caches a chain bundle named after a role with instance-level authority', async () => {

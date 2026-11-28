@@ -152,7 +152,9 @@ export class HubChainService {
       entryHash: link.entryHash,
       linkJson: link,
     })
-    if (['genesis', 'role_grant', 'role_revoke', 'policy'].includes(link.body.type)) {
+    // A genesis needs no cache write: hub creation already granted the founder
+    // the roles it checked, in this transaction.
+    if (['role_grant', 'role_revoke', 'policy'].includes(link.body.type)) {
       await writeHubRolesCache(tx, hubId, verified.state, link)
     }
     return verified.head
@@ -171,7 +173,6 @@ export class HubChainService {
  */
 async function writeHubRolesCache(tx: Tx, hubId: string, state: HubChainState, link: HubChainLink): Promise<void> {
   const touched = new Set<string>()
-  if (link.body.type === 'genesis' && typeof link.body.founder === 'string') touched.add(link.body.founder)
   if ((link.body.type === 'role_grant' || link.body.type === 'role_revoke') && typeof link.body.user === 'string') {
     touched.add(link.body.user)
   }
@@ -182,10 +183,12 @@ async function writeHubRolesCache(tx: Tx, hubId: string, state: HubChainState, l
     .from(users)
     .where(inArray(users.pubkey, [...touched]))
     .for('update')
-  // Only bundles the server's catalog can safely resolve in this hub (no
-  // instance-level authority) reach the cache; see hubGrantableRoleIds.
+  // Only bundles the server's catalog can safely resolve in this hub reach the
+  // cache: no instance-level authority, and no broader than the chain declares
+  // (hubGrantableRoleIds).
   const catalog = await loadRoleCatalog(tx)
-  const bundlesOf = new Map(state.members.map(m => [m.user, hubGrantableRoleIds(m.bundles, catalog, hubId)]))
+  const chainPermissions = new Map(state.bundles.map(b => [b.bundle, b.permissions]))
+  const bundlesOf = new Map(state.members.map(m => [m.user, hubGrantableRoleIds(m.bundles, catalog, hubId, chainPermissions)]))
   for (const row of rows) {
     const prior = (row.hubRoles as HubRoleAssignment[] | null) ?? []
     const bundles = bundlesOf.get(row.pubkey)

@@ -436,6 +436,17 @@ export function permissionGranted(grantedPermissions: string[], required: string
 }
 
 /**
+ * The concrete catalog permissions `granted` confers: `*` is every permission,
+ * `domain:*` every permission of that domain, anything else itself (when it is
+ * a catalog permission). Sorted and unique. This is the form a hub-chain bundle
+ * commits (#2963): chain links name concrete ids only, never a wildcard.
+ */
+export function expandPermissions(granted: readonly string[]): string[] {
+  const all = Object.keys(PERMISSION_CATALOG) as Permission[]
+  return all.filter(p => permissionGranted([...granted], p)).sort()
+}
+
+/**
  * Look up a role definition, falling back to DEFAULT_ROLES for system role IDs
  * (see resolvePermissions for why).
  */
