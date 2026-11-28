@@ -52,6 +52,55 @@ pub struct SigchainLink {
     pub payload_json: String,
 }
 
+/// One user-chain link, in the crate's [`SigchainLink`] shape or as the server
+/// serves it (`GET /users/:pubkey/sigchain`: `seqNo`, `hash`, `prevHash` with
+/// `""` for the genesis, `payload` as an object). Converting here means no host
+/// renames or re-encodes a signed field to hand a chain to the crate (#3133).
+pub fn link_from_any_shape(v: serde_json::Value) -> Result<SigchainLink, String> {
+    if v.get("seqNo").is_none() {
+        return serde_json::from_value(v).map_err(|e| e.to_string());
+    }
+    let str_of = |k: &str| -> Result<String, String> {
+        v.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| format!("server sigchain link has no string {k}"))
+    };
+    let seq = v
+        .get("seqNo")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("server sigchain link has no integer seqNo")?;
+    let prev_hash = match v.get("prevHash") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(h)) if h.is_empty() => None,
+        Some(serde_json::Value::String(h)) => Some(h.clone()),
+        Some(_) => return Err("server sigchain link prevHash is not a string".into()),
+    };
+    let payload = v
+        .get("payload")
+        .ok_or("server sigchain link has no payload")?;
+    Ok(SigchainLink {
+        id: str_of("id")?,
+        seq,
+        prev_hash,
+        entry_hash: str_of("hash")?,
+        signer_device_id: str_of("signerDeviceId")?,
+        signer_pubkey: str_of("signerPubkey")?,
+        signature: str_of("signature")?,
+        timestamp: str_of("timestamp")?,
+        payload_json: serde_json::to_string(payload).map_err(|e| e.to_string())?,
+    })
+}
+
+/// A JSON array of user-chain links in either shape [`link_from_any_shape`] accepts.
+pub fn links_from_json_any_shape(json: &str) -> Result<Vec<SigchainLink>, CryptoError> {
+    let vs: Vec<serde_json::Value> =
+        serde_json::from_str(json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+    vs.into_iter()
+        .map(|v| link_from_any_shape(v).map_err(CryptoError::InvalidInput))
+        .collect()
+}
+
 /// Compute the canonical hash for a sigchain entry.
 ///
 /// ## Canonicalization Algorithm (cross-platform specification)

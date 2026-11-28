@@ -94,60 +94,124 @@ final class HubChainService: @unchecked Sendable {
         return try anchors()[hubId]
     }
 
-    /// Advance the anchor for `hubId` — never backwards — under the lock, so two
-    /// verifications racing cannot lower it.
-    func setAnchor(hubId: String, head: Head) throws {
+    /// A head that would move the anchor backwards or sideways (wire spec §5.7).
+    struct AnchorFork: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// Advance the anchor for `hubId` under the wire spec §5.7 rule: strictly
+    /// forward. A lower seq is refused, and an equal seq with a different hash is
+    /// a fork — both throw ``AnchorFork``. The caller holds the hub's queue, so
+    /// the read-verify-write it belongs to never interleaves with another.
+    func advanceAnchor(hubId: String, head: Head) throws {
         lock.lock(); defer { lock.unlock() }
         var all = try anchors()
-        if let known = all[hubId], known.seq > head.seq { return }
+        if let known = all[hubId] {
+            if head.seq < known.seq {
+                throw AnchorFork(description: "the verified head seq \(head.seq) is below the anchor at seq \(known.seq)")
+            }
+            if head.seq == known.seq {
+                if head.hash != known.hash { throw AnchorFork(description: "a different link at the anchored seq \(known.seq)") }
+                return
+            }
+        }
         all[hubId] = head
         try keychainService.store(key: KeychainKey.hubChainAnchors, data: try JSONEncoder().encode(all))
     }
 
+    // MARK: - One entry point per hub (wire spec §5.7)
+
+    private var queues: [String: Task<Void, Never>] = [:]
+    private var inFlight: [String: Task<Status, Error>] = [:]
+
+    /// Run `step` after everything already queued for `hubId`: a verification
+    /// and every append that moves the anchor are one critical section per hub.
+    private func serialised<T: Sendable>(_ hubId: String, _ step: @escaping @Sendable () async throws -> T) async throws -> T {
+        let task: Task<T, Error> = lock.withLock {
+            let prior = queues[hubId]
+            let task = Task<T, Error> {
+                await prior?.value
+                return try await step()
+            }
+            queues[hubId] = Task { _ = try? await task.value }
+            return task
+        }
+        return try await task.value
+    }
+
     // MARK: - Load
 
-    /// Every link of the hub's chain, as the server's raw JSON objects.
+    /// Every link of the hub's chain, as the server's raw JSON objects. Pages
+    /// are contiguous from seq 1, so the next page starts after the count so far.
     private func fetchLinks(hubId: String) async throws -> [Any] {
         var links: [Any] = []
-        var from = 1
         while true {
             let (status, body) = try await apiService.rawRequest(
-                method: "GET", path: APIService.hubPath(hubId, "/api/chain?from=\(from)"), body: nil
+                method: "GET", path: APIService.hubPath(hubId, "/api/chain?from=\(links.count + 1)"), body: nil
             )
             guard status == 200,
                   let page = try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any],
-                  let pageLinks = page["links"] as? [[String: Any]] else {
+                  let pageLinks = page["links"] as? [Any] else {
                 throw APIError.requestFailed(statusCode: status, body: body)
             }
             links.append(contentsOf: pageLinks)
-            let hasMore = page["hasMore"] as? Bool ?? false
-            guard hasMore, let last = pageLinks.last, let seq = last["seq"] as? Int else { return links }
-            from = seq + 1
+            guard page["hasMore"] as? Bool == true, !pageLinks.isEmpty else { return links }
         }
     }
 
-    /// Each signer's (and recovery holder's) user chain, in the crate's shape.
-    private func userChains(for links: [Any]) async throws -> [[[String: Any]]] {
-        var users = Set<String>()
-        for case let link as [String: Any] in links {
-            if let signer = link["signerUser"] as? String { users.insert(signer) }
-            if let body = link["body"] as? [String: Any], body["type"] as? String == "recovery_group",
-               let holders = body["holders"] as? [String] {
-                users.formUnion(holders)
+    /// One crate call, JSON in and JSON out.
+    private func crate(_ request: [String: Any]) throws -> Data {
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
+        return Data(try cryptoService.hubChainCall(requestJson: json).utf8)
+    }
+
+    private struct UsersNamed: Decodable { let users: [String] }
+
+    /// The user chain of every user the crate says a verifier of `links` needs,
+    /// as the server serves them — the crate reads that shape itself.
+    private func userChains(for links: [Any]) async throws -> [Any] {
+        let named = try JSONDecoder().decode(UsersNamed.self, from: try crate(["op": "usersNamed", "links": links]))
+        var chains: [Any] = []
+        for user in named.users {
+            let (status, body) = try await apiService.rawRequest(method: "GET", path: "/api/users/\(user)/sigchain", body: nil)
+            guard status == 200,
+                  let response = try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any],
+                  let served = response["links"] as? [Any] else {
+                throw APIError.requestFailed(statusCode: status, body: body)
             }
-        }
-        var chains: [[[String: Any]]] = []
-        for user in users.sorted() {
-            let response: SigchainResponse = try await apiService.request(method: "GET", path: "/api/users/\(user)/sigchain")
-            if !response.links.isEmpty { chains.append(try DeviceIdentityService.cryptoLinkObjects(response.links)) }
+            if !served.isEmpty { chains.append(served) }
         }
         return chains
     }
 
+    private var verifiedStates: [String: HubChainVerified] = [:]
+
+    /// The crate's verified answer for `hubId`'s chain, from this device's last
+    /// successful verification — `nil` when the hub has none.
+    func verified(hubId: String) -> HubChainVerified? {
+        lock.lock(); defer { lock.unlock() }
+        return verifiedStates[hubId]
+    }
+
     /// Fetch and verify `hubId`'s chain against this device's anchor; advance the
-    /// anchor. A refused chain is an answer, recorded so sealing stops — never thrown.
+    /// anchor. The one entry point (wire spec §5.7): every caller — the banner,
+    /// the sealing gate, a hub switch — shares a verification already in flight
+    /// for the hub. A refused chain is an answer, recorded so sealing stops.
     @discardableResult
     func load(hubId: String) async throws -> Status {
+        let task: Task<Status, Error> = lock.withLock {
+            if let pending = inFlight[hubId] { return pending }
+            let task = Task<Status, Error> {
+                defer { self.lock.withLock { self.inFlight[hubId] = nil } }
+                return try await self.serialised(hubId) { try await self.loadNow(hubId: hubId) }
+            }
+            inFlight[hubId] = task
+            return task
+        }
+        return try await task.value
+    }
+
+    private func loadNow(hubId: String) async throws -> Status {
         let links = try await fetchLinks(hubId: hubId)
         let anchor = try anchor(hubId: hubId)
         if links.isEmpty {
@@ -155,23 +219,20 @@ final class HubChainService: @unchecked Sendable {
         }
         var request: [String: Any] = ["op": "verify", "links": links, "userChains": try await userChains(for: links)]
         if let anchor { request["anchor"] = ["seq": anchor.seq, "hash": anchor.hash] }
-        let requestJson = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
         do {
-            let answer = try cryptoService.hubChainCall(requestJson: requestJson)
-            guard let verified = try JSONSerialization.jsonObject(with: Data(answer.utf8)) as? [String: Any],
-                  let hub = verified["hub"] as? String,
-                  let head = verified["head"] as? [String: Any],
-                  let seq = head["seq"] as? Int, let hash = head["hash"] as? String else {
-                return record(hubId, .refused(code: "invalid_input", detail: "unreadable crate answer"))
-            }
+            let verified = try JSONDecoder().decode(HubChainVerified.self, from: try crate(request))
             // A valid chain of ANOTHER hub, served for this one, is refused.
-            guard hub == hubId else {
-                return record(hubId, .refused(code: "chain_hub_mismatch", detail: "the served chain is hub \(hub)'s"))
+            guard verified.hub == hubId else {
+                return record(hubId, .refused(code: "chain_hub_mismatch", detail: "the served chain is hub \(verified.hub)'s"))
             }
-            let verifiedHead = Head(seq: seq, hash: hash)
-            try setAnchor(hubId: hubId, head: verifiedHead)
-            let alerts = (verified["alerts"] as? [Any])?.count ?? 0
-            return record(hubId, .verified(head: verifiedHead, staleSigners: alerts))
+            let head = Head(seq: verified.head.seq, hash: verified.head.hash)
+            try advanceAnchor(hubId: hubId, head: head)
+            lock.withLock { verifiedStates[hubId] = verified }
+            return record(hubId, .verified(head: head, staleSigners: verified.alerts.count))
+        } catch let fork as AnchorFork {
+            return record(hubId, .fork(fork.description))
+        } catch is DecodingError {
+            return record(hubId, .refused(code: "invalid_input", detail: "unreadable crate answer"))
         } catch {
             let code = Self.rejectionCode(error)
             let detail = String(describing: error)
@@ -199,81 +260,142 @@ final class HubChainService: @unchecked Sendable {
         guard case .verified = status else { throw ChainError.sealingStopped(hubId: hubId) }
     }
 
-    // MARK: - Founding (new-hub genesis, §5.6)
+    // MARK: - Writing (every link is built from intent in the crate, #3133)
 
-    private struct FoundingBundle: Decodable { let bundle: String; let permissions: [String] }
-    private struct FoundingResponse: Decodable { let bundles: [FoundingBundle] }
+    private struct VerifiedHead: Decodable { let activeDevicePubkeys: [String]; let headSeq: Int; let headHash: String }
 
     /// This device's user-chain head, verified in Rust, with this device active in it.
     private func ownHead(user: String) async throws -> Head {
-        let response: SigchainResponse = try await apiService.request(method: "GET", path: "/api/users/\(user)/sigchain")
-        let request: [String: Any] = ["op": "verifySigchain", "links": try DeviceIdentityService.cryptoLinkObjects(response.links)]
-        let answer = try cryptoService.hubChainCall(
-            requestJson: String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
-        )
-        guard let state = try JSONSerialization.jsonObject(with: Data(answer.utf8)) as? [String: Any],
-              let active = state["activeDevicePubkeys"] as? [String], let device = cryptoService.signingPubkeyHex,
-              active.contains(device), let seq = state["headSeq"] as? Int, let hash = state["headHash"] as? String else {
+        let (status, body) = try await apiService.rawRequest(method: "GET", path: "/api/users/\(user)/sigchain", body: nil)
+        guard status == 200,
+              let response = try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any],
+              let served = response["links"] as? [Any] else {
+            throw APIError.requestFailed(statusCode: status, body: body)
+        }
+        let state = try JSONDecoder().decode(VerifiedHead.self, from: try crate(["op": "verifySigchain", "links": served]))
+        guard let device = cryptoService.signingPubkeyHex, state.activeDevicePubkeys.contains(device) else {
             throw CryptoServiceError.noKeyLoaded
         }
-        return Head(seq: seq, hash: hash)
+        return Head(seq: state.headSeq, hash: state.headHash)
     }
 
-    private func sign(_ unsigned: [String: Any]) throws -> [String: Any] {
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: unsigned), as: UTF8.self)
-        let signed = try cryptoService.signHubLink(unsignedJson: json)
-        guard let link = try JSONSerialization.jsonObject(with: Data(signed.utf8)) as? [String: Any] else {
+    /// A link the crate signed and the head it makes. `link` is the crate's JSON
+    /// object, passed on to the server as is — never read here.
+    private struct Signed { let link: Any; let head: Head }
+
+    private struct SignedHead: Decodable { let head: Head }
+
+    private func sign(hubId: String, prev: Head?, signer: String, signerHead: Head, intent: [String: Any]) throws -> Signed {
+        let request: [String: Any] = [
+            "hub": hubId,
+            "prev": prev.map { ["seq": $0.seq, "hash": $0.hash] as [String: Any] } ?? NSNull(),
+            "signerUser": signer,
+            "signerUserHead": ["seq": signerHead.seq, "hash": signerHead.hash],
+            "intent": intent,
+        ]
+        let answer = try cryptoService.signHubIntent(
+            requestJson: String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
+        )
+        let data = Data(answer.utf8)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], let link = object["link"] else {
             throw CryptoServiceError.noKeyLoaded
         }
-        return link
+        return Signed(link: link, head: try JSONDecoder().decode(SignedHead.self, from: data).head)
     }
+
+    /// Append a link the crate signed. A lost head race is ``APIError/requestFailed(statusCode:body:)`` with 409.
+    private func append(hubId: String, _ signed: Signed) async throws {
+        let (status, body) = try await apiService.rawRequest(
+            method: "POST", path: APIService.hubPath(hubId, "/api/chain"),
+            body: String(decoding: try JSONSerialization.data(withJSONObject: ["link": signed.link]), as: UTF8.self)
+        )
+        guard status == 201 else { throw APIError.requestFailed(statusCode: status, body: body) }
+    }
+
+    /// The chain write was refused before signing: this device has not verified the hub's chain.
+    struct WriteRefused: Error { let hubId: String; let status: Status }
+
+    /// Sign and append the links `intents` names, as this user, on the head this
+    /// device has just verified (§5.1): verify, let the caller decide against
+    /// the verified state, sign each through the crate, append. A lost race
+    /// (409) re-reads, re-verifies, re-decides and re-signs. Every role write
+    /// takes this path; the server has no unsigned role write (#3133).
+    @discardableResult
+    func appendIntents(
+        hubId: String,
+        intents: @escaping @Sendable (HubChainVerified) throws -> [[String: Any]]
+    ) async throws -> HubChainVerified {
+        guard let signer = cryptoService.signingPubkeyHex else { throw CryptoServiceError.noKeyLoaded }
+        return try await serialised(hubId) {
+            for attempt in 1...Self.appendAttempts {
+                let status = try await self.loadNow(hubId: hubId)
+                guard case .verified = status, let verified = self.verified(hubId: hubId) else {
+                    throw WriteRefused(hubId: hubId, status: status)
+                }
+                let wanted = try intents(verified)
+                if wanted.isEmpty { return verified }
+                let signerHead = try await self.ownHead(user: signer)
+                var prev = Head(seq: verified.head.seq, hash: verified.head.hash)
+                do {
+                    for intent in wanted {
+                        let signed = try self.sign(hubId: hubId, prev: prev, signer: signer, signerHead: signerHead, intent: intent)
+                        try await self.append(hubId: hubId, signed)
+                        try self.advanceAnchor(hubId: hubId, head: signed.head)
+                        prev = signed.head
+                    }
+                } catch APIError.requestFailed(let code, _) where code == 409 && attempt < Self.appendAttempts {
+                    continue
+                }
+                let after = try await self.loadNow(hubId: hubId)
+                guard case .verified = after, let state = self.verified(hubId: hubId) else {
+                    throw WriteRefused(hubId: hubId, status: after)
+                }
+                return state
+            }
+            throw WriteRefused(hubId: hubId, status: .none)
+        }
+    }
+
+    static let appendAttempts = 3
+
+    // MARK: - Founding (new-hub genesis, §5.6)
 
     /// Found a hub: this device signs its genesis (the founder alone, holding the
     /// founder bundles the server's catalog names), the server stores it as the
     /// chain's first link, then each bundle's permissions are committed in a
-    /// `policy {kind: bundle}` link. Returns the created hub's response body.
+    /// `policy {kind: bundle}` link — every link built in the crate from its
+    /// intent. Returns the created hub's response body.
     func foundHub(fields: [String: Any]) async throws -> String {
         guard let founder = cryptoService.signingPubkeyHex else { throw CryptoServiceError.noKeyLoaded }
-        let founding: FoundingResponse = try await apiService.request(method: "GET", path: "/api/hubs/founding")
+        let founding: HubFoundingResponse = try await apiService.request(method: "GET", path: "/api/hubs/founding")
         let head = try await ownHead(user: founder)
         let hubId = UUID().uuidString.lowercased()
-        let headObject: [String: Any] = ["seq": head.seq, "hash": head.hash]
-        let genesis = try sign([
-            "hub": hubId, "seq": 1, "prevHash": NSNull(), "signerUser": founder, "signerUserHead": headObject,
-            "body": [
-                "type": "genesis", "founder": founder, "migration": 0,
-                "members": [["user": founder, "bundles": founding.bundles.map(\.bundle).sorted()]],
-            ],
-        ])
+        let genesis = try sign(
+            hubId: hubId, prev: nil, signer: founder, signerHead: head,
+            intent: ["type": "genesis", "bundles": founding.bundles.map(\.bundle)]
+        )
         var body = fields
         body["id"] = hubId
-        body["genesis"] = genesis
+        body["genesis"] = genesis.link
         let (status, created) = try await apiService.rawRequest(
             method: "POST", path: "/api/hubs",
             body: String(decoding: try JSONSerialization.data(withJSONObject: body), as: UTF8.self)
         )
         guard status == 201 || status == 200 else { throw APIError.requestFailed(statusCode: status, body: created) }
-        try setAnchor(hubId: hubId, head: Head(seq: 1, hash: genesis["entryHash"] as? String ?? ""))
-
-        var prev = genesis
-        for bundle in founding.bundles {
-            let hashAnswer = try cryptoService.hubChainCall(requestJson: String(
-                decoding: try JSONSerialization.data(withJSONObject: ["op": "permsHash", "permissions": bundle.permissions]),
-                as: UTF8.self
-            ))
-            let permsHash = (try JSONSerialization.jsonObject(with: Data(hashAnswer.utf8)) as? [String: Any])?["permsHash"] as? String ?? ""
-            let link = try sign([
-                "hub": hubId, "seq": (prev["seq"] as? Int ?? 0) + 1, "prevHash": prev["entryHash"] ?? NSNull(),
-                "signerUser": founder, "signerUserHead": headObject,
-                "body": ["type": "policy", "kind": "bundle", "bundle": bundle.bundle, "permissions": bundle.permissions, "permsHash": permsHash],
-            ])
-            let (appendStatus, appended) = try await apiService.rawRequest(
-                method: "POST", path: APIService.hubPath(hubId, "/api/chain"),
-                body: String(decoding: try JSONSerialization.data(withJSONObject: ["link": link]), as: UTF8.self)
-            )
-            guard appendStatus == 201 else { throw APIError.requestFailed(statusCode: appendStatus, body: appended) }
-            try setAnchor(hubId: hubId, head: Head(seq: link["seq"] as? Int ?? 0, hash: link["entryHash"] as? String ?? ""))
-            prev = link
+        let bundles = founding.bundles
+        let genesisHead = genesis.head
+        try await serialised(hubId) {
+            try self.advanceAnchor(hubId: hubId, head: genesisHead)
+            var prev = genesisHead
+            for bundle in bundles {
+                let signed = try self.sign(
+                    hubId: hubId, prev: prev, signer: founder, signerHead: head,
+                    intent: ["type": "bundlePolicy", "bundle": bundle.bundle, "permissions": bundle.permissions]
+                )
+                try await self.append(hubId: hubId, signed)
+                try self.advanceAnchor(hubId: hubId, head: signed.head)
+                prev = signed.head
+            }
         }
         return created
     }

@@ -27,8 +27,8 @@ private func ffiMobileHubChain(requestJson: String) throws -> String {
     try mobileHubChain(requestJson: requestJson)
 }
 
-private func ffiMobileHubChainSignLink(unsignedJson: String) throws -> String {
-    try mobileHubChainSignLink(unsignedJson: unsignedJson)
+private func ffiMobileHubChainSign(requestJson: String) throws -> String {
+    try mobileHubChainSign(requestJson: requestJson)
 }
 
 private func ffiMobileRecoveryApprovalSign(approvalJson: String) throws -> String {
@@ -535,16 +535,18 @@ final class CryptoService: @unchecked Sendable {
 
     /// One stateless hub-chain operation in Rust (`hub_chain::call`): `requestJson`
     /// is `{"op": "verify" | "signingMessage" | "assemble" | "permsHash" |
-    /// "verifySigchain" | "approvalMessage", …}`, the answer the crate's JSON. The app
+    /// "verifySigchain" | "approvalMessage" | "build" | "usersNamed", …}`, the answer the crate's JSON. The app
     /// never canonicalises, hashes or checks a hub link itself.
     func hubChainCall(requestJson: String) throws -> String {
         try ffiMobileHubChain(requestJson: requestJson)
     }
 
-    /// Sign an unsigned hub-chain link (JSON) with this device's key, held in Rust.
-    func signHubLink(unsignedJson: String) throws -> String {
+    /// Build and sign one hub-chain link from an intent (JSON
+    /// `hub_chain::LinkIntentRequest`) with this device's key, held in Rust. The
+    /// answer is `{link, head}`; the crate derives every signed field (#3133).
+    func signHubIntent(requestJson: String) throws -> String {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        return try ffiMobileHubChainSignLink(unsignedJson: unsignedJson)
+        return try ffiMobileHubChainSign(requestJson: requestJson)
     }
 
     /// Sign a recovery approval (JSON) with this holder device's key (D14).

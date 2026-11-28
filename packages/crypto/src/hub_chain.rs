@@ -1433,7 +1433,7 @@ pub struct HubAnchor {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HubChainInput {
     pub links: Vec<HubChainLink>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "user_chains_any_shape")]
     pub user_chains: Vec<Vec<SigchainLink>>,
     #[serde(default)]
     pub hub_chains: Vec<Vec<HubChainLink>>,
@@ -1820,8 +1820,9 @@ struct AssembleReq {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SigchainReq {
+    #[serde(deserialize_with = "user_chain_any_shape")]
     links: Vec<SigchainLink>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "user_chains_any_shape")]
     user_chains: Vec<Vec<SigchainLink>>,
     #[serde(default)]
     hub_chains: Vec<Vec<HubChainLink>>,
@@ -1941,6 +1942,30 @@ pub fn users_named(links: &[Value]) -> Vec<String> {
         }
     }
     named.into_iter().collect()
+}
+
+// ── User-chain links as hosts are served them ──
+
+fn user_chain_any_shape<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<SigchainLink>, D::Error> {
+    Vec::<Value>::deserialize(d)?
+        .into_iter()
+        .map(|v| crate::sigchain::link_from_any_shape(v).map_err(serde::de::Error::custom))
+        .collect()
+}
+
+fn user_chains_any_shape<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<Vec<SigchainLink>>, D::Error> {
+    Vec::<Vec<Value>>::deserialize(d)?
+        .into_iter()
+        .map(|c| {
+            c.into_iter()
+                .map(|v| crate::sigchain::link_from_any_shape(v).map_err(serde::de::Error::custom))
+                .collect()
+        })
+        .collect()
 }
 
 // ── Building links from intent (#3133: no client assembles a signed field) ──
@@ -2177,6 +2202,25 @@ pub(crate) mod tests {
             serde_json::json!({"type": "role_revoke", "user": a, "bundle": "b-admin"})
         );
         assert_eq!(built["seq"], 2);
+        // The server's sigchain record shape verifies the same as the crate's.
+        let l = &chain_a[0];
+        let served = serde_json::json!({
+            "id": l.id, "userPubkey": a, "seqNo": l.seq, "linkType": "genesis",
+            "payload": serde_json::from_str::<Value>(&l.payload_json).unwrap(),
+            "signature": l.signature, "prevHash": "", "hash": l.entry_hash,
+            "signerDeviceId": l.signer_device_id, "signerPubkey": l.signer_pubkey,
+            "timestamp": l.timestamp, "createdAt": "2026-11-28T00:00:00Z",
+        });
+        let verified = call(
+            "verify",
+            serde_json::json!({
+                "links": [g.link, p.link], "userChains": [[served.clone()]],
+            }),
+        )
+        .unwrap();
+        assert_eq!(verified["head"]["seq"], 2);
+        let own = call("verifySigchain", serde_json::json!({"links": [served]})).unwrap();
+        assert_eq!(own["headSeq"], 1);
         // `usersNamed` names each signer once.
         let named = call("usersNamed", serde_json::json!({"links": [g.link, p.link]})).unwrap();
         assert_eq!(named["users"], serde_json::json!([a]));

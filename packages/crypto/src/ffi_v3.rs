@@ -759,9 +759,8 @@ pub fn mobile_sigchain_create_link(
 /// Verify a complete sigchain (stateless).
 #[uniffi::export]
 pub fn mobile_sigchain_verify(links_json: String) -> Result<SigchainVerifiedState, CryptoError> {
-    let links: Vec<SigchainLink> =
-        serde_json::from_str(&links_json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
-    sigchain::verify_sigchain(&links)
+    // The crate's link shape or the server's record shape (#3133).
+    sigchain::verify_sigchain(&sigchain::links_from_json_any_shape(&links_json)?)
 }
 
 /// This device's genesis `user_init` payload JSON (spec
@@ -780,8 +779,12 @@ pub fn mobile_user_init_payload() -> Result<String, CryptoError> {
 pub fn mobile_sigchain_verify_users(
     chains_json: String,
 ) -> Result<Vec<SigchainVerifiedState>, CryptoError> {
-    let chains: Vec<Vec<SigchainLink>> =
+    let chains: Vec<serde_json::Value> =
         serde_json::from_str(&chains_json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+    let chains = chains
+        .into_iter()
+        .map(|c| sigchain::links_from_json_any_shape(&c.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
     sigchain::verify_user_sigchains(&chains)
 }
 

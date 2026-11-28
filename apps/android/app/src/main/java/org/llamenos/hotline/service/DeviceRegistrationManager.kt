@@ -1,6 +1,5 @@
 package org.llamenos.hotline.service
 
-import org.llamenos.hotline.hub.cryptoSigchainLinks
 
 import android.os.Build
 import android.util.Log
@@ -8,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -286,8 +286,12 @@ class DeviceRegistrationManager @Inject constructor(
         )
     }
 
-    /** The server's links in the crate's `SigchainLink` JSON shape. */
-    private fun cryptoLinksJson(links: List<SigchainResponseLink>): String = cryptoSigchainLinks(links).toString()
+    /**
+     * The server's links as JSON for the crate, which reads the server's record
+     * shape itself — no signed field is renamed or re-encoded here (#3133).
+     */
+    private fun cryptoLinksJson(links: List<SigchainResponseLink>): String =
+        Json.encodeToString(ListSerializer(SigchainResponseLink.serializer()), links)
 
     private companion object {
         const val TAG = "DeviceRegistration"

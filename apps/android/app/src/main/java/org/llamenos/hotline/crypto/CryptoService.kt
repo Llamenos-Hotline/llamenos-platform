@@ -886,7 +886,7 @@ class CryptoService @Inject constructor() {
     /**
      * One stateless hub-chain operation in Rust (`hub_chain::call`): [requestJson]
      * is `{"op": "verify" | "signingMessage" | "assemble" | "permsHash" |
-     * "verifySigchain" | "approvalMessage", …}`, the answer the crate's JSON. The
+     * "verifySigchain" | "approvalMessage" | "build" | "usersNamed", …}`, the answer the crate's JSON. The
      * app never canonicalises, hashes or checks a hub link itself.
      */
     suspend fun hubChainCall(requestJson: String): String =
@@ -899,12 +899,16 @@ class CryptoService @Inject constructor() {
             }
         }
 
-    /** Sign an unsigned hub-chain link (JSON) with this device's key, held in Rust. */
-    suspend fun signHubLink(unsignedJson: String): String =
+    /**
+     * Build and sign one hub-chain link from an intent (JSON
+     * `hub_chain::LinkIntentRequest`) with this device's key, held in Rust. The
+     * answer is `{link, head}`; the crate derives every signed field (#3133).
+     */
+    suspend fun signHubIntent(requestJson: String): String =
         withContext(computeDispatcher) {
             NativeCryptoLibrary.require()
             check(isUnlocked) { "Device is locked" }
-            org.llamenos.core.mobileHubChainSignLink(unsignedJson)
+            org.llamenos.core.mobileHubChainSign(requestJson)
         }
 
     /** Sign a recovery approval (JSON) with this holder device's key (D14). */
